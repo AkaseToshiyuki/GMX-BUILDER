@@ -3410,7 +3410,7 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
             "source_checkpoint": source_step,
             "coordinate_rebuild": False,
             "package_contents": result["package_contents"],
-            "download_url": f"/api/download/{task_id}",
+            "download_url": f"/api/task/{task_id}/download",
         }
         return summary
 
@@ -3443,7 +3443,12 @@ async def api_status(task_id: str):
 async def api_download(task_id: str):
     task_id = _validate_task_id(task_id)
     t = _tasks.get(task_id)
-    if t is None or t["status"] != "completed":
+    ready = t is not None and t.get("status") == "completed"
+    if not ready:
+        state = task_manager.get_state(task_id) or {}
+        persisted = state.get("build_status") or {}
+        ready = isinstance(persisted, dict) and persisted.get("status") == "completed"
+    if not ready:
         return JSONResponse({"error": "Task not ready or not found"}, status_code=404)
     zip_path = _authoritative_task_zip(task_id)
     if zip_path is None or not zip_path.exists():

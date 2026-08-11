@@ -7268,7 +7268,7 @@ function _showBuildResult(result) {
   details.appendChild(logUl);
 
   const dlLink = document.getElementById('download-link');
-  dlLink.href = '/api/download/' + (result.task_id || state.taskId);
+  dlLink.href = result.download_url || '/api/task/' + (result.task_id || state.taskId) + '/download';
   dlLink.textContent = 'Download ZIP';
   const runBtn = document.getElementById('run-btn');
   if (runBtn) { runBtn.disabled = false; runBtn.textContent = '▶ Build System'; }

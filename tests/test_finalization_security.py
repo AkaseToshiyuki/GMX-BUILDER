@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import zipfile
 
@@ -112,6 +113,23 @@ def test_task_download_prefers_current_export_over_larger_legacy_zip(
     monkeypatch.setattr(server, "task_manager", manager)
 
     assert server._authoritative_task_zip(task_id) == current
+
+
+def test_legacy_download_route_survives_process_restart(tmp_path, monkeypatch):
+    manager = TaskManager(tmp_path / "tasks")
+    task = manager.create_task("complete.pdb")
+    task_id = task["task_id"]
+    export_dir = manager.get_task_dir(task_id) / "steps" / "export"
+    export_dir.mkdir(parents=True)
+    archive = export_dir / "current.zip"
+    archive.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+    manager.update_state(task_id, {"build_status": {"status": "completed"}})
+    monkeypatch.setattr(server, "task_manager", manager)
+    monkeypatch.setattr(server, "_tasks", {})
+
+    response = asyncio.run(server.api_download(task_id))
+
+    assert Path(response.path) == archive
 
 
 def test_public_build_log_redacts_server_paths():

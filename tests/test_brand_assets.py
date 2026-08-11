@@ -48,11 +48,11 @@ def test_public_documentation_points_to_current_user_manual() -> None:
     source = (ROOT / "docs" / f"{manual_stem}.md").read_text()
     chinese = (ROOT / "docs" / f"{manual_stem}.zh-CN.md").read_text()
     assert "| Document version | V1.0.1 |" in source
-    assert "| Software | GMXBUILDER v0.8.7 or later |" in source
+    assert "| Software | GMXBUILDER v0.8.8 or later |" in source
     assert "| V1.0.1 | 2026-08-11 |" in source
     assert "| V1.0.0 | 2026-07-26 | Initial release |" in source
     assert "| 文档版本 | V1.0.1 |" in chinese
-    assert "| 适用软件 | GMXBUILDER v0.8.7 或更高版本 |" in chinese
+    assert "| 适用软件 | GMXBUILDER v0.8.8 或更高版本 |" in chinese
     assert "## 附录 B：文档维护要求" not in chinese
 
 
