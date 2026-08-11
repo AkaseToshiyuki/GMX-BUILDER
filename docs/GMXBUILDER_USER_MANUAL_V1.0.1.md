@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Document version | V1.0.1 |
-| Software | GMXBUILDER v0.8.6 or later |
+| Software | GMXBUILDER v0.8.7 or later |
 | Author | Haochen Yang |
 | Release date | 2026-08-11 |
 | Status | Public release |
@@ -228,6 +228,12 @@ bilayer environment, optional standard protein mapping, supported lipids,
 regular W water and ions, and then inspect the exact final CG system. Ligands,
 PTMs, glycans, nucleic acids, custom CG molecules, curved surfaces, and
 backmapping are not silently discarded; they are unavailable.
+
+Protein Mapping suggests a safe periodic box from the rotated CG envelope.
+CG Environment rejects any box or offset that makes COBY wrap protein beads.
+Simulation Parameters exposes separate minimization, optional NVT, optional
+NPT, production, output/COM-removal, and execution-hardware controls; stages
+remain strictly serial and retain Martini 3-compatible non-bonded defaults.
 
 ## 4. Command-line interface
 

@@ -59,17 +59,46 @@
       <div class="form-grid" id="simparams-stages">
         <!-- Dynamically populated by JS -->
       </div>
-      <div id="cg-simparams" class="form-grid hidden">
-        <div class="field"><label for="cg-temperature">Temperature (K)</label><input id="cg-temperature" type="number" value="310" min="250" max="370" step="1"></div>
-        <div class="field"><label for="cg-pressure">Pressure (bar)</label><input id="cg-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></div>
-        <div class="field"><label for="cg-production-ns">Production length (ns)</label><input id="cg-production-ns" type="number" value="1000" min="1" max="100000" step="100"><span class="hint">20 fs conservative Martini 3 timestep</span></div>
-        <div class="field"><label for="cg-output-ps">Trajectory interval (ps)</label><input id="cg-output-ps" type="number" value="100" min="1" step="10"></div>
-        <div class="field checkbox-field"><label><input id="cg-eq1" type="checkbox" checked> 1 ns NVT pre-equilibration (10 fs)</label></div>
-        <div class="field checkbox-field"><label><input id="cg-eq2" type="checkbox" checked> 10 ns NPT equilibration (20 fs)</label></div>
-        <div class="field checkbox-field"><label><input id="cg-use-gpu" type="checkbox" checked> Use GPU for short-ranged non-bonded work</label></div>
-        <div class="field"><label for="cg-gpu-ids">GPU IDs</label><input id="cg-gpu-ids" value="0" pattern="[0-9]+(,[0-9]+)*"></div>
-        <div class="field"><label for="cg-threads">Total CPU threads</label><input id="cg-threads" type="number" value="8" min="1" step="1"></div>
-        <div class="field"><label for="cg-mpi-ranks">Thread-MPI ranks</label><input id="cg-mpi-ranks" type="number" value="1" min="1" step="1"><span class="hint">CPU threads must be divisible by ranks</span></div>
+      <div id="cg-simparams" class="hidden">
+        <div class="sim-stage-card" style="border-color:#f59e0b"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9673;</span><span class="sim-stage-title">Energy Minimization</span><span class="sim-stage-summary">Steepest descent; Martini 3 non-bonded protocol</span></div><div class="sim-stage-body open"><div class="param-row">
+          <span class="param-item"><label for="cg-mini-steps">Maximum steps</label><input id="cg-mini-steps" type="number" value="20000" min="100" max="1000000" step="1000"></span>
+          <span class="param-item"><label for="cg-mini-tolerance">Force tolerance</label><input id="cg-mini-tolerance" type="number" value="200" min="1" max="10000" step="10"></span>
+          <span class="param-item"><label for="cg-mini-step">Step size (nm)</label><input id="cg-mini-step" type="number" value="0.005" min="0.0001" max="0.1" step="0.001"></span>
+        </div><p class="hint">Reaction-field electrostatics and Martini 3 cutoffs are fixed to prevent incompatible parameter combinations.</p></div></div>
+        <div class="sim-stage-card"><div class="sim-stage-header" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9678;</span><span class="sim-stage-title">NVT Pre-equilibration</span><span class="sim-stage-summary">Optional, conservative 10 fs timestep</span><label class="stage-enabled"><input id="cg-eq1" type="checkbox" checked> Run</label></div><div class="sim-stage-body"><div class="param-row">
+          <span class="param-item"><label for="cg-eq1-duration">Duration (ns)</label><input id="cg-eq1-duration" type="number" value="1" min="0.001" max="1000" step="0.1"></span>
+          <span class="param-item"><label for="cg-eq1-dt">Timestep (fs)</label><input id="cg-eq1-dt" type="number" value="10" min="1" max="20" step="1"></span>
+          <span class="param-item"><label for="cg-eq1-temperature">Temperature (K)</label><input id="cg-eq1-temperature" type="number" value="310" min="250" max="370" step="1"></span>
+          <span class="param-item"><label for="cg-eq1-tau-t">Thermostat tau (ps)</label><input id="cg-eq1-tau-t" type="number" value="1" min="0.1" max="20" step="0.1"></span>
+        </div><p class="hint">V-rescale thermostat; velocities are generated only for the first enabled dynamics stage.</p></div></div>
+        <div class="sim-stage-card"><div class="sim-stage-header" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9674;</span><span class="sim-stage-title">NPT Equilibration</span><span class="sim-stage-summary">Optional, C-rescale pressure coupling</span><label class="stage-enabled"><input id="cg-eq2" type="checkbox" checked> Run</label></div><div class="sim-stage-body"><div class="param-row">
+          <span class="param-item"><label for="cg-eq2-duration">Duration (ns)</label><input id="cg-eq2-duration" type="number" value="10" min="0.001" max="10000" step="1"></span>
+          <span class="param-item"><label for="cg-eq2-dt">Timestep (fs)</label><input id="cg-eq2-dt" type="number" value="20" min="1" max="20" step="1"></span>
+          <span class="param-item"><label for="cg-eq2-temperature">Temperature (K)</label><input id="cg-eq2-temperature" type="number" value="310" min="250" max="370" step="1"></span>
+          <span class="param-item"><label for="cg-eq2-tau-t">Thermostat tau (ps)</label><input id="cg-eq2-tau-t" type="number" value="1" min="0.1" max="20" step="0.1"></span>
+          <span class="param-item"><label for="cg-eq2-pressure">Pressure (bar)</label><input id="cg-eq2-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></span>
+          <span class="param-item"><label for="cg-eq2-tau-p">Barostat tau (ps)</label><input id="cg-eq2-tau-p" type="number" value="4" min="0.1" max="50" step="0.1"></span>
+        </div><p class="hint">Pressure geometry is automatically semi-isotropic for bilayers and isotropic for solution systems.</p></div></div>
+        <div class="sim-stage-card" style="border-color:#6366f1"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9679;</span><span class="sim-stage-title">Production</span><span class="sim-stage-summary">Required; starts after the last enabled equilibration stage</span></div><div class="sim-stage-body open"><div class="param-row">
+          <span class="param-item"><label for="cg-production-ns">Duration (ns)</label><input id="cg-production-ns" type="number" value="1000" min="1" max="100000" step="100"></span>
+          <span class="param-item"><label for="cg-production-dt">Timestep (fs)</label><input id="cg-production-dt" type="number" value="20" min="1" max="20" step="1"></span>
+          <span class="param-item"><label for="cg-production-temperature">Temperature (K)</label><input id="cg-production-temperature" type="number" value="310" min="250" max="370" step="1"></span>
+          <span class="param-item"><label for="cg-production-tau-t">Thermostat tau (ps)</label><input id="cg-production-tau-t" type="number" value="1" min="0.1" max="20" step="0.1"></span>
+          <span class="param-item"><label for="cg-production-pressure">Pressure (bar)</label><input id="cg-production-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></span>
+          <span class="param-item"><label for="cg-production-tau-p">Barostat tau (ps)</label><input id="cg-production-tau-p" type="number" value="4" min="0.1" max="50" step="0.1"></span>
+        </div><div class="param-row">
+          <span class="param-item"><label for="cg-output-ps">Trajectory interval (ps)</label><input id="cg-output-ps" type="number" value="100" min="1" step="10"></span>
+          <span class="param-item"><label for="cg-energy-ps">Energy interval (ps)</label><input id="cg-energy-ps" type="number" value="20" min="0.02" step="1"></span>
+          <span class="param-item"><label for="cg-log-ps">Log interval (ps)</label><input id="cg-log-ps" type="number" value="20" min="0.02" step="1"></span>
+          <span class="param-item"><label for="cg-comm-mode">COM removal</label><select id="cg-comm-mode"><option value="Linear">Linear translation</option><option value="None">Disabled</option></select></span>
+          <span class="param-item"><label for="cg-comm-interval">COM interval (steps)</label><input id="cg-comm-interval" type="number" value="100" min="1" step="1"></span>
+        </div></div></div>
+        <div class="sim-stage-card" style="border-color:#2563eb"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9889;</span><span class="sim-stage-title">Execution Hardware</span><span class="sim-stage-summary">Written to run_md.sh; does not change MDP physics</span></div><div class="sim-stage-body open"><div class="param-row">
+          <span class="param-item"><label>GPU execution</label><label class="hint"><input id="cg-use-gpu" type="checkbox" checked> Enable</label></span>
+          <span class="param-item"><label for="cg-gpu-ids">Logical GPU IDs</label><input id="cg-gpu-ids" value="0" pattern="[0-9]+(,[0-9]+)*"></span>
+          <span class="param-item"><label for="cg-threads">Total CPU threads</label><input id="cg-threads" type="number" value="8" min="1" step="1"></span>
+          <span class="param-item"><label for="cg-mpi-ranks">Thread-MPI ranks</label><input id="cg-mpi-ranks" type="number" value="1" min="1" step="1"></span>
+        </div><p class="hint">CPU threads must be exactly divisible by ranks. GPU IDs are passed only to short-ranged non-bonded work.</p></div></div>
       </div>
 
       <div class="panel-actions">
@@ -153,7 +182,8 @@
       <h2>Martini 3 Model</h2>
       <p class="section-desc">Verify the bundled Martini 3.0.0 parameters, 2025 lipidome v2, regular water, and pinned mapping/build tools.</p>
       <div class="validation-info"><b>Immutable model:</b> Martini 3 with regular W water and NA/CL ions. Force-field checksums and exact tool versions are validated for every task.</div>
-      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-model-check">&#10003; Verify Model</button><span class="hint" id="cg-model-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-model-check">&#10003; Verify Model</button><span class="hint" id="cg-model-status"></span></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
     <section class="panel" id="panel-cg_mapping">
@@ -168,8 +198,9 @@
         <div class="field"><label for="cg-elastic-lower">Lower cutoff (nm)</label><input id="cg-elastic-lower" type="number" value="0.5" min="0" max="1.2" step="0.1"></div>
         <div class="field"><label for="cg-elastic-upper">Upper cutoff (nm)</label><input id="cg-elastic-upper" type="number" value="0.9" min="0" max="1.2" step="0.1"></div>
       </div>
+      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-mapping-check">&#10003; Map Protein</button><span class="hint" id="cg-mapping-status"></span></div>
       <div class="viewer-box" id="cg-mapping-viewer" style="height:320px"></div>
-      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-mapping-check">&#10003; Map Protein</button><span class="hint" id="cg-mapping-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
     <section class="panel" id="panel-cg_environment">
@@ -185,24 +216,27 @@
         <div class="field cg-bilayer-control"><label for="cg-upper-lipids">Upper leaflet</label><input id="cg-upper-lipids" value="POPC:100"><span class="hint">Comma-separated ratios, e.g. POPC:70,CHOL:30</span></div>
         <div class="field cg-bilayer-control"><label for="cg-lower-lipids">Lower leaflet</label><input id="cg-lower-lipids" value="POPC:100"></div>
       </div>
+      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-environment-check">&#10003; Build Environment</button><span class="hint" id="cg-environment-status"></span></div>
       <div class="viewer-box" id="cg-environment-viewer" style="height:360px"></div>
-      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-environment-check">&#10003; Build Environment</button><span class="hint" id="cg-environment-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
     <section class="panel" id="panel-cg_solvation">
       <h2>CG Solvation</h2>
       <p class="section-desc">Add regular Martini water. The preview contains only neutralizing counterions; target bulk salt is added at Final CG System.</p>
       <div class="form-grid"><div class="field checkbox-field"><label><input id="cg-include-solvent" type="checkbox" checked> Include water and ions</label></div><div class="field"><label for="cg-salt">Target NaCl concentration (M)</label><input id="cg-salt" type="number" value="0.15" min="0" max="1" step="0.01"></div></div>
+      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-solvation-check">&#10003; Solvate</button><span class="hint" id="cg-solvation-status"></span></div>
       <div class="viewer-box" id="cg-solvation-viewer" style="height:360px"></div>
-      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-solvation-check">&#10003; Solvate</button><span class="hint" id="cg-solvation-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
     <section class="panel" id="panel-cg_system">
       <h2>Final CG System</h2>
       <p class="section-desc">Construct the exact coordinates that will be exported and enforce neutral charge, box, water, membrane orientation, and leaflet-separation checks.</p>
+      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-system-check">&#10003; Build &amp; Check Final System</button><span class="hint" id="cg-system-status"></span></div>
       <div class="viewer-box" id="cg-system-viewer" style="height:420px"></div>
       <div class="field checkbox-field"><label><input id="cg-confirm-system" type="checkbox"> I inspected and confirm this final coarse-grained system</label></div>
-      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-system-check">&#10003; Build &amp; Check Final System</button><span class="hint" id="cg-system-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
     <!-- ============================================================ -->
@@ -643,7 +677,7 @@
 <script src="/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js"></script>
 <script src="/static/constants.js?v=1"></script>
 <script src="/static/ions.js?v=10"></script>
-<script src="/static/app.js?v=61"></script>
+<script src="/static/app.js?v=62"></script>
 
 <!-- Custom Lipid Modal -->
 <div class="modal-overlay hidden" id="custom-lipid-modal">

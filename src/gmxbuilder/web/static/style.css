@@ -183,6 +183,22 @@ body {
 
 /* Buttons */
 .panel-actions { display: flex; justify-content: space-between; margin-top: 24px; }
+.viewer-box {
+  position: relative;
+  width: 100%;
+  min-height: 280px;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  contain: layout paint;
+}
+.viewer-box canvas { position: absolute !important; inset: 0; max-width: 100%; }
+.cg-check-row { margin-top: 18px; }
+.cg-check-button { display: block; width: 100%; }
+.cg-check-row .hint { display: block; min-height: 18px; margin-top: 6px; }
+.stage-enabled { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .btn {
   padding: 10px 24px;
   border: 1px solid var(--border);

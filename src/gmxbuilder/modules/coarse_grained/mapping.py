@@ -133,6 +133,10 @@ class CGMappingModule(BaseModule):
                 "secondary_structure": str(config.get("secondary_structure", "auto")),
                 "molecule_types": molecule_types,
                 "beads": structure.num_atoms,
+                "protein_extent_nm": [
+                    round(float(value), 4)
+                    for value in np.ptp(structure.coordinates, axis=0)
+                ],
             },
         })
         tail = [line for line in result.stdout.splitlines() if line.strip()][-8:]

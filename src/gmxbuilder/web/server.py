@@ -3811,6 +3811,15 @@ async def api_step_viewer_pdb(task_id: str, step_name: str):
 
     runner = _get_step_runner(task_id, pipeline_type)
     pdb_path = runner.step_dir(step_name) / "viewer.pdb"
+    # Martinize2 writes authoritative CONECT records for mapped beads.  Keep
+    # those bonds in the mapping preview instead of the generic checkpoint PDB,
+    # which intentionally stores coordinates only.
+    if pipeline_type == "coarse-grained" and step_name == "cg_mapping":
+        mapped_path = runner.step_dir(step_name) / "martinize" / "cg_protein.pdb"
+        step_root = runner.step_dir(step_name).resolve()
+        resolved = mapped_path.resolve()
+        if step_root in resolved.parents and resolved.is_file() and not resolved.is_symlink():
+            pdb_path = resolved
     if not pdb_path.exists():
         return JSONResponse({"error": f"No viewer PDB for step '{step_name}'"}, status_code=404)
 

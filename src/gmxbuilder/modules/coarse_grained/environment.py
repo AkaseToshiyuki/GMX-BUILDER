@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.modules.coarse_grained.backend import build_with_coby, normalize_environment
+from gmxbuilder.modules.coarse_grained.backend import (
+    build_with_coby,
+    normalize_environment,
+    validate_protein_box,
+)
 from gmxbuilder.modules.coarse_grained.common import system_from_gro
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
@@ -25,6 +29,7 @@ class CGEnvironmentModule(BaseModule):
         normalized = normalize_environment(config, output.metadata)
         if normalized["environment"] == "solution" and not normalized["include_protein"]:
             raise ModuleConfigError("A solution-phase CG task requires a protein")
+        validate_protein_box(output, normalized)
         output.metadata["cg_environment_config"] = normalized
         gro, top, _log = build_with_coby(output, config, solvate=False, final_salt=False)
         topology_text = top.read_text(encoding="utf-8")

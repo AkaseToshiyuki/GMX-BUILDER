@@ -5,7 +5,7 @@
 | 项目 | 内容 |
 |---|---|
 | 文档版本 | V1.0.1 |
-| 适用软件 | GMXBUILDER v0.8.6 或更高版本 |
+| 适用软件 | GMXBUILDER v0.8.7 或更高版本 |
 | 编写人 | Haochen Yang |
 | 发布日期 | 2026-08-11 |
 | 文档状态 | 正式发布 |
@@ -278,6 +278,11 @@ Final CG System Check 会一次性组装实际导出的完整体系，并检查�
 首版不支持配体、PTM、糖链、核酸、自定义 CG 分子、曲面膜和 backmapping；这些
 对象会明确阻断而不是被删除。精确边界和脂质列表可查询
 `GET /api/coarse-grained/capabilities`。
+
+Protein Mapping 会依据旋转后的 CG 包络建议安全周期盒；CG Environment 会拒绝
+任何可能导致 COBY 回卷蛋白 beads 的盒尺寸或位移。Simulation Parameters 分别
+管理最小化、可选 NVT、可选 NPT、生产、输出/COM 去除和执行硬件；各阶段保持严格
+串行，并固定 Martini 3 兼容的非键相互作用缺省值。
 
 ## 4. CLI
 

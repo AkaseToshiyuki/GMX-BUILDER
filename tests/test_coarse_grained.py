@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -24,7 +25,11 @@ from gmxbuilder.modules.coarse_grained import (
     CGTopologyModule,
 )
 from gmxbuilder.modules.coarse_grained.assets import public_capabilities, verify_assets
-from gmxbuilder.modules.coarse_grained.backend import normalize_environment, normalize_solvation
+from gmxbuilder.modules.coarse_grained.backend import (
+    normalize_environment,
+    normalize_solvation,
+    validate_protein_box,
+)
 from gmxbuilder.modules.coarse_grained.common import normalize_composition
 from gmxbuilder.modules.coarse_grained.protocol import normalize_protocol
 from gmxbuilder.pipeline.step_executor import StepRunner, _get_module, get_pipeline_steps
@@ -98,6 +103,9 @@ def test_composition_and_protocol_reject_silent_scientific_drift():
     )
     assert protocol["has_membrane"] is True
     assert protocol["threads"] // protocol["mpi_ranks"] == 4
+    assert normalize_protocol(protocol, has_membrane=True) == protocol
+    assert protocol["eq1_timestep_fs"] == 10.0
+    assert protocol["production_timestep_fs"] == 20.0
     with pytest.raises(ModuleConfigError, match="include_solvent must be true or false"):
         normalize_solvation({"include_solvent": "false"}, {"cg_environment": "bilayer"})
     with pytest.raises(ModuleConfigError, match="asymmetric must be true or false"):
@@ -106,6 +114,22 @@ def test_composition_and_protocol_reject_silent_scientific_drift():
         normalize_environment({"seed": 1.5}, {"cg_environment": "bilayer"})
     with pytest.raises(ModuleConfigError, match="confirmation endpoint"):
         CGSystemCheckModule().validate_config({"confirm_system": True})
+
+
+def test_rotated_protein_must_fit_periodic_box_before_coby_wraps_it():
+    coordinates = np.array([[0.0, 0.0, 0.0], [15.0, 1.0, 2.0]], dtype=float)
+    system = SimpleNamespace(
+        num_atoms=2,
+        structure=SimpleNamespace(coordinates=coordinates),
+    )
+    environment = normalize_environment(
+        {"box_xy": 12.0, "box_z": 14.0},
+        {"cg_environment": "solution", "cg_include_protein": True},
+    )
+    with pytest.raises(ModuleConfigError, match="periodic wrapping"):
+        validate_protein_box(system, environment)
+    environment["box_xy"] = 18.0
+    validate_protein_box(system, environment)
 
 
 def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkeypatch):
@@ -176,7 +200,9 @@ def test_coarse_grained_frontend_keeps_step_validation_and_viewer_confirmation_s
     assert "await _doCheckStep(spec[1], spec[2], spec[0]);" in app_source
     assert "if (spec[1] !== 'cg_model') await renderCoarseGrainedViewer" not in app_source
     assert 'id="cg-mapping-controls"' in template
-    assert "Use GPU for short-ranged non-bonded work" in template
+    assert "Execution Hardware" in template
+    assert 'class="btn primary cg-check-button" id="cg-mapping-check"' in template
+    assert "stepName !== 'cg_mapping'" in app_source
 
 
 def _run(runner: StepRunner, step: str, config: dict) -> None:

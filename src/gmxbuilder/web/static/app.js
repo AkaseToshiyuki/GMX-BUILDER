@@ -510,10 +510,30 @@ function parseCoarseGrainedComposition(value, label) {
 
 function collectCoarseGrainedSimulationParams() {
   var config = {
-    temperature: Number(document.getElementById('cg-temperature')?.value || 310),
-    pressure: Number(document.getElementById('cg-pressure')?.value || 1),
+    minimization_steps: Number(document.getElementById('cg-mini-steps')?.value || 20000),
+    minimization_tolerance: Number(document.getElementById('cg-mini-tolerance')?.value || 200),
+    minimization_step_nm: Number(document.getElementById('cg-mini-step')?.value || 0.005),
+    eq1_duration_ns: Number(document.getElementById('cg-eq1-duration')?.value || 1),
+    eq1_timestep_fs: Number(document.getElementById('cg-eq1-dt')?.value || 10),
+    eq1_temperature: Number(document.getElementById('cg-eq1-temperature')?.value || 310),
+    eq1_tau_t: Number(document.getElementById('cg-eq1-tau-t')?.value || 1),
+    eq2_duration_ns: Number(document.getElementById('cg-eq2-duration')?.value || 10),
+    eq2_timestep_fs: Number(document.getElementById('cg-eq2-dt')?.value || 20),
+    eq2_temperature: Number(document.getElementById('cg-eq2-temperature')?.value || 310),
+    eq2_tau_t: Number(document.getElementById('cg-eq2-tau-t')?.value || 1),
+    eq2_pressure: Number(document.getElementById('cg-eq2-pressure')?.value || 1),
+    eq2_tau_p: Number(document.getElementById('cg-eq2-tau-p')?.value || 4),
     production_ns: Number(document.getElementById('cg-production-ns')?.value || 1000),
+    production_timestep_fs: Number(document.getElementById('cg-production-dt')?.value || 20),
+    production_temperature: Number(document.getElementById('cg-production-temperature')?.value || 310),
+    production_tau_t: Number(document.getElementById('cg-production-tau-t')?.value || 1),
+    production_pressure: Number(document.getElementById('cg-production-pressure')?.value || 1),
+    production_tau_p: Number(document.getElementById('cg-production-tau-p')?.value || 4),
     output_interval_ps: Number(document.getElementById('cg-output-ps')?.value || 100),
+    energy_interval_ps: Number(document.getElementById('cg-energy-ps')?.value || 20),
+    log_interval_ps: Number(document.getElementById('cg-log-ps')?.value || 20),
+    comm_mode: String(document.getElementById('cg-comm-mode')?.value || 'Linear'),
+    comm_interval: Number(document.getElementById('cg-comm-interval')?.value || 100),
     equilibration_1: document.getElementById('cg-eq1')?.checked !== false,
     equilibration_2: document.getElementById('cg-eq2')?.checked !== false,
     use_gpu: document.getElementById('cg-use-gpu')?.checked !== false,
@@ -523,16 +543,38 @@ function collectCoarseGrainedSimulationParams() {
     system_name: document.getElementById('system-name')?.value || 'martini3_system',
   };
   var ranges = [
-    ['Temperature', config.temperature, 250, 370],
-    ['Pressure', config.pressure, 0.1, 100],
+    ['Minimization steps', config.minimization_steps, 100, 1000000],
+    ['Minimization tolerance', config.minimization_tolerance, 1, 10000],
+    ['Minimization step size', config.minimization_step_nm, 0.0001, 0.1],
+    ['NVT duration', config.eq1_duration_ns, 0.001, 1000],
+    ['NVT timestep', config.eq1_timestep_fs, 1, 20],
+    ['NVT temperature', config.eq1_temperature, 250, 370],
+    ['NVT thermostat tau', config.eq1_tau_t, 0.1, 20],
+    ['NPT duration', config.eq2_duration_ns, 0.001, 10000],
+    ['NPT timestep', config.eq2_timestep_fs, 1, 20],
+    ['NPT temperature', config.eq2_temperature, 250, 370],
+    ['NPT thermostat tau', config.eq2_tau_t, 0.1, 20],
+    ['NPT pressure', config.eq2_pressure, 0.1, 100],
+    ['NPT barostat tau', config.eq2_tau_p, 0.1, 50],
     ['Production length', config.production_ns, 1, 100000],
+    ['Production timestep', config.production_timestep_fs, 1, 20],
+    ['Production temperature', config.production_temperature, 250, 370],
+    ['Production thermostat tau', config.production_tau_t, 0.1, 20],
+    ['Production pressure', config.production_pressure, 0.1, 100],
+    ['Production barostat tau', config.production_tau_p, 0.1, 50],
     ['Trajectory interval', config.output_interval_ps, 1, config.production_ns * 1000],
+    ['Energy interval', config.energy_interval_ps, 0.02, config.production_ns * 1000],
+    ['Log interval', config.log_interval_ps, 0.02, config.production_ns * 1000],
+    ['COM interval', config.comm_interval, 1, 1000000],
   ];
   ranges.forEach(function(item) {
     if (!Number.isFinite(item[1]) || item[1] < item[2] || item[1] > item[3]) {
       throw new Error(item[0] + ' must be between ' + item[2] + ' and ' + item[3] + '.');
     }
   });
+  if (!Number.isInteger(config.minimization_steps) || !Number.isInteger(config.comm_interval)) {
+    throw new Error('CG minimization steps and COM interval must be integers.');
+  }
   if (!Number.isInteger(config.threads) || config.threads < 1 ||
       !Number.isInteger(config.mpi_ranks) || config.mpi_ranks < 1 ||
       config.threads % config.mpi_ranks !== 0) {
@@ -869,8 +911,23 @@ async function renderCoarseGrainedViewer(stepName) {
   var targetId = targetMap[stepName];
   var target = targetId ? document.getElementById(targetId) : null;
   if (!target || typeof $3Dmol === 'undefined') return false;
+  window._cgViewers = window._cgViewers || {};
+  var cached = window._cgViewers[targetId];
+  if (cached && cached.taskId !== state.taskId) {
+    try { cached.viewer.clear(); } catch (e) {}
+    target.replaceChildren();
+    delete window._cgViewers[targetId];
+    cached = null;
+  }
   var pdb = await _loadStepViewerPdb(stepName);
-  if (!pdb) return false;
+  if (!pdb) {
+    if (cached) {
+      try { cached.viewer.clear(); } catch (e) {}
+      target.replaceChildren();
+      delete window._cgViewers[targetId];
+    }
+    return false;
+  }
   // Protein-free mapping checkpoints intentionally contain only CRYST1/END.
   // 3Dmol cannot create a model from that empty coordinate set; skipping the
   // viewer is the correct successful state, not a failed Check.
@@ -878,9 +935,9 @@ async function renderCoarseGrainedViewer(stepName) {
     target.replaceChildren();
     return false;
   }
-  window._cgViewers = window._cgViewers || {};
-  var viewer = window._cgViewers[targetId];
-  if (!viewer) {
+  var viewer = cached && cached.viewer;
+  if (!viewer || !target.querySelector('canvas')) {
+    target.replaceChildren();
     try {
       viewer = $3Dmol.createViewer(target, {backgroundColor: 'white'});
     } catch (error) {
@@ -888,15 +945,27 @@ async function renderCoarseGrainedViewer(stepName) {
       target.classList.add('viewer-unavailable');
       return false;
     }
-    window._cgViewers[targetId] = viewer;
+    window._cgViewers[targetId] = {viewer: viewer, taskId: state.taskId};
   }
   target.classList.remove('viewer-unavailable');
   viewer.removeAllModels();
   var model = viewer.addModel(pdb, 'pdb');
-  viewer.setStyle({}, {sphere: {radius: 0.18, colorscheme: 'Jmol'}});
-  viewer.setStyle({resn: 'W'}, {sphere: {radius: 0.07, color: '#60a5fa', opacity: 0.28}});
+  viewer.setStyle({}, {sphere: {radius: 0.16, colorscheme: 'Jmol'}});
+  if (stepName === 'cg_mapping') {
+    viewer.setStyle({}, {sphere: {radius: 0.14, colorscheme: 'Jmol'}, stick: {radius: 0.08, colorscheme: 'Jmol'}});
+  }
+  viewer.setStyle(
+    {atom: ['BB', 'SC1', 'SC2', 'SC3', 'SC4', 'SC5']},
+    {sphere: {radius: 0.20, color: '#9f6f8f'}, stick: {radius: 0.08, color: '#9f6f8f'}}
+  );
+  viewer.setStyle({resn: 'W'}, {sphere: {radius: 0.045, color: '#60a5fa', opacity: 0.14}});
   viewer.setStyle({resn: ['NA', 'CL']}, {sphere: {radius: 0.24, colorscheme: 'Jmol'}});
-  if (viewer.addUnitCell) viewer.addUnitCell(model, {boxColor: '#64748b'});
+  // The mapping checkpoint box is only an internal envelope estimate.  The
+  // user-defined physical PBC cell begins at CG Environment.
+  if (stepName !== 'cg_mapping' && viewer.addUnitCell) {
+    viewer.addUnitCell(model, {boxColor: '#64748b'});
+  }
+  if (viewer.resize) viewer.resize();
   viewer.zoomTo();
   viewer.render();
   viewer.setSlab(-10000, 10000);
@@ -3108,6 +3177,18 @@ async function _doCheckStep(stepName, statusElId, btnId) {
         updateNextButtonState();
         renderSolvationViewer();
       } else if (stepName.indexOf('cg_') === 0) {
+        if (stepName === 'cg_mapping') {
+          var extent = ((result.metrics || {}).cg_mapping || {}).protein_extent_nm || [];
+          if (extent.length === 3) {
+            var recommendedXY = Math.ceil((Math.max(Number(extent[0]), Number(extent[1])) + 3.0) * 2) / 2;
+            var recommendedZ = Math.ceil((Number(extent[2]) + 3.0) * 2) / 2;
+            var boxXY = document.getElementById('cg-box-xy');
+            var boxZ = document.getElementById('cg-box-z');
+            if (boxXY && Number(boxXY.value) < recommendedXY) boxXY.value = String(recommendedXY);
+            if (boxZ && Number(boxZ.value) < recommendedZ) boxZ.value = String(recommendedZ);
+            if (statusEl) statusEl.textContent += ' — minimum safe box suggested: ' + recommendedXY.toFixed(1) + ' × ' + recommendedXY.toFixed(1) + ' × ' + recommendedZ.toFixed(1) + ' nm';
+          }
+        }
         var cgViewerRendered = await renderCoarseGrainedViewer(stepName);
         if (cgConfirmation) {
           cgConfirmation.disabled = cgViewerRendered !== true;

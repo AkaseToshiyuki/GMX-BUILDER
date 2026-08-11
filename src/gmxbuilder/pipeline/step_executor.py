@@ -754,6 +754,9 @@ def _compute_step_metrics(system: System, step_name: str) -> dict:
     if step_name == "ions":
         metrics["ions"] = system.metadata.get("ions", {})
 
+    if step_name == "cg_mapping":
+        metrics["cg_mapping"] = system.metadata.get("cg_mapping", {})
+
     if step_name == "input":
         metrics["input_repair"] = system.metadata.get("input_repair", {
             "status": "not_needed",

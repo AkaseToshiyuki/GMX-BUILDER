@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import io
+import math
 import shutil
 from pathlib import Path
+
+import numpy as np
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.coarse_grained.assets import materialize_assets
@@ -71,6 +74,48 @@ def normalize_environment(config: dict, metadata: dict) -> dict:
         )
         normalized.update({"upper_leaflet": upper, "lower_leaflet": lower, "asymmetric": asymmetric})
     return normalized
+
+
+def validate_protein_box(system, environment: dict, *, clearance_nm: float = 3.0) -> None:
+    """Reject a PBC box that would make COBY wrap a rotated mapped protein.
+
+    COBY rotates centered coordinates in X/Y/Z order and then wraps them into
+    the requested rectangular cell.  Three nanometres of total clearance also
+    covers its internal bead-radius placement margin.  A wrapped protein can
+    look fragmented and is not a safe starting structure, so validation must
+    happen before COBY.
+    """
+    if not environment.get("include_protein", True) or system.num_atoms == 0:
+        return
+    coordinates = np.asarray(system.structure.coordinates, dtype=float)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 3 or not np.isfinite(coordinates).all():
+        raise ModuleConfigError("Mapped protein coordinates are invalid")
+    centered = coordinates - coordinates.mean(axis=0)
+    angles = [math.radians(float(environment[f"rotate_{axis}"])) for axis in "xyz"]
+    cx, cy, cz = (math.cos(value) for value in angles)
+    sx, sy, sz = (math.sin(value) for value in angles)
+    rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    rotated = centered @ (rx @ ry @ rz).T
+    extent = np.ptp(rotated, axis=0)
+    required_xy = float(max(extent[0], extent[1]) + clearance_nm)
+    required_z = float(extent[2] + 2.0 * abs(float(environment["z_offset"])) + clearance_nm)
+    failures = []
+    if float(environment["box_xy"]) + 1e-9 < required_xy:
+        failures.append(
+            f"Box X/Y {environment['box_xy']:.2f} nm is smaller than the rotated protein "
+            f"extent ({max(extent[0], extent[1]):.2f} nm); use at least {required_xy:.2f} nm"
+        )
+    if float(environment["box_z"]) + 1e-9 < required_z:
+        failures.append(
+            f"Box Z {environment['box_z']:.2f} nm is smaller than the positioned protein "
+            f"extent ({extent[2]:.2f} nm); use at least {required_z:.2f} nm"
+        )
+    if failures:
+        raise ModuleConfigError(
+            "; ".join(failures) + ". Increase the box to prevent periodic wrapping of the protein"
+        )
 
 
 def normalize_solvation(config: dict, metadata: dict) -> dict:
@@ -193,4 +238,9 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
     topology_text = topology_text.replace(str(work) + "/", "")
     top.write_text(topology_text, encoding="utf-8")
     log = (work / "coby.log").read_text(encoding="utf-8", errors="replace") if (work / "coby.log").is_file() else output_capture.getvalue()
+    if protein_arg and "Protein beads are outside pbc" in log:
+        raise ModuleConfigError(
+            "COBY detected mapped protein beads outside the periodic box. "
+            "Increase the box dimensions or reduce the protein offset; wrapped protein coordinates were rejected"
+        )
     return gro, top, log
