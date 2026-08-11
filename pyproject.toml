@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gmxbuilder"
-version = "0.8.5"
+version = "0.8.6"
 description = "Build GROMACS membrane protein simulation systems with automated topology and MD parameter generation"
 readme = "README.md"
 requires-python = ">=3.10"

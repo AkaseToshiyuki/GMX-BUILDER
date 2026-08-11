@@ -107,6 +107,37 @@ def test_upload_accepts_mmcif_and_preserves_original_for_input_step(tmp_path, mo
     assert manager.get_pdb_path(payload["task_id"]).name == "converted.pdb"
 
 
+def test_coarse_grained_mmcif_check_writes_canonical_mapping_pdb(
+    tmp_path, monkeypatch
+):
+    manager = TaskManager(tmp_path / "tasks")
+    monkeypatch.setattr(server, "task_manager", manager)
+    server._step_runners.clear()
+
+    with TestClient(app) as client:
+        created = client.post("/api/tasks", json={"task_type": "coarse-grained"})
+        assert created.status_code == 200, created.text
+        task_id = created.json()["task_id"]
+        uploaded = client.post(
+            "/api/upload-pdb",
+            files={"file": ("cg-model.mmcif", MMCIF_TEXT, "chemical/x-mmcif")},
+            data={"task_type": "coarse-grained", "task_id": task_id},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        checked = client.post(
+            f"/api/step/{task_id}/input",
+            json={"config": {"include_protein": True, "environment": "bilayer"}},
+        )
+
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["status"] == "ok", checked.text
+    canonical = manager.get_task_dir(task_id) / "steps" / "input" / "cg_input.pdb"
+    text = canonical.read_text()
+    assert text.startswith("HEADER    Martini 3 atomistic input")
+    assert "\nATOM" in text
+    assert not text.startswith("data_")
+
+
 def test_upload_accepts_bounded_gzip_pdb(tmp_path, monkeypatch):
     manager = TaskManager(tmp_path / "tasks")
     monkeypatch.setattr(server, "task_manager", manager)

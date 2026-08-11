@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +9,8 @@ import numpy as np
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.io.pdb import PDBParser
+from gmxbuilder.io.cif import CIFParser
+from gmxbuilder.io.pdb import PDBParser, PDBWriter
 from gmxbuilder.modules.coarse_grained.common import (
     STANDARD_PROTEIN_RESIDUES,
     strict_bool,
@@ -22,6 +22,18 @@ from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 class CGInputModule(BaseModule):
     name = "cg_input"
     description = "Audit an atomistic structure for Martini 3 mapping"
+
+    @staticmethod
+    def _is_cif(source: Path) -> bool:
+        """Detect mmCIF independently of the atomistic input workflow."""
+        if source.suffix.lower() in {".cif", ".mmcif"}:
+            return True
+        try:
+            with source.open(encoding="utf-8-sig", errors="replace") as handle:
+                first_line = handle.readline(200).lstrip()
+        except OSError:
+            return False
+        return first_line.startswith("data_")
 
     def validate_config(self, config: dict) -> bool:
         self.validate_config_keys(config, {
@@ -56,7 +68,12 @@ class CGInputModule(BaseModule):
         source = Path(str(config["pdb"])).resolve()
         if not source.is_file() or source.is_symlink():
             raise ModuleConfigError("Uploaded protein structure is unavailable")
-        parsed = PDBParser().parse(source)
+        source_is_cif = self._is_cif(source)
+        parsed = (
+            CIFParser().parse(source)
+            if source_is_cif
+            else PDBParser().parse(source)
+        )
         observed = sorted({str(name).strip().upper() for name in parsed.resnames})
         unsupported = [name for name in observed if name not in STANDARD_PROTEIN_RESIDUES]
         if unsupported:
@@ -68,7 +85,10 @@ class CGInputModule(BaseModule):
             raise ModuleConfigError("Uploaded structure contains no protein atoms")
 
         destination = task_step_dir(config) / "cg_input.pdb"
-        shutil.copy2(source, destination)
+        # Martinize2 consumes PDB in the next CG step.  Always write a canonical
+        # PDB from the parsed Structure so an mmCIF upload cannot be copied with
+        # a misleading .pdb suffix or parsed differently by the two steps.
+        PDBWriter.write(parsed, destination, title="Martini 3 atomistic input")
         output.structure = parsed
         output.components = [Component(
             name="Atomistic Protein Input",
@@ -82,6 +102,9 @@ class CGInputModule(BaseModule):
             "cg_input_atom_count": parsed.num_atoms,
         })
         return ModuleResult(True, output, [
-            f"Accepted {parsed.num_atoms} protein atoms for Martini 3 mapping",
+            (
+                f"Accepted {parsed.num_atoms} protein atoms for Martini 3 mapping"
+                f"{' (mmCIF converted to canonical PDB)' if source_is_cif else ''}"
+            ),
             "No ligands, PTMs, glycans, nucleic acids, or unknown residues were discarded",
         ])

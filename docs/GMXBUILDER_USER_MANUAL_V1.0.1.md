@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Document version | V1.0.1 |
-| Software | GMXBUILDER v0.8.5 or later |
+| Software | GMXBUILDER v0.8.6 or later |
 | Author | Haochen Yang |
 | Release date | 2026-08-11 |
 | Status | Public release |
