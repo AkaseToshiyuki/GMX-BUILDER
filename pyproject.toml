@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gmxbuilder"
+version = "0.8.5"
+description = "Build GROMACS membrane protein simulation systems with automated topology and MD parameter generation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [
+    {name = "Haochen Yang"}
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "rdkit>=2024.3",
+    "openmm>=8.2",
+    "pdbfixer @ git+https://github.com/openmm/pdbfixer.git@94cfa4c0ca551cdc5f13320f9a658efd59f2b881",
+    "pydantic>=2.0",
+    "click>=8.0",
+    "PyYAML>=6.0",
+    "Jinja2>=3.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "python-multipart>=0.0.5",
+    "vermouth==0.15.0",
+    "COBY==1.0.14",
+    # COBY 1.0.14 imports its grid plotter at package import time but does not
+    # declare Matplotlib in its wheel metadata. Keep the runtime dependency
+    # explicit so a clean locked installation can import the pinned backend.
+    "matplotlib>=3.8,<4",
+    "mdtraj==1.10.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "black",
+    "ruff",
+    "selenium>=4.20",
+    "pip-audit>=2.9",
+    "httpx2>=0.28",
+]
+docs = [
+    "reportlab>=4.0",
+]
+[project.scripts]
+gmxbuilder = "gmxbuilder.app:main"
+
+[project.entry-points."gmxbuilder.modules"]
+# Built-in modules are registered programmatically.
+# Third-party plugins register here:
+# my_ligand_builder = "myplugin.ligand:LigandBuilderModule"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+gmxbuilder = ["data/**/*", "web/static/**/*", "web/templates/**/*"]
+
+[tool.setuptools.exclude-package-data]
+gmxbuilder = [
+    "**/__pycache__/*",
+    "**/*.pyc",
+    "web/static/output/*",
+    "web/static/output/**/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "browser: live Firefox browser regression tests (requires GMXBUILDER_BROWSER_URL)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -1,0 +1,60 @@
+# GMXBUILDER — 示例构建配置
+# 使用方法: gmxbuilder build -c examples/build_example.yaml
+
+system_name: example_membrane_protein
+output_dir: ./output
+seed: 42
+
+modules:
+  # ---- PDB 输入 ----
+  input:
+    pdb: ./input.pdb          # 替换为你的 PDB 文件路径
+
+  # ---- 蛋白朝向 ----
+  orient:
+    algorithm: ppm            # PPM 算法自动检测膜平面
+
+  # ---- 膜构建 ----
+  membrane:
+    lipid_type: POPC          # 单一脂质 (或使用下方混合模式)
+    # composition_upper:      # 混合膜模式 — 取消注释启用
+    #   - [POPC, 70]
+    #   - [POPE, 30]
+    # composition_lower:
+    #   - [POPC, 70]
+    #   - [POPE, 30]
+    bilayer_size: 6.0         # 膜 XY 尺寸 nm (不设则从蛋白自动估算)
+    pad: 1.5                  # 蛋白周围膜延伸距离 nm
+
+  # ---- 溶剂化 ----
+  solvation:
+    box_padding: 1.5          # Z 方向水层厚度 nm
+    remove_overlap: true
+    overlap_scale: 0.8
+
+  # ---- 离子 ----
+  ions:
+    cation: NA                # 阳离子
+    anion: CL                 # 阴离子
+    concentration: 0.15       # NaCl 浓度 mol/L
+    neutralize: true          # 自动中和蛋白净电荷
+
+  # ---- 力场 ----
+  forcefield:
+    name: charmm36
+    lipid_ff: charmm36
+    ligand_ff: cgenff
+    water_model: tip3p        # 与分子力场一起选择并在溶剂化阶段锁定
+
+  # ---- 导出 ----
+  export:
+    write_mdp: true
+
+  # ---- 模拟参数 ----
+  simparams:
+    constraints: h-bonds
+    pcoupl_type: semisotropic   # 膜系统推荐 semisotropic
+    em_ftol: 1000.0
+    em_nsteps: 5000
+    gen_seed: 42
+    prod_nsteps: 50000000       # 100 ns @ 2 fs

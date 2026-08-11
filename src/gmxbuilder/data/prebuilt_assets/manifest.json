@@ -1,0 +1,26 @@
+{
+  "archive": "gmxbuilder-lipid-assets-v1.tar.xz",
+  "archive_bytes": 40559360,
+  "archive_sha256": "136966f664039d4fbbbb406af30bda2bec7b0bb077ec5e9b50bb80bca6f20631",
+  "asset_version": 1,
+  "contents": {
+    "conformations": 13000,
+    "force_fields": [
+      "amber14sb",
+      "charmm36m",
+      "charmm36"
+    ],
+    "gaff2_cache_entries": 72,
+    "gaff2_cache_files": 288,
+    "strict_library_entries": 260,
+    "strict_library_files": 13260
+  },
+  "schema_version": 1,
+  "scientific_contract": {
+    "gaff_charge_method": "am1-bcc",
+    "minimum_npt_ps": 1000,
+    "quarantined_or_unavailable_entries_included": false,
+    "strict_method": "explicit_solvent_semiisotropic_npt"
+  },
+  "software_version": "0.7.24"
+}

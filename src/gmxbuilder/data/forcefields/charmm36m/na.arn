@@ -1,0 +1,9 @@
+; PDB/GROMACS standard names -> CHARMM36 nucleic-acid RTP names
+DNA  OP1  O1P
+DNA  OP2  O2P
+RNA  OP1  O1P
+RNA  OP2  O2P
+DNA  C7   C5M
+DNA  H71  H51
+DNA  H72  H52
+DNA  H73  H53

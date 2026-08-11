@@ -1,0 +1,36 @@
+[Unit]
+Description=GMXBUILDER public Web service behind a TLS reverse proxy
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/gmxbuilder
+Environment=GMXBUILDER_DEPLOYMENT_MODE=public
+Environment=GMXBUILDER_TASK_DIR=/var/lib/gmxbuilder/tasks
+Environment=GMXBUILDER_CORS_ORIGINS=https://gmxbuilder.example.org
+Environment=GMXBUILDER_TRUSTED_PROXIES=127.0.0.1/32
+EnvironmentFile=/etc/gmxbuilder/secrets.env
+ExecStart=/opt/gmxbuilder/.venv/bin/gmxbuilder serve --host 127.0.0.1 --port 7788
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gmxbuilder
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+SystemCallFilter=~@clock @cpu-emulation @debug @module @mount @obsolete @privileged @raw-io @reboot @swap
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

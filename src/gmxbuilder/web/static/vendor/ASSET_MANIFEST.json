@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "package": "3dmol",
+      "version": "2.5.5",
+      "file": "3dmol-2.5.5/3Dmol-min.js",
+      "license_file": "3dmol-2.5.5/LICENSE",
+      "npm_integrity": "sha512-kqNHouGqq3YfW58174tdERvm0XYTmP0tavQKOqIw1ouc2OJ7epkXEFrtEkVXV0clBZT2Ze2xHRC/qxX0u0qCdw==",
+      "sha256": "f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016"
+    },
+    {
+      "package": "smiles-drawer",
+      "version": "2.0.3",
+      "file": "smiles-drawer-2.0.3/smiles-drawer.min.js",
+      "license_file": "smiles-drawer-2.0.3/LICENSE.md",
+      "npm_integrity": "sha512-G95FIAqeVyZOj5LlAE5QR0ERfGL5cOvx+LQfEGmtqVLQ8LypKRZ9TCo2Ne2lgqhFrdXQpftKf+79o6C0ItDMNg==",
+      "sha256": "917c95165fd8af50f76ffbf35eac0b74e7f0c93d715132eaa9bfc5e3374445ec"
+    }
+  ]
+}

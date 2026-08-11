@@ -1,0 +1,222 @@
+# Lipid registry — master metadata for all bundled lipid types
+# Values from experimental literature (NMR, X-ray, MD simulations)
+
+lipids:
+  popc:
+    common_name: "1-palmitoyl-2-oleoyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C42H82NO8P"
+    tail1: [16, 0]
+    tail2: [18, 1]
+    area_per_lipid: 0.643
+    bilayer_thickness: 3.8
+    charge: 0
+    mass: 760.08
+    templates:
+      gro: "popc/popc.gro"
+      itp: "popc/popc.itp"
+
+  dppc:
+    common_name: "1,2-dipalmitoyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C40H80NO8P"
+    tail1: [16, 0]
+    tail2: [16, 0]
+    area_per_lipid: 0.630
+    bilayer_thickness: 3.9
+    charge: 0
+    mass: 734.04
+    templates:
+      gro: "dppc/dppc.gro"
+      itp: "dppc/dppc.itp"
+
+  pope:
+    common_name: "1-palmitoyl-2-oleoyl-sn-glycero-3-phosphoethanolamine"
+    headgroup: "PE"
+    formula: "C39H76NO8P"
+    tail1: [16, 0]
+    tail2: [18, 1]
+    area_per_lipid: 0.590
+    bilayer_thickness: 4.1
+    charge: 0
+    mass: 718.01
+    templates:
+      gro: "pope/pope.gro"
+      itp: "pope/pope.itp"
+
+  dope:
+    common_name: "1,2-dioleoyl-sn-glycero-3-phosphoethanolamine"
+    headgroup: "PE"
+    formula: "C41H78NO8P"
+    tail1: [18, 1]
+    tail2: [18, 1]
+    area_per_lipid: 0.630
+    bilayer_thickness: 3.6
+    charge: 0
+    mass: 744.03
+    templates:
+      gro: "dope/dope.gro"
+      itp: "dope/dope.itp"
+
+  popg:
+    common_name: "1-palmitoyl-2-oleoyl-sn-glycero-3-phosphoglycerol"
+    headgroup: "PG"
+    formula: "C40H76O10P"
+    tail1: [16, 0]
+    tail2: [18, 1]
+    area_per_lipid: 0.650
+    bilayer_thickness: 3.7
+    charge: -1
+    mass: 747.00
+    templates:
+      gro: "popg/popg.gro"
+      itp: "popg/popg.itp"
+
+  pops:
+    common_name: "1-palmitoyl-2-oleoyl-sn-glycero-3-phosphoserine"
+    headgroup: "PS"
+    formula: "C40H75NO10P"
+    tail1: [16, 0]
+    tail2: [18, 1]
+    area_per_lipid: 0.630
+    bilayer_thickness: 4.0
+    charge: -1
+    mass: 761.00
+    templates:
+      gro: "pops/pops.gro"
+      itp: "pops/pops.itp"
+
+  dmpc:
+    common_name: "1,2-dimyristoyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C36H72NO8P"
+    tail1: [14, 0]
+    tail2: [14, 0]
+    area_per_lipid: 0.606
+    bilayer_thickness: 3.3
+    charge: 0
+    mass: 677.93
+
+  dlpc:
+    common_name: "1,2-dilauroyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C32H64NO8P"
+    tail1: [12, 0]
+    tail2: [12, 0]
+    area_per_lipid: 0.632
+    bilayer_thickness: 3.0
+    charge: 0
+    mass: 621.83
+
+  dspc:
+    common_name: "1,2-distearoyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C44H88NO8P"
+    tail1: [18, 0]
+    tail2: [18, 0]
+    area_per_lipid: 0.480
+    bilayer_thickness: 4.2
+    charge: 0
+    mass: 790.15
+
+  sopc:
+    common_name: "1-stearoyl-2-oleoyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C44H86NO8P"
+    tail1: [18, 0]
+    tail2: [18, 1]
+    area_per_lipid: 0.620
+    bilayer_thickness: 4.0
+    charge: 0
+    mass: 788.14
+
+  dopc:
+    common_name: "1,2-dioleoyl-sn-glycero-3-phosphocholine"
+    headgroup: "PC"
+    formula: "C44H84NO8P"
+    tail1: [18, 1]
+    tail2: [18, 1]
+    area_per_lipid: 0.720
+    bilayer_thickness: 3.6
+    charge: 0
+    mass: 786.13
+
+  dppg:
+    common_name: "1,2-dipalmitoyl-sn-glycero-3-phosphoglycerol"
+    headgroup: "PG"
+    formula: "C38H74O10P"
+    tail1: [16, 0]
+    tail2: [16, 0]
+    area_per_lipid: 0.630
+    bilayer_thickness: 3.8
+    charge: -1
+    mass: 721.95
+
+  popa:
+    common_name: "1-palmitoyl-2-oleoyl-sn-glycero-3-phosphate"
+    headgroup: "PA"
+    formula: "C37H72O8P"
+    tail1: [16, 0]
+    tail2: [18, 1]
+    area_per_lipid: 0.550
+    bilayer_thickness: 4.0
+    charge: -1
+    mass: 675.94
+
+  pops:
+    already_defined: true
+
+  chol:
+    common_name: "cholesterol"
+    headgroup: "ST"
+    formula: "C27H46O"
+    tail1: [0, 0]  # sterol — no tail chains
+    tail2: [0, 0]
+    area_per_lipid: 0.380
+    bilayer_thickness: 3.6
+    charge: 0
+    mass: 386.65
+
+  ergo:
+    common_name: "ergosterol"
+    headgroup: "ST"
+    formula: "C28H44O"
+    tail1: [0, 0]
+    tail2: [0, 0]
+    area_per_lipid: 0.400
+    bilayer_thickness: 3.5
+    charge: 0
+    mass: 396.65
+
+  psm:
+    common_name: "N-palmitoyl-D-erythro-sphingosylphosphorylcholine"
+    headgroup: "SM"
+    formula: "C39H79N2O6P"
+    tail1: [18, 0]  # sphingosine base
+    tail2: [16, 0]  # palmitoyl amide
+    area_per_lipid: 0.520
+    bilayer_thickness: 4.2
+    charge: 0
+    mass: 703.03
+
+  pi34:
+    common_name: "1-stearoyl-2-arachidonoyl-sn-glycero-3-phosphoinositol (PIP2 precursor)"
+    headgroup: "PI"
+    formula: "C47H83O13P"
+    tail1: [18, 0]
+    tail2: [20, 4]
+    area_per_lipid: 0.680
+    bilayer_thickness: 3.8
+    charge: -1
+    mass: 887.14
+
+  cl14:
+    common_name: "tetramyristoyl-cardiolipin (TMCL)"
+    headgroup: "CL"
+    formula: "C65H124O17P2"
+    tail1: [14, 0]
+    tail2: [14, 0]
+    area_per_lipid: 1.200  # cardiolipin has 4 chains — ~2× normal
+    bilayer_thickness: 3.4
+    charge: -2
+    mass: 1239.60

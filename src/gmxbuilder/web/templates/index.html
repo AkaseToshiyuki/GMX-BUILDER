@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GMXBUILDER — Build Membrane Simulation Systems</title>
+<link rel="icon" type="image/png" href="/static/assets/gmxbuilder-mark.png?v={{ version }}">
+<link rel="stylesheet" href="/static/style.css?v={{ version }}">
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="logo">
+    <img class="brand-logo" src="/static/assets/gmxbuilder-logo.png?v={{ version }}" alt="GMXBUILDER">
+    <span class="release-badge">Beta Test v{{ version }}</span>
+  </div>
+  <span class="header-sub" id="header-task-title"></span>
+    <span id="header-task-id" class="header-task-id hidden">
+      Task: <b id="task-id-display"></b>
+      <button type="button" id="copy-task-id" class="copy-task-id" aria-label="Copy Task ID" title="Copy Task ID">Copy</button>
+      <span id="copy-task-id-status" class="copy-task-id-status" role="status" aria-live="polite"></span>
+    </span>
+</header>
+
+<!-- Main container -->
+<div class="container">
+
+  <!-- Step indicator (dynamically populated) -->
+  <nav class="steps" id="step-nav" aria-label="Step navigation"></nav>
+
+  <!-- Panels -->
+  <div class="panels">
+
+    <!-- ============================================================ -->
+    <!-- Step 0: Task Type Selection                                  -->
+    <!-- ============================================================ -->
+    <section class="panel active" id="panel-task-type">
+      <h2>Choose Task Type</h2>
+      <p class="section-desc">Select the type of system you want to build. <span class="hint">Grayed-out cards are planned for future releases.</span></p>
+            <div style="margin-bottom:20px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
+        <label style="font-size:13px;color:#475569;font-weight:600;">Resume existing task by ID</label>
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <input type="text" id="resume-task-id" placeholder="e.g. a1b2c3d4e5f6" style="flex:1;max-width:220px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-family:monospace;font-size:13px;" aria-label="Resume task ID">
+          <button type="button" class="btn primary" id="resume-task-btn" aria-label="Resume existing task">Resume</button>
+        </div>
+        <p class="hint" style="margin-top:4px;margin-bottom:0;">Tasks expire after 8 hours of inactivity.</p>
+      </div>
+      <div class="task-grid" id="task-grid">
+        <!-- Populated by JS -->
+      </div>
+
+    </section>
+    <!-- Step: Simulation Parameters -->
+    <section class="panel" id="panel-simparams">
+      <h2>Simulation Parameters</h2>
+      <p class="section-desc">Six-stage equilibration with decaying restraints, followed by production. Click any stage to expand and tune.</p>
+
+      <div class="form-grid" id="simparams-stages">
+        <!-- Dynamically populated by JS -->
+      </div>
+      <div id="cg-simparams" class="form-grid hidden">
+        <div class="field"><label for="cg-temperature">Temperature (K)</label><input id="cg-temperature" type="number" value="310" min="250" max="370" step="1"></div>
+        <div class="field"><label for="cg-pressure">Pressure (bar)</label><input id="cg-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></div>
+        <div class="field"><label for="cg-production-ns">Production length (ns)</label><input id="cg-production-ns" type="number" value="1000" min="1" max="100000" step="100"><span class="hint">20 fs conservative Martini 3 timestep</span></div>
+        <div class="field"><label for="cg-output-ps">Trajectory interval (ps)</label><input id="cg-output-ps" type="number" value="100" min="1" step="10"></div>
+        <div class="field checkbox-field"><label><input id="cg-eq1" type="checkbox" checked> 1 ns NVT pre-equilibration (10 fs)</label></div>
+        <div class="field checkbox-field"><label><input id="cg-eq2" type="checkbox" checked> 10 ns NPT equilibration (20 fs)</label></div>
+        <div class="field checkbox-field"><label><input id="cg-use-gpu" type="checkbox" checked> Use GPU for short-ranged non-bonded work</label></div>
+        <div class="field"><label for="cg-gpu-ids">GPU IDs</label><input id="cg-gpu-ids" value="0" pattern="[0-9]+(,[0-9]+)*"></div>
+        <div class="field"><label for="cg-threads">Total CPU threads</label><input id="cg-threads" type="number" value="8" min="1" step="1"></div>
+        <div class="field"><label for="cg-mpi-ranks">Thread-MPI ranks</label><input id="cg-mpi-ranks" type="number" value="1" min="1" step="1"><span class="hint">CPU threads must be divisible by ranks</span></div>
+      </div>
+
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary" id="run-btn">&#9654; Build System</button>
+      </div>
+
+      <!-- Progress -->
+      <div class="progress-section hidden" id="progress-section">
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <p class="progress-text" id="progress-text">Building...</p>
+        <div class="build-log" id="build-log" style="margin-top:8px;max-height:400px;overflow-y:auto;background:#1e293b;color:#e2e8f0;font-family:monospace;font-size:12px;padding:8px;border-radius:6px;display:none;">
+          <div id="build-log-content"></div>
+        </div>
+      </div>
+
+      <!-- Result -->
+      <div class="result-section hidden" id="result-section">
+        <h3>&#10003; Build Complete</h3>
+        <div id="result-details"></div>
+        <a class="btn primary" id="download-link" href="#">Download ZIP</a>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Dynamic Builder Steps
+ (id = panel-module-name)              -->
+    <!-- ============================================================ -->
+
+    <!-- Step: PDB Input -->
+    <section class="panel" id="panel-input">
+      <h2>Upload Structure File</h2>
+      <div id="cg-input-options" class="form-grid hidden">
+        <div class="field"><label for="cg-environment">CG system type</label><select id="cg-environment"><option value="bilayer">Flat bilayer</option><option value="solution">Protein in water</option></select></div>
+        <div class="field checkbox-field"><label><input type="checkbox" id="cg-include-protein" checked> Include a protein</label><span class="hint">Clear for a protein-free bilayer. Solution mode requires a standard protein.</span></div>
+        <div class="validation-warnings">Martini 3 v1 accepts standard protein residues only. Ligands, PTMs, glycans, nucleic acids, custom molecules, curved membranes, and backmapping are rejected rather than discarded.</div>
+      </div>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="pdb-file" accept=".pdb,.PDB,.ent,.ENT,.cif,.CIF,.mmcif,.MMCIF,.pdb.gz,.PDB.GZ,.ent.gz,.ENT.GZ,.cif.gz,.CIF.GZ,.mmcif.gz,.MMCIF.GZ" hidden>
+        <div class="upload-icon">&#x21E7;</div>
+        <p>Drag &amp; drop a PDB or CIF file here, or <button type="button" class="link-btn" id="browse-btn">browse</button></p>
+        <p class="hint">Accepts PDB (.pdb/.ent), mmCIF (.cif/.mmcif), and gzip-compressed variants</p>
+      </div>
+      <!-- Validation warnings (shown after upload) -->
+      <div class="validation-info hidden" id="validation-info">
+        <div class="validation-errors hidden" id="validation-errors"></div>
+        <div class="validation-warnings hidden" id="validation-warnings"></div>
+      </div>
+      <div class="upload-info hidden" id="upload-info">
+        <h3 class="info-section-title">Structure Summary</h3>
+        <table>
+          <tr><td>File</td><td id="info-filename">—</td></tr>
+          <tr><td>Atoms</td><td id="info-atoms">—</td></tr>
+          <tr><td>Chains</td><td id="info-chains">—</td></tr>
+          <tr><td>Box</td><td id="info-box">—</td></tr>
+        </table>
+
+        <h3 class="info-section-title">Chains &amp; Molecules
+          <span class="hint">— select which to include, double-click name to rename</span>
+        </h3>
+        <div id="chain-sequences"></div>
+
+        <h3 class="info-section-title" id="smallmol-header" style="display:none;">Small Molecules</h3>
+        <div id="small-molecules"></div>
+
+        <h3 class="info-section-title">3D Structure Viewer <span class="hint">— drag to rotate, scroll to zoom</span></h3>
+        <div id="pdb-viewer" class="mol-viewer"></div>
+      </div>
+      <div style="margin-top:12px;">
+        <button type="button" class="btn primary" id="input-check-btn">&#10003; Check Upload</button>
+        <span id="input-check-status" style="margin-left:8px;font-size:13px;"></span>
+      </div>
+      <div id="input-check-report" class="input-check-report hidden" aria-live="polite"></div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-cg_model">
+      <h2>Martini 3 Model</h2>
+      <p class="section-desc">Verify the bundled Martini 3.0.0 parameters, 2025 lipidome v2, regular water, and pinned mapping/build tools.</p>
+      <div class="validation-info"><b>Immutable model:</b> Martini 3 with regular W water and NA/CL ions. Force-field checksums and exact tool versions are validated for every task.</div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-model-check">&#10003; Verify Model</button><span class="hint" id="cg-model-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
+    <section class="panel" id="panel-cg_mapping">
+      <h2>Protein Mapping</h2>
+      <p class="section-desc">Map the uploaded standard protein with pinned Martinize2. This step is skipped for a protein-free bilayer.</p>
+      <div class="form-grid" id="cg-mapping-controls">
+        <div class="field"><label for="cg-protein-model">Protein class</label><select id="cg-protein-model"><option value="folded">Folded soluble protein</option><option value="tm_helix">Transmembrane protein</option><option value="disordered">Intrinsically disordered protein</option></select></div>
+        <div class="field"><label for="cg-secondary">Secondary structure</label><select id="cg-secondary"><option value="auto">Automatic DSSP</option><option value="manual">Manual DSSP string</option></select></div>
+        <div class="field"><label for="cg-secondary-string">Manual DSSP string</label><input id="cg-secondary-string" placeholder="HHHHCCCC..."><span class="hint">H/B/E/G/I/T/S/C; required only in manual mode</span></div>
+        <div class="field checkbox-field"><label><input type="checkbox" id="cg-elastic" checked> Elastic network for folded structure</label></div>
+        <div class="field"><label for="cg-elastic-force">Elastic force (kJ mol⁻¹ nm⁻²)</label><input id="cg-elastic-force" type="number" value="700" min="500" max="1500"></div>
+        <div class="field"><label for="cg-elastic-lower">Lower cutoff (nm)</label><input id="cg-elastic-lower" type="number" value="0.5" min="0" max="1.2" step="0.1"></div>
+        <div class="field"><label for="cg-elastic-upper">Upper cutoff (nm)</label><input id="cg-elastic-upper" type="number" value="0.9" min="0" max="1.2" step="0.1"></div>
+      </div>
+      <div class="viewer-box" id="cg-mapping-viewer" style="height:320px"></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-mapping-check">&#10003; Map Protein</button><span class="hint" id="cg-mapping-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
+    <section class="panel" id="panel-cg_environment">
+      <h2>CG Environment</h2>
+      <p class="section-desc">Set the periodic box, protein pose, and independent upper/lower flat-bilayer compositions.</p>
+      <div class="form-grid">
+        <div class="field"><label for="cg-box-xy">Box X/Y (nm)</label><input id="cg-box-xy" type="number" value="12" min="5" max="40" step="0.5"></div>
+        <div class="field"><label for="cg-box-z">Box Z (nm)</label><input id="cg-box-z" type="number" value="14" min="6" max="50" step="0.5"></div>
+        <div class="field"><label for="cg-rotate-x">Protein rotation X (°)</label><input id="cg-rotate-x" type="number" value="0" min="-180" max="180"></div>
+        <div class="field"><label for="cg-rotate-y">Protein rotation Y (°)</label><input id="cg-rotate-y" type="number" value="0" min="-180" max="180"></div>
+        <div class="field"><label for="cg-rotate-z">Protein rotation Z (°)</label><input id="cg-rotate-z" type="number" value="0" min="-180" max="180"></div>
+        <div class="field"><label for="cg-z-offset">Protein Z offset (nm)</label><input id="cg-z-offset" type="number" value="0" min="-8" max="8" step="0.1"></div>
+        <div class="field cg-bilayer-control"><label for="cg-upper-lipids">Upper leaflet</label><input id="cg-upper-lipids" value="POPC:100"><span class="hint">Comma-separated ratios, e.g. POPC:70,CHOL:30</span></div>
+        <div class="field cg-bilayer-control"><label for="cg-lower-lipids">Lower leaflet</label><input id="cg-lower-lipids" value="POPC:100"></div>
+      </div>
+      <div class="viewer-box" id="cg-environment-viewer" style="height:360px"></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-environment-check">&#10003; Build Environment</button><span class="hint" id="cg-environment-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
+    <section class="panel" id="panel-cg_solvation">
+      <h2>CG Solvation</h2>
+      <p class="section-desc">Add regular Martini water. The preview contains only neutralizing counterions; target bulk salt is added at Final CG System.</p>
+      <div class="form-grid"><div class="field checkbox-field"><label><input id="cg-include-solvent" type="checkbox" checked> Include water and ions</label></div><div class="field"><label for="cg-salt">Target NaCl concentration (M)</label><input id="cg-salt" type="number" value="0.15" min="0" max="1" step="0.01"></div></div>
+      <div class="viewer-box" id="cg-solvation-viewer" style="height:360px"></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-solvation-check">&#10003; Solvate</button><span class="hint" id="cg-solvation-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
+    <section class="panel" id="panel-cg_system">
+      <h2>Final CG System</h2>
+      <p class="section-desc">Construct the exact coordinates that will be exported and enforce neutral charge, box, water, membrane orientation, and leaflet-separation checks.</p>
+      <div class="viewer-box" id="cg-system-viewer" style="height:420px"></div>
+      <div class="field checkbox-field"><label><input id="cg-confirm-system" type="checkbox"> I inspected and confirm this final coarse-grained system</label></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary" id="cg-system-check">&#10003; Build &amp; Check Final System</button><span class="hint" id="cg-system-status"></span><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Step: Force Field Selection                                  -->
+    <!-- ============================================================ -->
+    <section class="panel" id="panel-forcefield">
+      <h2>Force Field Selection</h2>
+      <p class="section-desc">Choose force fields for each component type before building the system. This choice affects hydrogen addition, water model compatibility, and topology generation.</p>
+      <div class="form-grid">
+        <div class="field" id="ff-primary-field">
+          <label for="ff-protein" id="ff-primary-label">Protein Force Field</label>
+          <select id="ff-protein">
+            <option value="amber14sb">AMBER ff14SB (GROMACS 2026.3) — project default</option>
+            <option value="charmm36m">CHARMM36m (Jul2022 / CGenFF 4.6)</option>
+            <option value="charmm36">CHARMM36 (Mar2019)</option>
+            <option value="amber99sb-ildn">AMBER ff99SB-ILDN (legacy)</option>
+            <option value="amber99sb">AMBER ff99SB (legacy)</option>
+            <option value="oplsaa">OPLS-AA/L (2001, legacy)</option>
+          </select>
+          <span class="hint">Amber14SB + GAFF2 is the project default for proteins with organic small molecules. The new native GROMACS Amber14SB port is still validation-pending; production systems require topology and energy QA.</span>
+        </div>
+        <div class="field" id="ff-lipid-field">
+          <label for="ff-lipid">Lipid Force Field</label>
+          <select id="ff-lipid"></select>
+          <span class="hint">Only parameter families compatible with the selected protein force field and current Step 5 lipids are enabled.</span>
+        </div>
+        <div class="field" id="ff-ligand-field">
+          <label for="ff-ligand">Ligand / Small Molecule Force Field</label>
+          <select id="ff-ligand"></select>
+          <span class="hint">For GAFF2, explicitly enter each molecule's integer net charge. For CHARMM, submit each retained organic molecule to CGenFF/ParamChem, then upload (1) the exact MOL2 submitted to ParamChem and (2) the STR parameter stream returned by ParamChem.</span>
+          <div id="ff-ligand-charges"></div>
+        </div>
+        <div class="field">
+          <label for="ff-water-model">Water Model</label>
+          <select id="ff-water-model"></select>
+          <span class="hint">Only models bundled with the selected effective force field are available. This choice is locked for Step 6 and final topology export.</span>
+        </div>
+      </div>
+      <div id="ff-compatibility-status" class="validation-warnings" style="margin-top:12px;"></div>
+      <div class="form-grid" style="margin-top:12px;">
+        <div class="field">
+          <label for="system-name">System Name</label>
+          <input type="text" id="system-name" value="membrane_system">
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <button type="button" class="btn primary" id="forcefield-check-btn">&#10003; Confirm Force Fields</button>
+        <span id="forcefield-check-status" style="margin-left:8px;font-size:13px;"></span>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Step: Structure Processing (Protonation + Termini + PTMs)   -->
+    <!-- ============================================================ -->
+    <section class="panel" id="panel-structure">
+      <h2>Structure Processing</h2>
+      <p class="section-desc">Assign protonation states, cap termini, and apply post-translational modifications — per chain.</p>
+      <div id="proc-upload-modification-notice" class="validation-warnings hidden" style="margin-bottom:12px;"></div>
+
+      <div class="structproc-tabs">
+        <button type="button" class="structproc-tab active" data-tab="protonation">&#9678; Protonation</button>
+        <button type="button" class="structproc-tab" data-tab="termini">&#9674; Termini</button>
+        <button type="button" class="structproc-tab" data-tab="modifications">&#9681; Modifications</button>
+      </div>
+
+      <!-- Protonation Tab -->
+      <div class="structproc-tab-content" id="structproc-protonation">
+        <div class="form-grid" style="margin-bottom:12px;">
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+            <div class="field" style="flex:0 0 auto;">
+              <label for="proc-pH">Target pH (1.0 – 13.0)</label>
+              <input type="number" id="proc-pH" min="1.0" max="13.0" step="0.1" value="7.0" style="width:100px;">
+            </div>
+            <div class="field" style="flex:0 0 auto;">
+              <label>HIS tautomer</label>
+              <select id="proc-his-tautomer">
+                <option value="HSE">HSE (Nε, default)</option>
+                <option value="HSD">HSD (Nδ)</option>
+              </select>
+            </div>
+            <button type="button" class="btn primary" id="proc-run-btn" style="margin-bottom:0;">&#9654; Compute</button>
+          </div>
+          <label class="checkbox-field" style="margin-top:4px;">
+            <input type="checkbox" id="proc-skip-protonation">
+            Skip protonation (keep original residue names and charges)
+          </label>
+        </div>
+        <div id="proc-chain-tables"><p class="hint" style="margin-top:12px;">Upload a PDB to begin.</p></div>
+        <p class="hint hidden" id="proc-propka-status" style="margin-top:4px;"></p>
+      </div>
+
+      <!-- Termini Tab -->
+      <div class="structproc-tab-content hidden" id="structproc-termini">
+        <p class="hint">Standard zwitterionic N/C termini are applied automatically. ACE and NME create explicit cap atoms and peptide bonds when the selected force field provides validated residue topologies; unsupported choices are shown with the reason.</p>
+        <div id="proc-termini-chains"></div>
+      </div>
+
+      <!-- Modifications Tab -->
+      <div class="structproc-tab-content hidden" id="structproc-modifications">
+        <div class="form-grid">
+          <div class="field">
+            <label>Residue Modifications
+              <span class="hint">— click a modifiable residue in the sequence, then choose a patch</span>
+            </label>
+            <p class="hint">Green residues have an atom-complete transformation parameterized by the selected force field. Grey outlined residues remain disabled and show the missing force-field support.</p>
+            <div id="proc-mod-chains"></div>
+          </div>
+
+          <div class="field">
+            <label>Applied Modifications</label>
+            <div id="proc-mod-list" class="proc-mod-list">
+              <p class="hint">No modifications applied yet.</p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Disulfide Crosslinks
+              <span class="hint">— pair two CYS residues whose SG atoms already form a bridge</span>
+            </label>
+            <p class="hint" id="proc-disulfide-capability">Loading force-field capability…</p>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <select id="proc-disulfide-first" aria-label="First cysteine"></select>
+              <span>—</span>
+              <select id="proc-disulfide-second" aria-label="Second cysteine"></select>
+              <button type="button" class="btn" id="proc-disulfide-add">Add disulfide</button>
+            </div>
+            <div id="proc-disulfide-list" class="proc-mod-list" style="margin-top:8px;">
+              <p class="hint">No disulfide crosslinks selected.</p>
+            </div>
+          </div>
+
+          <div class="proc-patch-picker hidden" id="proc-patch-picker">
+            <h4>Select modification for <span id="proc-patch-target"></span></h4>
+            <div id="proc-patch-options"></div>
+            <button type="button" class="btn" id="proc-patch-cancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <button type="button" class="btn primary" id="structure-check-btn">&#10003; Check Structure</button>
+        <span id="structure-check-status" style="margin-left:8px;font-size:13px;"></span>
+      </div>
+      <div id="modification-geometry-report" class="input-check-report hidden" aria-live="polite"></div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+    <!-- Step: Orientation -->
+    <section class="panel" id="panel-orient">
+      <h2>Protein Orientation in Membrane</h2>
+      <p class="section-desc">Determine how the protein is positioned in the lipid bilayer — insertion depth and tilt angle.</p>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Orientation Method</label>
+          <div class="orient-method-tabs">
+            <button type="button" class="orient-tab active" data-method="ppm" id="orient-tab-ppm">&#9678; Auto</button>
+            <button type="button" class="orient-tab" data-method="manual" id="orient-tab-manual">&#9681; Manual Adjustment</button>
+          </div>
+        </div>
+
+        <!-- Auto PPM results -->
+        <div class="orient-auto-result" id="orient-auto-result">
+          <div class="field">
+            <label for="orient-algorithm">Algorithm</label>
+            <select id="orient-algorithm">
+              <option value="ppm">PPM-like — Wimley-White/TM-helix consensus</option>
+              <option value="hmoment">Hydrophobic Moment — Eisenberg consensus scale</option>
+              <option value="tmd">TMD Detection — Kyte-Doolittle sliding-window scan</option>
+              <option value="com">Centre of Mass — simple geometric centre</option>
+            </select>
+          </div>
+          <table>
+            <tr><td>Z-offset</td><td id="orient-result-z">— nm</td></tr>
+            <tr><td>TM bundle tilt</td><td id="orient-result-tilt">—°</td></tr>
+            <tr><td>Description</td><td><span class="hint" id="orient-algo-desc">Wimley-White whole-residue transfer free energy minimization.</span></td></tr>
+          </table>
+          <p class="hint" style="margin-top:6px;">&#9432; If the orientation appears incorrect, try a different auto algorithm or switch to Manual Adjustment.</p>
+          <button type="button" class="btn" id="orient-rerun-btn">&#8635; Re-run</button>
+        </div>
+
+        <!-- Manual adjustment (hidden by default) -->
+        <div class="orient-manual hidden" id="orient-manual">
+          <p class="hint">Adjust the protein insertion depth and tilt. The grey membrane remains fixed; the previewed protein coordinates are generated by the same backend module used by Check and Membrane Builder.</p>
+          <div class="orient-controls">
+            <div class="field">
+              <label>Z-offset: <span id="orient-manual-z-val">0.00</span> nm</label>
+              <div class="slider-with-input">
+                <input type="range" id="orient-manual-z" min="-10.0" max="10.0" step="0.05" value="0">
+                <input type="number" id="orient-manual-z-num" value="0.00" step="0.05" style="width:80px">
+              </div>
+            </div>
+            <div class="field">
+              <label>Tilt angle: <span id="orient-manual-tilt-val">0</span>°</label>
+              <div class="slider-with-input">
+                <input type="range" id="orient-manual-tilt" min="0" max="45" step="1" value="0">
+                <input type="number" id="orient-manual-tilt-num" value="0" step="1" min="0" max="45" style="width:80px">
+              </div>
+            </div>
+            <div class="field">
+              <label>Tilt direction: <span id="orient-manual-phi-val">0</span>°</label>
+              <div class="slider-with-input">
+                <input type="range" id="orient-manual-phi" min="0" max="360" step="5" value="0">
+                <input type="number" id="orient-manual-phi-num" value="0" step="1" min="0" max="360" style="width:80px">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Shared 3D viewer — always visible, both Auto and Manual use it -->
+        <h3 class="info-section-title" style="margin-top:16px;">Membrane Position Preview <span class="hint">— grey planes show membrane</span></h3>
+        <div id="orient-viewer" class="mol-viewer" style="height:380px;"></div>
+        <p id="orient-preview-status" class="hint" aria-live="polite"></p>
+        <div id="orient-quality-report" class="hidden" aria-live="polite"></div>
+
+        <button type="button" class="btn primary" id="orient-check-btn" style="margin-top:12px;">&#10003; Check Orientation</button>
+        <span id="orient-check-status" style="margin-left:8px;font-size:13px;"></span>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+    <!-- Step: Membrane Builder -->
+    <section class="panel" id="panel-membrane">
+      <h2>Membrane Builder</h2>
+      <div class="form-grid">
+
+        <div class="field">
+          <label for="n-lipids-per-leaflet">Lipids per leaflet</label>
+          <input type="number" id="n-lipids-per-leaflet" value="150" step="10" min="64">
+          <span class="hint">Minimum 64 per leaflet; recommended ≥100 for stable bilayers (Li et al., JCIM 2025)</span>
+        </div>
+        <!-- Asymmetry toggle -->
+        <div class="field checkbox-field">
+          <label><input type="checkbox" id="asymmetric-bilayer"> Asymmetric bilayer (different composition per leaflet)</label>
+        </div>
+
+        <!-- Lipid composition editor -->
+        <div class="lipid-composition" id="lipid-composition">
+          <div class="leaflet-section" id="upper-leaflet-section">
+            <h4 id="leaflet-upper-label">Bilayer <span class="hint">(same composition both leaflets)</span></h4>
+            <div class="lipid-mix-list" id="upper-lipid-list"></div>
+            <button type="button" class="btn add-lipid-btn" data-leaflet="upper">+ Add Lipid</button>
+            <div class="lipid-count-table hidden" id="upper-lipid-counts"></div>
+          </div>
+          <div class="leaflet-section hidden" id="lower-leaflet-section">
+            <h4>Lower Leaflet <span class="hint">(cytoplasmic / inner)</span></h4>
+            <div class="lipid-mix-list" id="lower-lipid-list"></div>
+            <button type="button" class="btn add-lipid-btn" data-leaflet="lower">+ Add Lipid</button>
+            <div class="lipid-count-table hidden" id="lower-lipid-counts"></div>
+          </div>
+        </div>
+
+        <!-- Shared card picker dropdown (positioned near clicked row trigger) -->
+        <div class="lipid-picker-dropdown hidden" id="lipid-picker-dropdown">
+          <div class="lipid-picker-search">
+            <input type="text" placeholder="Search lipids..." id="lipid-picker-search">
+          </div>
+          <div class="lipid-picker-list" id="lipid-picker-list"></div>
+        </div>
+      </div>
+
+      <!-- 3D viewer: protein + scalable membrane plane -->
+      <div class="viewer-box" id="membrane-3d-viewer" style="width:100%; height:320px; margin-top:12px; border:1px solid var(--border); border-radius:6px; position:relative;"></div>
+      <span class="hint" style="text-align:center;display:block;margin-top:4px;" id="membrane-viewer-label">Membrane plane (grey) shows the bilayer extent.  Adjust Padding to resize.</span>
+      <div style="margin-top:12px;">
+        <button type="button" class="btn primary" id="check-composition-btn">&#10003; Check &amp; Refresh Composition</button>
+        <span id="composition-status" style="margin-left:8px;font-size:13px;"></span>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+    <!-- Step: Solvation -->
+    <section class="panel" id="panel-solvation">
+      <h2>Solvation</h2>
+      <div class="form-grid">
+        <div class="field checkbox-field hidden" id="pure-membrane-solvation-option">
+          <label><input type="checkbox" id="pure-membrane-include-solvent" checked>
+            Include water and ions
+            <span class="hint">— clear this to export the relaxed dry bilayer without solvent or ions</span>
+          </label>
+        </div>
+        <div id="pure-membrane-dry-notice" class="validation-warnings hidden">
+          Dry bilayer export selected. Solvation and ion placement will be omitted; the package will contain the relaxed bilayer coordinates and topology.
+        </div>
+        <div id="solvation-controls">
+        <div class="field">
+          <label for="water-model-display">Water Model</label>
+          <input id="water-model-display" type="text" value="TIP3P" readonly>
+          <span class="hint">Selected and compatibility-checked in Step 2. Return to Force Field Selection to change it.</span>
+        </div>
+        <div class="field">
+          <label for="box-padding" id="box-padding-label">Z Padding (nm) <span class="hint">— water thickness above &amp; below membrane</span></label>
+          <input type="number" id="box-padding" value="2.0" step="0.1" min="0.0">
+          <span class="hint" id="box-padding-hint">Box XY is fixed by Membrane step; this padding only extends the Z (vertical) direction.</span>
+        </div>
+        <div class="field">
+          <label for="overlap-scale">Overlap Scale</label>
+          <input type="number" id="overlap-scale" value="0.8" step="0.05" min="0.5" max="1.0">
+          <span class="hint">Fraction of vdW radius sum used for overlap cutoff</span>
+        </div>
+
+        <div>
+          <div><button type="button" class="btn primary" id="solv-check-btn" style="width:100%;">&#10003; Compute Solvent Volume</button></div>
+          <span class="hint" id="solv-check-status"></span>
+        </div>
+
+        <div id="solv-result" class="hidden" style="margin-top:8px;">
+          <table class="ion-summary-table">
+            <tr><td>Box dimensions</td><td><b id="solv-box-dims">—</b></td></tr>
+            <tr><td>Box volume</td><td><b id="solv-box-vol">—</b> nm³</td></tr>
+            <tr><td>Water molecules</td><td><b id="solv-n-water">—</b></td></tr>
+            <tr><td>Water model</td><td id="solv-water-model">—</td></tr>
+          </table>
+        </div>
+
+        <!-- 3D viewer: solvation box -->
+        <div class="viewer-box" id="solvation-3d-viewer" style="width:100%; height:300px; margin-top:12px; border:1px solid var(--border); border-radius:6px; position:relative;"></div>
+        <span class="hint" style="text-align:center;display:block;margin-top:4px;" id="solvation-viewer-label">Solvation box — XY from membrane, Z from padding</span>
+        </div>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+    <!-- Step: Ions -->
+    <section class="panel" id="panel-ions">
+      <h2>Ions</h2>
+      <p class="section-desc">Add salt ions and neutralize system charge. Select one or more cation / anion species.</p>
+
+      <div class="form-grid">
+        <!-- Ion species selection — two-column card layout -->
+        <div class="ion-cols">
+          <div class="ion-col">
+            <h4>Cations (+)</h4>
+            <div id="ion-cation-cards" class="ion-card-list"></div>
+            <button type="button" class="btn add-ion-btn" id="ion-add-cation">+ Add Cation</button>
+          </div>
+          <div class="ion-col">
+            <h4>Anions (−)</h4>
+            <div id="ion-anion-cards" class="ion-card-list"></div>
+            <button type="button" class="btn add-ion-btn" id="ion-add-anion">+ Add Anion</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="ion-method">Placement Method</label>
+          <select id="ion-method">
+            <option value="random" selected>Random Water Replacement (GROMACS-style) — recommended</option>
+            <option value="replace">Electrostatic Water Replacement (periodic Coulomb)</option>
+            <option value="mc">Monte Carlo Water-Site Sampling (Metropolis)</option>
+          </select>
+          <span class="hint">All methods replace complete waters at their oxygen coordinates. Random is unbiased; Electrostatic favours counter-charge regions; Monte Carlo samples solute and screened ion-ion energies.</span>
+        </div>
+
+        <div class="field checkbox-field">
+          <label><input type="checkbox" id="ion-neutralize" checked> Neutralize system charge
+            <span class="hint">— add counter-ions to cancel solute net charge</span>
+          </label>
+        </div>
+
+        <!-- Neutralizing ion pair (shown when neutralize is checked) -->
+        <div id="ion-neutralize-pair" class="ion-neutralize-pair">
+          <h4>Neutralizing Ions</h4>
+          <div class="ion-cols">
+            <div class="ion-col">
+              <select id="ion-neutralize-cation">
+                <option value="NA">Na⁺</option>
+                <option value="K">K⁺</option>
+                <option value="CA">Ca²⁺</option>
+                <option value="MG">Mg²⁺</option>
+              </select>
+              <span class="hint">for neutralizing negative solute charge</span>
+            </div>
+            <div class="ion-col">
+              <select id="ion-neutralize-anion">
+                <option value="CL" selected>Cl⁻</option>
+                <option value="BR">Br⁻</option>
+                <option value="I">I⁻</option>
+              </select>
+              <span class="hint">for neutralizing positive solute charge</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="ion-exclusion">Exclusion Radius (nm)</label>
+          <input type="number" id="ion-exclusion" value="0.35" step="0.01" min="0.1" style="width:80px;">
+        </div>
+
+        <!-- Check button -->
+        <div>
+          <button type="button" class="btn primary" id="ion-check-btn" style="width:100%;">&#10003; Check Ion Counts</button>
+          <span class="hint" id="ion-check-status"></span>
+        </div>
+
+        <!-- Results table -->
+        <div id="ion-result" class="hidden">
+          <table class="ion-summary-table">
+            <thead><tr><th>Ion</th><th>Charge</th><th>Salt pairs</th><th>Neutralizing</th><th>Total count</th><th>Effective conc (M)</th></tr></thead>
+            <tbody id="ion-summary-body"></tbody>
+          </table>
+          <div class="ion-summary-footer" id="ion-summary-footer"></div>
+        </div>
+        <h3 class="info-section-title" style="margin-top:16px;">Complete Simulation System
+          <span class="hint">— exact coordinates saved by Ion Check</span>
+        </h3>
+        <div id="ion-viewer" class="viewer-container" style="position:relative;width:100%;height:520px;overflow:hidden;border:1px solid var(--border);border-radius:6px;"></div>
+        <span class="hint" id="ion-viewer-label" style="display:block;text-align:center;margin-top:6px;">Waters are shown in blue; ions are shown as large spheres.</span>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+          <button type="button" class="btn primary" id="ion-confirm-system-btn" disabled style="flex:1;">&#10003; Confirm Simulation System</button>
+          <span class="hint" id="ion-confirm-system-status">Run Check Ion Counts to generate the final system preview.</span>
+        </div>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
+        <button type="button" class="btn primary next-btn" aria-label="Go to next step">Next &rarr;</button>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script src="/static/vendor/3dmol-2.5.5/3Dmol-min.js"></script>
+<script src="/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js"></script>
+<script src="/static/constants.js?v=1"></script>
+<script src="/static/ions.js?v=10"></script>
+<script src="/static/app.js?v=61"></script>
+
+<!-- Custom Lipid Modal -->
+<div class="modal-overlay hidden" id="custom-lipid-modal">
+  <div class="modal-panel">
+    <h3>&#9678; Add Custom Lipid from SMILES</h3>
+    <div class="form-grid">
+      <div class="field">
+        <label for="custom-lipid-name">Residue ID (1–5 characters)</label>
+        <input type="text" id="custom-lipid-name" placeholder="e.g. MYLIP" maxlength="5"
+               pattern="[A-Za-z][A-Za-z0-9_]{0,4}">
+        <p class="hint">GROMACS residue identifier: starts with a letter; letters, digits and underscore only.</p>
+      </div>
+      <div class="field">
+        <label for="custom-lipid-smiles">SMILES String</label>
+        <input type="text" id="custom-lipid-smiles" placeholder="e.g. CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC=CCCCCCCCC">
+      </div>
+      <button type="button" class="btn primary" id="custom-lipid-parse-btn">&#9654; Parse &amp; Preview</button>
+    </div>
+
+    <!-- Results (hidden until parsed) -->
+    <div class="custom-lipid-result hidden" id="custom-lipid-result">
+      <div class="custom-lipid-preview">
+        <div class="custom-lipid-structure" id="custom-lipid-structure">
+          <canvas id="smiles-canvas" width="360" height="200"></canvas>
+        </div>
+        <table class="custom-lipid-props">
+          <tr><td>Formula</td><td id="cl-formula">—</td></tr>
+          <tr><td>Mass</td><td id="cl-mass">—</td></tr>
+          <tr><td>Category</td><td id="cl-category">—</td></tr>
+          <tr><td>Charge</td><td id="cl-charge">—</td></tr>
+          <tr><td>APL (estimated)</td><td id="cl-apl">—</td></tr>
+          <tr><td>Thickness (DHH)</td><td id="cl-dh">—</td></tr>
+          <tr><td>Tail composition</td><td id="cl-tails">—</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="custom-lipid-build-status hidden" id="custom-lipid-build-status" role="status" aria-live="polite">
+      <div class="progress-bar"><div id="custom-lipid-build-progress"></div></div>
+      <strong id="custom-lipid-build-phase"></strong>
+      <span id="custom-lipid-build-message"></span>
+      <p class="hint">This molecule and all generated parameters remain private to the current task. This dialog stays locked until validation succeeds.</p>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn" id="custom-lipid-cancel-btn">Cancel</button>
+      <button type="button" class="btn primary hidden" id="custom-lipid-confirm-btn">&#10003; Add to Lipid Library</button>
+    </div>
+  </div>
+</div>
+
+<!-- Compute Queue Modal -->
+<div class="modal-overlay hidden" id="compute-queue-modal" role="dialog"
+     aria-modal="true" aria-labelledby="compute-queue-title">
+  <div class="modal-panel queue-modal-panel">
+    <h3 id="compute-queue-title">&#9201; Task added to the compute queue</h3>
+    <p id="compute-queue-message">
+      The server is busy. Your checked workflow has been saved and will start
+      automatically.
+    </p>
+    <dl class="queue-details">
+      <dt>Task ID</dt>
+      <dd><code id="compute-queue-task-id"></code>
+        <button type="button" class="btn" id="compute-queue-copy">Copy</button>
+      </dd>
+      <dt>Queue position</dt>
+      <dd id="compute-queue-position">—</dd>
+      <dt>Estimated start</dt>
+      <dd id="compute-queue-estimate">—</dd>
+    </dl>
+    <p class="hint">
+      Keep the complete Task ID. Opening this task again restores the first
+      incomplete step and the current queue/build status.
+    </p>
+    <label class="queue-acknowledge">
+      <input type="checkbox" id="compute-queue-saved">
+      I have saved the Task ID
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn primary" id="compute-queue-close" disabled>
+        Continue in background
+      </button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

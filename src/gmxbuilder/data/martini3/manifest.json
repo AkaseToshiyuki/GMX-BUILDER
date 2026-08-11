@@ -1,0 +1,45 @@
+{
+  "bundle_id": "martini3-lipidome-v2-2026.08",
+  "force_field": "Martini 3.0.0",
+  "source": {
+    "repository": "https://github.com/Martini-Force-Field-Initiative/M3-Lipid-Parameters",
+    "commit": "2121527045696345069deb4d3df754724888a4f9",
+    "license": "Apache-2.0"
+  },
+  "tools": {
+    "vermouth": "0.15.0",
+    "coby": "1.0.14",
+    "mdtraj": "1.10.3"
+  },
+  "files": {
+    "martini_v3.0.0.itp": "0ecbf0ff334b2ec21dc5e3151aca42167b977bc2aed41eb2a44bd8c997754894",
+    "martini_v3.0.0_ions_v1.itp": "c7ec26bcd272f0e127d67515097e8cc88979e7e0cf5373baa0f410edeb125e68",
+    "martini_v3.0.0_solvents_v1.itp": "e6a78414b317c38a1a816eded4aee6082a5da1ed229a126359f0cc92314dcb4e",
+    "martini_v3.0.0_ffbonded_v2.itp": "149f98c48e32a9aab95e205b36c10e68332349d831aec3980bc55b4b428ab3fb",
+    "martini_v3.0.0_phospholipids_PC_v2.itp": "43fc3e9976ea2a11af1b3df5d841ed1d2677dddd93a73a7e86304ad875ffb150",
+    "martini_v3.0.0_phospholipids_PE_v2.itp": "497c06ba81b47e28b95125e9bc56272f77b15f3df9acd53cc7e22339a0cc2bb2",
+    "martini_v3.0.0_phospholipids_PG_v2.itp": "37c65865088bd3944a50a646cc3489db040475d165a87595ad5b7f38a6c7c258",
+    "martini_v3.0.0_phospholipids_PS_v2.itp": "b6af8cefb4bf4e91bea5caec37bac23b2fd6b2a334603902cce2915950fedd55",
+    "martini_v3.0.0_phospholipids_SM_v2.itp": "9ad7ed22cdf5829f076b0a386e5c5322bd6fb042ce57434fde9ea4308414f8fd",
+    "martini_v3.0.0_sterols_v1.itp": "0ea3ae6af4f37f024759e6ce04b84cf64bd46e97d71c6e48bae7fb8512a9e778"
+  },
+  "lipids": {
+    "POPC": {"family": "PC", "charge": 0, "apl_nm2": 0.64, "builder_params": "LTF"},
+    "DPPC": {"family": "PC", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF"},
+    "DOPC": {"family": "PC", "charge": 0, "apl_nm2": 0.67, "builder_params": "LTF"},
+    "POPE": {"family": "PE", "charge": 0, "apl_nm2": 0.59, "builder_params": "LTF"},
+    "DOPE": {"family": "PE", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF"},
+    "POPG": {"family": "PG", "charge": -1, "apl_nm2": 0.64, "builder_params": "LTF"},
+    "DOPG": {"family": "PG", "charge": -1, "apl_nm2": 0.69, "builder_params": "LTF"},
+    "POPS": {"family": "PS", "charge": -1, "apl_nm2": 0.62, "builder_params": "LTF"},
+    "DOPS": {"family": "PS", "charge": -1, "apl_nm2": 0.67, "builder_params": "LTF"},
+    "SSM": {"family": "SM", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF"},
+    "CHOL": {"family": "STEROL", "charge": 0, "apl_nm2": 0.40, "builder_params": "default"}
+  },
+  "citations": [
+    "https://doi.org/10.1038/s41592-021-01098-3",
+    "https://doi.org/10.26434/chemrxiv-2024-8bjrr",
+    "https://doi.org/10.1021/acs.jcim.5c00069",
+    "https://doi.org/10.5281/zenodo.7361701"
+  ]
+}

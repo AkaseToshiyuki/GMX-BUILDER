@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output
+output/
+*.gro
+!src/gmxbuilder/data/water_boxes/tip3p_water.gro
+!src/gmxbuilder/data/water_boxes/spc_water.gro
+!src/gmxbuilder/data/water_boxes/spce_water.gro
+!src/gmxbuilder/data/water_boxes/tip4p_water.gro
+*.top
+*.itp
+!src/gmxbuilder/data/forcefields/amber14sb.ff/*.itp
+!src/gmxbuilder/data/martini3/v3.0.0/*.itp
+*.mdp
+*.log
+*.edr
+*.trr
+*.xtc
