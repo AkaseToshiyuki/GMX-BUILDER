@@ -15,6 +15,7 @@ from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROReader
 from gmxbuilder.io.mdp import _nonbond_params
 from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
+from gmxbuilder.modules.pure_membrane.export import PureMembraneExportModule
 from gmxbuilder.pipeline.step_executor import StepRunner, get_pipeline_steps
 from gmxbuilder.web import server
 from gmxbuilder.web.server import app
@@ -33,8 +34,8 @@ def _checkpoint_system() -> System:
             elements=["C"],
         ),
         metadata={
-            "force_field": "amber14sb",
-            "lipid_ff": "lipid21",
+            "force_field": "amber99sb-ildn",
+            "lipid_ff": "gaff2",
             "water_model": "tip3p",
             "seed": 8128,
         },
@@ -67,6 +68,52 @@ def test_finalization_exports_exact_checkpoint_without_coordinate_rebuild(tmp_pa
         assert "run_md.sh" not in archive.namelist()
         assert not any(name.startswith("mdp/") for name in archive.namelist())
     assert "verify" not in get_pipeline_steps("pure-membrane")
+
+
+def test_dry_export_archive_excludes_stale_and_unrelated_files(tmp_path):
+    output = tmp_path / "export"
+    output.mkdir()
+    (output / "unrelated-secret.txt").write_text("must not ship")
+    stale_mdp = output / "mdp"
+    stale_mdp.mkdir()
+    (stale_mdp / "obsolete.mdp").write_text("stale")
+    (output / "run_md.sh").write_text("stale")
+
+    result = PureMembraneExportModule().run(
+        _checkpoint_system(),
+        {
+            "output_dir": output,
+            "system_name": "dry",
+            "write_mdp": False,
+        },
+    )
+
+    assert result.success is True
+    with zipfile.ZipFile(output / "dry.zip") as archive:
+        names = set(archive.namelist())
+    assert "unrelated-secret.txt" not in names
+    assert "run_md.sh" not in names
+    assert not any(name.startswith("mdp/") for name in names)
+
+
+def test_finalization_ignores_client_controlled_output_directory(tmp_path):
+    runner = StepRunner(tmp_path / "task", pipeline_type="pure-membrane")
+    source = _checkpoint_system()
+    source.save_checkpoint(runner.step_dir("membrane"))
+    outside = tmp_path / "attacker-selected"
+
+    result = runner.finalize_from_checkpoint(
+        "membrane",
+        export_config={
+            "system_name": "confined",
+            "write_mdp": False,
+            "output_dir": str(outside),
+        },
+    )
+
+    assert result["status"] == "ok"
+    assert not outside.exists()
+    assert (runner.step_dir("export") / "confined.zip").is_file()
 
 
 def test_wet_finalization_contract_includes_launcher_and_mdp_without_path_leaks(
@@ -139,6 +186,18 @@ def test_public_build_log_redacts_server_paths():
         )
         == "Wrote <server-path>"
     )
+
+
+def test_path_redaction_uses_configured_task_root(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        server, "task_manager", SimpleNamespace(root=Path("/workspace/gmx/tasks"))
+    )
+
+    assert server._redact_server_paths(
+        "Failed at /workspace/gmx/tasks/abc/steps/ions/system.npz"
+    ) == "Failed at <server-path>"
 
 
 def test_finalization_requires_the_confirmed_checkpoint(tmp_path):

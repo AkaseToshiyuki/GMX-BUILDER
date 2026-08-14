@@ -260,16 +260,14 @@ def _find_best_ppm_orientation(
     """Try all 3 principal axes, returning the best PPM orientation.
 
     For each principal axis of the protein, aligns it to Z and runs
-    the full PPM Z-offset + tilt + Z-rotation scan.  Returns the
+    the PPM-like Z-offset and tilt scan.  Returns the
     axis (and its associated transforms) that minimises the membrane
     transfer energy.
 
-    The Z-rotation (azimuthal) scan is critical for GPCRs: after
-    aligning the TM axis to Z, the protein can still be rotated
-    around Z to optimise which residues face the membrane lipids.
-    Each TM helix has a hydrophobic face (outward) and a polar face
-    (inward), and the correct azimuthal angle aligns the hydrophobic
-    faces with the membrane.
+    The isotropic slab transfer-energy model cannot determine rotation about
+    membrane-normal Z: such a rotation leaves every residue's Z coordinate
+    unchanged.  ``phi_z`` is therefore explicitly returned as zero instead of
+    reporting a scientifically unsupported azimuthal optimization.
 
     Returns
     -------
@@ -335,10 +333,7 @@ def _find_best_ppm_orientation(
 
         if score < best_overall_score:
             best_overall_score = score
-            # NOTE: phi_z hardcoded to 0.0 — azimuthal Z-rotation scan
-            # (which face of the protein faces the membrane) is not yet
-            # implemented. A hydrophobic-moment azimuthal scan can be added
-            # as a follow-on refinement.
+            # Azimuth is not identifiable from an isotropic membrane slab.
             best_result = (cand_axis, z_off, tilt_vec, tilt_angle, 0.0)
 
     return (*best_result, best_overall_score)
@@ -394,6 +389,66 @@ def compute_ppm_orientation(
     return z_offset, tilt_vec, tilt_angle
 
 
+def apply_auto_orientation(
+    structure: Structure,
+    method: str = "ppm",
+    target_axis: np.ndarray = np.array([0, 0, 1]),
+    half_thickness: float | None = None,
+) -> dict[str, float]:
+    """Apply one canonical automatic orientation and return its parameters."""
+    coords = structure.coordinates
+    if len(coords) < 2:
+        return {"z_offset": 0.0, "tilt_radians": 0.0, "tilt_phi_radians": 0.0,
+                "azimuth_radians": 0.0, "score": float("nan")}
+
+    z_off = 0.0
+    tilt_vec = np.array([1.0, 0.0, 0.0])
+    tilt_angle = 0.0
+    score = float("nan")
+
+    if method == "ppm":
+        best_axis, z_off, tilt_vec, tilt_angle, _phi_z, score = (
+            _find_best_ppm_orientation(structure, half_thickness=half_thickness)
+        )
+        structure.rotate(rotation_matrix_from_vectors(best_axis, target_axis))
+    elif method == "hmoment":
+        z_off, direction, _ = compute_hydrophobic_moment_orientation(
+            structure, half_thickness=half_thickness,
+        )
+        structure.rotate(rotation_matrix_from_vectors(direction, target_axis))
+    elif method == "tmd":
+        z_off, best_axis, _ = compute_tmd_orientation(
+            structure, half_thickness=half_thickness,
+        )
+        structure.rotate(rotation_matrix_from_vectors(best_axis, target_axis))
+    elif method == "pca":
+        structure.rotate(
+            orient_protein_to_membrane(coords, method="pca", target_axis=target_axis)
+        )
+        z_off = float(-structure.center_of_geometry()[2])
+    elif method == "com":
+        z_off = float(-structure.center_of_geometry()[2])
+    else:
+        raise ValueError(f"Unknown automatic orientation method: {method}")
+
+    if abs(z_off) > 0.001:
+        structure.translate(np.array([0.0, 0.0, z_off]))
+    if tilt_angle > 0.01:
+        structure.rotate(rotation_matrix_from_axis_angle(tilt_vec, tilt_angle))
+
+    tilt_phi = (
+        float(np.mod(np.arctan2(-tilt_vec[0], tilt_vec[1]), 2 * np.pi))
+        if tilt_angle > 0.01 else 0.0
+    )
+    return {
+        "z_offset": float(z_off),
+        "tilt_radians": float(tilt_angle),
+        "tilt_phi_radians": tilt_phi,
+        "azimuth_radians": 0.0,
+        "score": float(score),
+    }
+
+
 def orient_protein(
     structure: Structure,
     method: str = "ppm",
@@ -426,88 +481,10 @@ def orient_protein(
     -------
     structure : Structure (same object, mutated)
     """
-    coords = structure.coordinates
-    if len(coords) < 2:
-        return structure
-
-    log = []
-
-    if method == "ppm":
-        # Multi-axis PPM: try all 3 principal axes, Z-scan, tilt, Z-rotation
-        best_axis, z_off, tilt_vec, tilt_angle, phi_z, score = \
-            _find_best_ppm_orientation(
-                structure, half_thickness=half_thickness,
-            )
-
-        # 1. Align the best principal axis to Z
-        rot = rotation_matrix_from_vectors(best_axis, target_axis)
-        structure.rotate(rot)
-
-        # 2. Apply Z-offset
-        if abs(z_off) > 0.001:
-            structure.translate(np.array([0.0, 0.0, z_off]))
-
-        # 3. Apply tilt refinement
-        if tilt_angle > 0.01:
-            R = rotation_matrix_from_axis_angle(tilt_vec, tilt_angle)
-            structure.rotate(R)
-
-        # 4. Apply Z-rotation (azimuthal) refinement
-        if phi_z > 0.01:
-            cos_p, sin_p = np.cos(phi_z), np.sin(phi_z)
-            Rz = np.array([[cos_p, -sin_p, 0], [sin_p, cos_p, 0], [0, 0, 1]])
-            structure.rotate(Rz)
-
-        log.append(
-            f"PPM: axis→Z, z_off={z_off:.2f} nm, "
-            f"tilt={np.degrees(tilt_angle):.1f}°, "
-            f"phi={np.degrees(phi_z):.0f}°, score={score:.1f}"
-        )
-
-    elif method == "hmoment":
-        z_off, moment_dir, _ = compute_hydrophobic_moment_orientation(
-            structure, half_thickness=half_thickness,
-        )
-
-        # Align hydrophobic moment to Z
-        rot = rotation_matrix_from_vectors(moment_dir, target_axis)
-        structure.rotate(rot)
-
-        if abs(z_off) > 0.001:
-            structure.translate(np.array([0.0, 0.0, z_off]))
-
-        log.append(
-            f"H-Moment: μ→Z, z_off={z_off:.2f} nm, "
-            f"|μ|={np.linalg.norm(moment_dir):.2f}"
-        )
-
-    elif method == "tmd":
-        z_off, best_axis, _ = compute_tmd_orientation(
-            structure, half_thickness=half_thickness,
-        )
-
-        # Align the best principal axis to Z
-        rot = rotation_matrix_from_vectors(best_axis, target_axis)
-        structure.rotate(rot)
-
-        if abs(z_off) > 0.001:
-            structure.translate(np.array([0.0, 0.0, z_off]))
-
-        log.append(
-            f"TMD: axis→Z, z_off={z_off:.2f} nm, "
-            f"{best_axis[0]:.2f},{best_axis[1]:.2f},{best_axis[2]:.2f}"
-        )
-
-    elif method == "pca":
-        rot = orient_protein_to_membrane(coords, method="pca", target_axis=target_axis)
-        structure.rotate(rot)
-        log.append("PCA: principal axis aligned to membrane normal (Z)")
-
-    elif method == "com":
-        com_z = coords[:, 2].mean()
-        structure.translate(np.array([0.0, 0.0, -com_z]))
-        log.append(f"COM: center-of-mass at z=0 (offset={-com_z:.2f} nm)")
-
+    apply_auto_orientation(
+        structure, method=method, target_axis=target_axis,
+        half_thickness=half_thickness,
+    )
     return structure
 
 
@@ -852,7 +829,6 @@ def _score_tmd_for_axis(
     if len(tm_indices) == 0:
         return compute_com_orientation(tmp, half_thickness)[0], float("inf")
 
-    half_win = _TMD_WINDOW // 2
     tm_residue_indices: set[int] = set()
     for wi in tm_indices:
         for ri in range(wi, wi + _TMD_WINDOW):

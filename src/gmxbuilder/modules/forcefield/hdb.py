@@ -128,13 +128,32 @@ class HDBHydrogenAdder:
                 residue_atoms[key] = []
             residue_atoms[key].append(i)
 
+        # Dictionary insertion order follows coordinate order.  HDB control
+        # atoms prefixed with '-' or '+' refer to the previous or following
+        # residue in the same chain (GROMACS HDB convention), not to an atom
+        # whose literal name contains that prefix.
+        chain_residues: dict[str, list[tuple[str, str, int]]] = {}
+        for key in residue_atoms:
+            chain_residues.setdefault(key[0], []).append(key)
+        neighbours: dict[
+            tuple[str, str, int],
+            tuple[tuple[str, str, int] | None, tuple[str, str, int] | None],
+        ] = {}
+        for keys in chain_residues.values():
+            for position, key in enumerate(keys):
+                neighbours[key] = (
+                    keys[position - 1] if position > 0 else None,
+                    keys[position + 1] if position + 1 < len(keys) else None,
+                )
+
         new_names = list(atom_names)
         new_resnames = list(resnames)
         new_resids = list(resids)
         new_chains = list(chain_ids)
         new_coords = atom_coords.copy() if isinstance(atom_coords, np.ndarray) else np.array(atom_coords)
 
-        for (_chain, rn, rid), indices in residue_atoms.items():
+        for key, indices in residue_atoms.items():
+            _chain, rn, rid = key
             rules = self._rules.get(rn, [])
             if not rules:
                 continue
@@ -162,8 +181,15 @@ class HDBHydrogenAdder:
                 bonded_atom_names = rule["bonded_atoms"]
                 bonded_positions = []
                 for ba in bonded_atom_names:
-                    for idx in indices:
-                        if new_names[idx].strip() == ba:
+                    target_indices = indices
+                    target_name = ba
+                    if ba.startswith(("-", "+")) and len(ba) > 1:
+                        previous_key, following_key = neighbours[key]
+                        target_key = previous_key if ba[0] == "-" else following_key
+                        target_indices = residue_atoms.get(target_key, [])
+                        target_name = ba[1:]
+                    for idx in target_indices:
+                        if new_names[idx].strip() == target_name:
                             bonded_positions.append(new_coords[idx])
                             break
 
@@ -201,6 +227,27 @@ _H_BOND_LENGTHS: dict[str, float] = {
 }
 
 
+def _unit(vector: np.ndarray) -> np.ndarray | None:
+    norm = float(np.linalg.norm(vector))
+    if not np.isfinite(norm) or norm < 1e-8:
+        return None
+    return vector / norm
+
+
+def _perpendicular_reference(axis: np.ndarray, vector: np.ndarray) -> np.ndarray | None:
+    """Return the component of *vector* normal to a unit *axis*."""
+    return _unit(vector - axis * float(np.dot(vector, axis)))
+
+
+def _rotate_about_axis(vector: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
+    """Rodrigues rotation for the local HDB construction frame."""
+    return (
+        vector * np.cos(angle)
+        + np.cross(axis, vector) * np.sin(angle)
+        + axis * float(np.dot(axis, vector)) * (1.0 - np.cos(angle))
+    )
+
+
 def _compute_h_positions(
     ctrl_pos: np.ndarray,
     bonded_positions: list[np.ndarray],
@@ -217,63 +264,89 @@ def _compute_h_positions(
         elem = atom_name.strip()[0] if atom_name else "C"
         bond_length = _H_BOND_LENGTHS.get(elem, 0.109)
 
-    positions = []
+    positions: list[np.ndarray] = []
+    vectors = [np.asarray(position, dtype=float) - ctrl_pos for position in bonded_positions]
+    units = [unit for vector in vectors if (unit := _unit(vector)) is not None]
+    tetrahedral = np.radians(109.47)
 
-    if n_h == 1 and method == 6 and len(bonded_positions) >= 2:
-        # GROMACS HDB method 6 encodes the two tetrahedral CH2 hydrogens
-        # as separate rules with reversed neighbour order.  Preserve that
-        # order through the cross product so the pair cannot coincide.
-        v1 = bonded_positions[0] - ctrl_pos
-        v2 = bonded_positions[1] - ctrl_pos
-        avg = v1 / np.linalg.norm(v1) + v2 / np.linalg.norm(v2)
-        normal = np.cross(v1, v2)
-        if np.linalg.norm(avg) > 1e-6 and np.linalg.norm(normal) > 1e-6:
-            direction = -avg / np.linalg.norm(avg) + 0.8 * normal / np.linalg.norm(normal)
-            direction /= np.linalg.norm(direction)
-            positions.append(ctrl_pos + direction * bond_length)
+    if method == 1 and n_h == 1 and len(units) >= 2:
+        # Planar H on the external bisector of j-i-k.
+        direction = _unit(-(units[0] + units[1]))
+        if direction is not None:
+            positions = [ctrl_pos + direction * bond_length]
 
-    elif n_h == 1 and len(bonded_positions) >= 1:
-        # One H: opposite direction from bonded atoms
-        direction = ctrl_pos - np.mean(bonded_positions, axis=0)
-        norm = np.linalg.norm(direction)
-        if norm > 1e-6:
-            positions.append(ctrl_pos + direction / norm * bond_length)
+    elif method == 2 and n_h == 1 and len(units) >= 1:
+        # One tetrahedral H; k fixes the trans dihedral around i-j.
+        axis = units[0]
+        reference = None
+        if len(vectors) >= 2:
+            reference = _perpendicular_reference(
+                axis, vectors[1] - vectors[0]
+            )
+        if reference is None:
+            trial = np.array([0.0, 0.0, 1.0])
+            if abs(float(np.dot(axis, trial))) > 0.9:
+                trial = np.array([0.0, 1.0, 0.0])
+            reference = _perpendicular_reference(axis, trial)
+        if reference is not None:
+            direction = np.cos(tetrahedral) * axis - np.sin(tetrahedral) * reference
+            positions = [ctrl_pos + direction * bond_length]
 
-    elif n_h == 2 and len(bonded_positions) >= 2:
-        # Two H (e.g. CH2): tetrahedral
-        v1 = bonded_positions[0] - ctrl_pos
-        v2 = bonded_positions[1] - ctrl_pos
-        avg = (v1 + v2) / 2.0
-        norm_avg = np.linalg.norm(avg)
-        if norm_avg > 1e-6:
-            avg_dir = avg / norm_avg
-            # Two H positions
-            perp = np.cross(v1, v2)
-            if np.linalg.norm(perp) > 1e-6:
-                perp = perp / np.linalg.norm(perp)
-                h1_dir = -avg_dir + perp * 0.8
-                h2_dir = -avg_dir - perp * 0.8
-                h1_dir /= np.linalg.norm(h1_dir)
-                h2_dir /= np.linalg.norm(h2_dir)
-                positions.append(ctrl_pos + h1_dir * bond_length)
-                positions.append(ctrl_pos + h2_dir * bond_length)
+    elif method == 3 and n_h == 2 and len(units) >= 1:
+        # Two planar hydrogens at 120 degrees to i-j, one cis and one trans.
+        axis = units[0]
+        reference = None
+        if len(vectors) >= 2:
+            reference = _perpendicular_reference(axis, vectors[1] - vectors[0])
+        if reference is not None:
+            directions = [
+                -0.5 * axis + np.sqrt(3.0) / 2.0 * reference,
+                -0.5 * axis - np.sqrt(3.0) / 2.0 * reference,
+            ]
+            positions = [ctrl_pos + direction * bond_length for direction in directions]
 
-    elif n_h == 3 and len(bonded_positions) >= 1:
-        # Three H (e.g. CH3, NH3): tetrahedral opposite
-        direction = ctrl_pos - np.mean(bonded_positions, axis=0)
-        norm = np.linalg.norm(direction)
-        if norm > 1e-6:
-            main_dir = direction / norm
-            # Generate 3 directions tetrahedrally from main_dir
-            for angle in [0, 120, 240]:
-                rad = np.radians(angle)
-                perp1 = np.array([1.0, 0.0, 0.0]) if abs(main_dir[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-                perp1 = perp1 - main_dir * np.dot(perp1, main_dir)
-                perp1 /= np.linalg.norm(perp1)
-                perp2 = np.cross(main_dir, perp1)
-                h_dir = main_dir * np.cos(np.radians(109.5)) + perp1 * np.sin(np.radians(109.5)) * np.cos(rad) + perp2 * np.sin(np.radians(109.5)) * np.sin(rad)
-                h_dir /= np.linalg.norm(h_dir)
-                positions.append(ctrl_pos + h_dir * bond_length)
+    elif method == 4 and n_h in (2, 3) and len(units) >= 1:
+        # Methyl/amine construction around i-j; k sets the trans reference.
+        axis = units[0]
+        reference = None
+        if len(vectors) >= 2:
+            reference = _perpendicular_reference(axis, vectors[1] - vectors[0])
+        if reference is None:
+            trial = np.array([0.0, 0.0, 1.0])
+            if abs(float(np.dot(axis, trial))) > 0.9:
+                trial = np.array([0.0, 1.0, 0.0])
+            reference = _perpendicular_reference(axis, trial)
+        if reference is not None:
+            base = np.cos(tetrahedral) * axis - np.sin(tetrahedral) * reference
+            directions = [
+                _rotate_about_axis(base, axis, 2.0 * np.pi * index / 3.0)
+                for index in range(n_h)
+            ]
+            positions = [ctrl_pos + direction * bond_length for direction in directions]
+
+    elif method == 5 and n_h == 1 and len(units) >= 1:
+        # One tetrahedral H opposite the three heavy-atom neighbours.
+        direction = _unit(-np.sum(units[:3], axis=0))
+        if direction is not None:
+            positions = [ctrl_pos + direction * bond_length]
+
+    elif method == 6 and n_h in (1, 2) and len(units) >= 2:
+        # Symmetric tetrahedral CH2 pair around the external j-i-k bisector.
+        bisector = _unit(-(units[0] + units[1]))
+        normal = _unit(np.cross(units[0], units[1]))
+        if bisector is not None and normal is not None:
+            directions = [
+                np.sqrt(1.0 / 3.0) * bisector + sign * np.sqrt(2.0 / 3.0) * normal
+                for sign in (1.0, -1.0)
+            ]
+            positions = [
+                ctrl_pos + direction * bond_length for direction in directions[:n_h]
+            ]
+
+    elif method is None and n_h == 1 and units:
+        direction = _unit(-np.sum(units, axis=0))
+        if direction is not None:
+            positions = [ctrl_pos + direction * bond_length]
 
     if len(positions) < n_h:
         # Degenerate or nearly collinear uploaded coordinates are common in

@@ -274,6 +274,26 @@ END
             "dispersionCorrection": "no",
         }
 
+        # Both Martini cards must leave the task chooser. The bilayer card
+        # allocates its task before Step 1 because protein-free mode is valid;
+        # the solvent card waits for a structure upload.
+        for task_type, route, expects_task_id in (
+            ("martini3-bilayer", "Martini3BilayerBuilder", True),
+            ("martini3-solvent", "Martini3SolventBuilder", False),
+        ):
+            driver.get(f"{base_url}/")
+            selector = f'.task-card[data-task-id="{task_type}"]'
+            wait.until(lambda current: current.find_elements(By.CSS_SELECTOR, selector))
+            driver.find_element(By.CSS_SELECTOR, selector).click()
+            wait.until(
+                lambda current: "active" in current.find_element(
+                    By.ID, "panel-input"
+                ).get_attribute("class").split()
+            )
+            assert driver.current_url.rstrip("/").endswith(f"/{route}/Step1")
+            displayed_task = driver.find_element(By.ID, "task-id-display").text.strip()
+            assert (len(displayed_task) == 32) is expects_task_id
+
         modal_state = driver.execute_script(
             """
             showComputeQueueModal({

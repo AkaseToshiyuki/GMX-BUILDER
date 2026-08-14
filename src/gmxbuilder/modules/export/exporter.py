@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import shutil
+import zipfile
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.system import System
@@ -64,6 +67,10 @@ class ExportModule(BaseModule):
         log = []
 
         output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "input.pdb").unlink(missing_ok=True)
+        (output_dir / "run_md.sh").unlink(missing_ok=True)
+        if (output_dir / "mdp").is_dir():
+            shutil.rmtree(output_dir / "mdp")
 
         # ---- 0. Write index (.ndx) file ----
         ndx_path = output_dir / "index.ndx"
@@ -202,27 +209,25 @@ class ExportModule(BaseModule):
             execution_hardware,
         )
         log.append("Wrote README.txt")
-        run_script_path = output_dir / "run_md.sh"
-        self._write_run_script(
-            run_script_path,
-            system_name,
-            system.metadata.get("seed", 42),
-            written,
-            execution_hardware,
-        )
-        log.append("Wrote run_md.sh")
+        if write_mdp:
+            run_script_path = output_dir / "run_md.sh"
+            self._write_run_script(
+                run_script_path,
+                system_name,
+                system.metadata.get("seed", 42),
+                written,
+                execution_hardware,
+            )
+            log.append("Wrote run_md.sh")
 
         # ---- 4. Write ZIP archive ----
-        import zipfile as zf
         zip_path = output_dir / f"{system_name}.zip"
-        if zip_path.exists():
-            zip_path.unlink()
-        with zf.ZipFile(zip_path, "w", zf.ZIP_DEFLATED) as z:
-            for f in sorted(output_dir.rglob("*")):
-                if f == zip_path or f.suffix == ".zip":
-                    continue
-                if f.is_file():
-                    z.write(f, f.relative_to(output_dir))
+        self._write_archive(
+            output_dir,
+            zip_path,
+            written,
+            include_run_script=write_mdp,
+        )
         log.append(f"Wrote {zip_path.name}")
 
         return ModuleResult(
@@ -237,6 +242,57 @@ class ExportModule(BaseModule):
                 f"  {system_name}.zip — complete package",
             ],
         )
+
+    @staticmethod
+    def _topology_members(output_dir: Path) -> set[Path]:
+        """Resolve only safe, reachable local topology includes."""
+        root = output_dir.resolve()
+        pending = [output_dir / "topol.top"]
+        members: set[Path] = set()
+        include_pattern = re.compile(r'^\s*#include\s+"([^"]+)"')
+        while pending:
+            path = pending.pop()
+            resolved = path.resolve()
+            if resolved in members or root not in (resolved, *resolved.parents):
+                continue
+            if not resolved.is_file() or resolved.is_symlink():
+                continue
+            members.add(resolved)
+            for line in resolved.read_text(errors="replace").splitlines():
+                match = include_pattern.match(line)
+                if match:
+                    pending.append(output_dir / match.group(1))
+        return members
+
+    @classmethod
+    def _write_archive(
+        cls,
+        output_dir: Path,
+        zip_path: Path,
+        written_mdp: list[Path],
+        *,
+        include_run_script: bool,
+    ) -> None:
+        """Archive the current run manifest, never unrelated stale files."""
+        candidates = {
+            output_dir / "input.gro",
+            output_dir / "input.pdb",
+            output_dir / "index.ndx",
+            output_dir / "README.txt",
+            *cls._topology_members(output_dir),
+            *written_mdp,
+        }
+        if include_run_script:
+            candidates.add(output_dir / "run_md.sh")
+        members = sorted(
+            path.resolve()
+            for path in candidates
+            if path.is_file() and not path.is_symlink()
+        )
+        zip_path.unlink(missing_ok=True)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path in members:
+                archive.write(path, path.relative_to(output_dir.resolve()))
 
     @staticmethod
     def _index_groups(system) -> dict[str, list[int]]:

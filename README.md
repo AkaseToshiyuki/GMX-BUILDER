@@ -22,8 +22,12 @@ coordinates used for final topology assignment and export.
 - **Solvator** — prepare protein, canonical DNA/RNA, protein–nucleic-acid,
   protein–ligand, or nucleic-acid–ligand systems in an aqueous box without a
   membrane.
-- **Martini 3 Builder** — independently map a standard protein and build a
-  Martini 3 aqueous, flat-bilayer, or protein–bilayer coarse-grained system.
+- **Martini 3 Bilayer Builder** — map and automatically position a membrane
+  protein, choose an exact lipid count per leaflet and symmetric/asymmetric
+  compositions from the bundled official PC/PE/PG/PS/SM/sterol set, then add
+  water and ions. The periodic box is derived automatically.
+- **Martini 3 Solvent Builder** — map a standard protein and build an aqueous
+  Martini 3 system; it has no in-workflow environment switch.
 
 Each Check creates a task-owned coordinate checkpoint. Finalization assigns
 topology and packages the last confirmed coordinates without rebuilding the
@@ -85,8 +89,11 @@ gmxbuilder prebuilt-assets status
 gmxbuilder prebuilt-assets install
 ```
 
-`prebuilt-assets install` verifies the bundled archive before installing
-missing files into the user cache. It does not overwrite existing cache files.
+`prebuilt-assets install` verifies the archive checksum, current strict-library
+schema, and every included conformer entry before installing missing files into
+the user cache. The bundle contains the validated subset available at release
+time; failed or incomplete combinations remain explicitly unavailable. It
+does not overwrite existing cache files.
 The public repository and its public release assets do not require a GitHub
 access token.
 
@@ -188,7 +195,8 @@ gmxbuilder list-water
 gmxbuilder list-lipids
 gmxbuilder list-modules
 gmxbuilder lipid-library status
-gmxbuilder coarse-grained --help
+gmxbuilder martini3-bilayer --help
+gmxbuilder martini3-solvent --help
 ```
 
 ### Martini 3 example
@@ -196,17 +204,17 @@ gmxbuilder coarse-grained --help
 Build and interactively confirm a solvated asymmetric mixed bilayer:
 
 ```bash
-gmxbuilder coarse-grained \
-  --mode bilayer \
+gmxbuilder martini3-bilayer \
   --upper POPC:3 --upper CHOL:1 \
   --lower POPE:1 --lower POPG:1 \
-  --box-xy 12 --box-z 14 --salt 0.15 \
+  --lipids-per-leaflet 150 --padding 2 --salt 0.15 \
   --threads 8 --mpi-ranks 1 --gpu-ids 0 \
   --output ./martini-system
 ```
 
-Use `--pdb protein.pdb` for a protein–bilayer system, or `--mode solution
---pdb protein.pdb` for an aqueous protein. The first release accepts standard
+Use `--pdb protein.pdb` for a protein–bilayer system, or run
+`gmxbuilder martini3-solvent --pdb protein.pdb ...` for an aqueous protein.
+The first release accepts standard
 protein residues only and intentionally rejects ligands, PTMs, glycans,
 nucleic acids, custom CG molecules, curved membranes, and backmapping. The
 authoritative installed capability list is available at
@@ -296,7 +304,9 @@ an integer net charge.
 Canonical linear DNA/RNA polymers are recognized separately from small molecules and
 are currently enabled with **CHARMM36m + CHARMM TIP3P** in the Solvator. Native
 GROMACS topology generation validates 5′/3′ termini, O3′–P polymer bonds,
-hydrogens, and integral chain charge before solvation. Modified nucleotides,
+hydrogens, and integral chain charge before solvation. The nucleic-acid
+coordinates are replaced by the hydrogen-complete native `pdb2gmx` output and
+must be reviewed in the Step 3 viewer. Modified nucleotides,
 Amber nucleic-acid combinations, membrane-embedded nucleic acids, and
 coarse-grained nucleic acids are explicitly unavailable; they are never routed
 through GAFF2/CGenFF as independent residues.
@@ -305,7 +315,7 @@ through GAFF2/CGenFF as independent residues.
 MDP physics. CPU threads must divide evenly across MPI ranks, and enabled GPU
 IDs must be unique. Simulation defaults are selected by system class and
 force-field family, while every exported stage remains explicitly editable.
-See the [user manual](docs/GMXBUILDER_USER_MANUAL_V1.0.1.md) for the complete
+See the [user manual](docs/GMXBUILDER_USER_MANUAL_V1.0.2.md) for the complete
 parameter contract.
 
 ## HTTP API
@@ -460,8 +470,8 @@ leaving CUDA/GROMACS devices available.
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [User manual V1.0.1](docs/GMXBUILDER_USER_MANUAL_V1.0.1.md)
-  ([PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.1.pdf))
+- [User manual V1.0.2](docs/GMXBUILDER_USER_MANUAL_V1.0.2.md)
+  ([PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.2.pdf))
 - [Scientific compatibility and limitations](docs/SCIENTIFIC_COMPATIBILITY.md)
 
 ## License and third-party data

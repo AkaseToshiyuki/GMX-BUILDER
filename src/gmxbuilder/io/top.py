@@ -9,10 +9,6 @@ import numpy as np
 from gmxbuilder.core.topology import Topology
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import TopologyError
-from gmxbuilder.modules.ions.catalog import KNOWN_IONS, molecule_types_in_itp
-from gmxbuilder.modules.solvation.water_models import WaterRegistry
-
-
 class TopologyWriter:
     """Write GROMACS .top and .itp files with proper force field parameters."""
 
@@ -171,6 +167,8 @@ class TopologyWriter:
         self._copy_force_field(top_dir)
         water_model_name = str(self.ff_config.get("water_model", "tip3p")).lower()
         try:
+            from gmxbuilder.modules.solvation.water_models import WaterRegistry
+
             water_model = WaterRegistry.get(water_model_name)
         except KeyError as exc:
             raise TopologyError(str(exc)) from exc
@@ -218,18 +216,13 @@ class TopologyWriter:
 
         # Determine component groups
         from gmxbuilder.io.pdb import _PROTEIN_RESNAMES
-        from gmxbuilder.modules.forcefield.charmm36_data import (
-            _AMINO_ACID_BACKBONE, _RESIDUE_SIDECHAINS,
-        )
         from gmxbuilder.modules.membrane.lipids import LipidRegistry
-        _PROTEIN_SET = (
-            set(_AMINO_ACID_BACKBONE.keys())
-            | set().union(*(set(d.keys()) for d in _RESIDUE_SIDECHAINS.values()))
-            | _PROTEIN_RESNAMES
-        )
+        _PROTEIN_SET = set(_PROTEIN_RESNAMES)
 
         protein_res = {rn for rn in res_counts if rn in _PROTEIN_SET}
         water_res = {rn for rn in res_counts if rn in ("SOL", "HOH", "TIP3", "WAT")}
+        from gmxbuilder.modules.ions.catalog import KNOWN_IONS, molecule_types_in_itp
+
         ion_res = {rn for rn in res_counts if rn in KNOWN_IONS}
         defined_ions = molecule_types_in_itp(top_dir / ion_itp)
         unsupported_ions = sorted(ion_res - defined_ions)
@@ -391,19 +384,41 @@ class TopologyWriter:
                 molecule_records.append((first, molecule_type, count))
 
             if water_res:
-                n_water = sum(1 for i in range(min(structure.num_atoms, len(structure.resnames)))
-                             if structure.resnames[i] in water_res)
+                water_atoms: dict[tuple[str, int, str], int] = {}
+                for index, (name, resid) in enumerate(
+                    zip(structure.resnames, structure.resids)
+                ):
+                    if name not in water_res:
+                        continue
+                    chain = (
+                        structure.chain_ids[index]
+                        if index < len(structure.chain_ids) else ""
+                    )
+                    key = (str(name), int(resid), str(chain))
+                    water_atoms[key] = water_atoms.get(key, 0) + 1
+                invalid_sites = [
+                    key for key, count in water_atoms.items()
+                    if count != water_model.n_atoms
+                ]
+                if invalid_sites:
+                    name, resid, chain = invalid_sites[0]
+                    raise TopologyError(
+                        f"Water {chain or '?'}:{resid} {name} does not contain "
+                        f"exactly {water_model.n_atoms} sites"
+                    )
+                n_water = sum(water_atoms.values())
                 if n_water % water_model.n_atoms:
                     raise TopologyError(
                         f"SOL atom count {n_water} is not divisible by the "
                         f"{water_model_name} site count {water_model.n_atoms}"
                     )
-                n_sol = n_water // water_model.n_atoms
-                first_water = next(
-                    index for index, name in enumerate(structure.resnames)
-                    if name in water_res
+                water_runs = self._ordered_residue_run_records(
+                    structure, water_res
                 )
-                molecule_records.append((first_water, "SOL", n_sol))
+                molecule_records.extend(
+                    (first, "SOL", count)
+                    for first, _source_name, count in water_runs
+                )
 
             # Preserve coordinate order.  Different ion species are separate
             # one-atom molecule types, so alphabetically regrouping them makes
@@ -1067,171 +1082,6 @@ class TopologyWriter:
                         "   1  0.0  0.0  DIHRES_FC\n"
                     )
                 fh.write("#endif\n")
-
-    def _write_generic_molecule_itp(self, mol_name: str, structure: Structure, path: Path) -> None:
-        """Write a simple ITP for a non-lipid small molecule using assigned atom types."""
-        # Collect atoms for this molecule from the structure
-        n_check = min(structure.num_atoms, len(structure.resnames), len(structure.resids))
-        indices = [i for i in range(n_check) if structure.resnames[i] == mol_name]
-        if not indices:
-            return
-        idx0 = indices[0]
-        n_atoms = 0
-        for i in range(idx0, n_check):
-            if structure.resnames[i] == mol_name and structure.resids[i] == structure.resids[idx0]:
-                n_atoms += 1
-            else:
-                break
-
-        from gmxbuilder.modules.forcefield.charmm36_data import get_residue_atom_type as _fallback_type
-
-        with open(path, "w") as fh:
-            fh.write(f"; {mol_name} — GMXBUILDER generic molecule ITP\n\n")
-            fh.write(f"[ moleculetype ]\n{mol_name}    3\n\n")
-            fh.write("[ atoms ]\n")
-            fh.write(";   nr  type  resnr residue  atom  cgnr  charge\n")
-            for j in range(n_atoms):
-                i = idx0 + j
-                an = structure.atom_names[i] if i < len(structure.atom_names) else f"A{j}"
-                rn = structure.resnames[i] if i < len(structure.resnames) else mol_name
-                atype, charge, _ = _fallback_type(rn, an)
-                fh.write(f"{j+1:6d} {atype:>6s} {1:6d} {mol_name:>6s} {an:>6s} {j+1:6d}  {charge:10.6f}\n")
-
-    @staticmethod
-    def _build_lipid_bonds(resname: str, name_to_idx: dict[str, int]) -> list[tuple[int, int]]:
-        """Generate proper bond connectivity for a phospholipid based on atom names.
-
-        Uses the standard phospholipid naming convention:
-        - Glycerol: C1-C2-C3
-        - sn-1 ester: C1-O11, O11-C11, C11-O12, C11-C12
-        - sn-1 tail: sequential C1{i}-C1{i+1}
-        - sn-2 ester: C2-O21, O21-C21, C21-O22, C21-C22
-        - sn-2 tail: sequential C2{i}-C2{i+1}
-        - Phosphate: C3-O34, O34-P, P-O31/O32/O33
-        - Headgroup: depends on category
-        """
-        import re
-
-        def _idx(name: str) -> int | None:
-            return name_to_idx.get(name)
-
-        bonds: list[tuple[int, int]] = []
-
-        # ---- Glycerol backbone ----
-        for a, b in [("C1", "C2"), ("C2", "C3")]:
-            i, j = _idx(a), _idx(b)
-            if i is not None and j is not None:
-                bonds.append((i, j))
-
-        # ---- sn-1 ester linkage ----
-        for a, b in [("C1", "O11"), ("O11", "C11"), ("C11", "O12")]:
-            i, j = _idx(a), _idx(b)
-            if i is not None and j is not None:
-                bonds.append((i, j))
-
-        # ---- sn-2 ester linkage ----
-        for a, b in [("C2", "O21"), ("O21", "C21"), ("C21", "O22")]:
-            i, j = _idx(a), _idx(b)
-            if i is not None and j is not None:
-                bonds.append((i, j))
-
-        # ---- Tail chains (sequential, identified by C1/C2 prefix + digits) ----
-        for prefix in ("C1", "C2"):
-            # Collect tail carbons: C1{2..N} or C2{2..N}
-            # C11/C21 are carbonyls, not tail carbons
-            tail_atoms: list[tuple[int, str]] = []
-            for name, idx in name_to_idx.items():
-                m = re.match(rf"^{re.escape(prefix)}(\d+)$", name)
-                if m:
-                    num = int(m.group(1))
-                    if num >= 2:  # C12, C13, ... or C22, C23, ...
-                        tail_atoms.append((num, idx, name))
-            tail_atoms.sort(key=lambda x: x[0])
-
-            # Bond carbonyl to first tail carbon
-            carbonyl = _idx(f"{prefix}1")  # e.g. C11 or C21
-            if carbonyl is not None and tail_atoms:
-                bonds.append((carbonyl, tail_atoms[0][1]))
-
-            # Sequential bonds along tail chain
-            for k in range(len(tail_atoms) - 1):
-                bonds.append((tail_atoms[k][1], tail_atoms[k + 1][1]))
-
-        # ---- Phosphate linkage ----
-        for a, b in [("C3", "O34"), ("O34", "P")]:
-            i, j = _idx(a), _idx(b)
-            if i is not None and j is not None:
-                bonds.append((i, j))
-
-        for o in ("O31", "O32", "O33"):
-            i, j = _idx("P"), _idx(o)
-            if i is not None and j is not None:
-                bonds.append((i, j))
-
-        # ---- Headgroup (category-dependent) ----
-        rn = resname.upper()
-        _HEADGROUP_SUFFIX_MAP = {
-            "PC": "PC", "PE": "PE", "PG": "PG", "PS": "PS",
-            "PA": "PA", "PI": "PI", "SM": "SM", "ST": "ST",
-        }
-        cat = "PC"
-        for suffix, hg in _HEADGROUP_SUFFIX_MAP.items():
-            if rn.endswith(suffix):
-                cat = hg
-                break
-
-        if cat == "PC":
-            for a, b in [("O34", "C4"), ("C4", "C5"), ("C5", "N"),
-                         ("N", "C61"), ("N", "C62"), ("N", "C63")]:
-                i, j = _idx(a), _idx(b)
-                if i is not None and j is not None:
-                    bonds.append((i, j))
-        elif cat == "PE":
-            for a, b in [("O34", "C4"), ("C4", "C5"), ("C5", "N")]:
-                i, j = _idx(a), _idx(b)
-                if i is not None and j is not None:
-                    bonds.append((i, j))
-        elif cat == "PG":
-            for a, b in [("O34", "GC1"), ("GC1", "GC2"), ("GC2", "GO1"),
-                         ("GC1", "GC3"), ("GC3", "GO2")]:
-                i, j = _idx(a), _idx(b)
-                if i is not None and j is not None:
-                    bonds.append((i, j))
-        elif cat in ("PS", "PA", "PI"):
-            # Generic choline-like backbone for other headgroups
-            for a, b in [("O34", "C4"), ("C4", "C5")]:
-                i, j = _idx(a), _idx(b)
-                if i is not None and j is not None:
-                    bonds.append((i, j))
-        # SM, ST: sphingomyelin/sterol — use generic sequential backbone
-        elif cat in ("SM", "ST"):
-            for a, b in [("O34", "C4"), ("C4", "C5")]:
-                i, j = _idx(a), _idx(b)
-                if i is not None and j is not None:
-                    bonds.append((i, j))
-
-        return bonds
-
-    # ------------------------------------------------------------------
-    # Solvent ITP
-    # ------------------------------------------------------------------
-
-    def _write_solvent_itp(self, structure: Structure, path: Path) -> None:
-        with open(path, "w") as fh:
-            fh.write("; TIP3P water topology — GMXBUILDER\n\n")
-            fh.write("[ moleculetype ]\nSOL    3\n\n")
-            fh.write("[ atoms ]\n")
-            fh.write(";   nr  type  resnr residue  atom  cgnr  charge\n")
-            fh.write("     1    OT      1    SOL    OW      1   -0.834\n")
-            fh.write("     2    HT      1    SOL   HW1      2    0.417\n")
-            fh.write("     3    HT      1    SOL   HW2      3    0.417\n")
-            fh.write("\n[ bonds ]\n")
-            fh.write(";   ai    aj  funct  r(nm)     kb\n")
-            fh.write("     1     2    1  0.09572  376560.0\n")
-            fh.write("     1     3    1  0.09572  376560.0\n")
-            fh.write("\n[ angles ]\n")
-            fh.write(";   ai    aj    ak  funct  angle    kb\n")
-            fh.write("     2     1     3    1  104.52  418.40\n")
 
     # ------------------------------------------------------------------
     # Force field bundling

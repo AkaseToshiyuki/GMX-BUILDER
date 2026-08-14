@@ -11,6 +11,7 @@ import numpy as np
 from gmxbuilder.core.system import System
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.component import Component
+from gmxbuilder.core.chemistry import WATER_VOLUME_NM3
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
@@ -20,7 +21,7 @@ from gmxbuilder.modules.solvation.water_models import WaterRegistry
 
 
 # Approximate volume per water molecule (nm^3)
-_WATER_VOLUME_PER_MOLECULE = 0.0299  # ~18 mL/mol / NA * 1e21 nm^3/L
+_WATER_VOLUME_PER_MOLECULE = WATER_VOLUME_NM3
 
 
 @register_module

@@ -21,7 +21,7 @@ GET /api/options
 GET /api/patches?force_field=<name>
 GET /api/crosslink-capabilities?force_field=<name>
 GET /api/terminal-capabilities?force_field=<name>
-GET /api/lipid-library-status
+GET /api/lipid-library-status?lipid_name=<name>&force_field=<name>&lipid_ff=<backend>
 GET /api/coarse-grained/capabilities
 ```
 
@@ -56,9 +56,13 @@ Amber 膜按“精确 Lipid21 → 完整膜统一 GAFF2 → 不可用”的顺�
 - 构象数量和元数据完整；
 - APL、DHH、朝向和疏水核心质量门槛通过。
 
-`data/lipid_conformations` 只属于几何 bootstrap 数据，不等同于预平衡库。某个
-拓扑存在但构象质量门槛失败时，该力场/脂质组合保持不可用，并显示其他通过验证
+几何 bootstrap 构象不随软件发布，也不会被标记为预平衡库。某个拓扑存在但
+构象质量门槛失败时，该力场/脂质组合保持不可用，并显示其他通过验证
 的力场；程序不会用近似链长或同名分子替代。
+
+发布归档是“已验证子集”，不承诺注册表中的每个兼容条目都已经通过预平衡。安装
+前会校验归档 SHA-256、严格库 schema，并逐条确认其中的构象库可由当前运行时
+加载。尚未完成或未通过生产质量门槛的组合不会进入归档，并在界面中保持不可用。
 
 随版本提供的资产用以下命令校验和安装，具体条目数以命令输出为准：
 
@@ -94,6 +98,8 @@ Custom Lipids 中。参数和构象不会进入全局库，任务过期时一并
 聚合物处理，并使用随软件提供的 GROMACS/CHARMM36 数据库生成 5′/3′ 羟基末端、
 氢原子、O3′–P 连接、键合项和积分链电荷。蛋白–DNA、蛋白–RNA 以及含有兼容
 非共价 CHARMM 配体的复合物均可构建。
+该原生处理会将上传的核酸坐标替换为补全氢原子的 `pdb2gmx` 坐标；Step 3
+Viewer 是继续流程前必须进行的坐标复核点。
 
 断裂骨架、环状链、共价 DNA/RNA 杂合链及修饰或非标准核苷酸会明确阻断。
 Amber 核酸模型、膜内核酸及 Martini 核酸当前不可用。游离的核苷酸类配体仍进入
@@ -130,8 +136,14 @@ PCA/MLY/MYR 等近似模板、没有原生模板的单甲基 Arg/Cys 变体，�
 
 Martini 3 是独立分辨率和独立参数体系，不与上表的 Amber/CHARMM/OPLS 原子级
 分子拼接。首版使用固定的 Martini 3.0.0 资产、Martinize2/Vermouth 0.15.0 和
-COBY 1.0.14，支持标准蛋白水相、平面纯/混合/非对称膜和标准蛋白–膜体系，
-普通 W 水与 NA/CL。脂质权威列表由 capability API 返回。
+COBY 1.0.14。入口拆分为 Martini 3 Solvent 与 Martini 3 Bilayer：前者支持
+标准蛋白水相体系；后者支持指定每叶精确整数脂质数量的平面纯膜、混合/对称或
+非对称膜及可选标准蛋白。两者使用普通 W 水与 NA/CL，脂质权威列表由
+capability API 返回。
+
+膜体系具有独立 Orientation 步骤，采用与原子级膜流程一致的 PPM-like 能量/
+跨膜片段审查，并允许保存精确手动变换。周期盒根据确认后的分子包络、padding
+和请求的膜尺寸自动推导，用户不需要输入可能截断定位蛋白的 Box Z。
 
 折叠蛋白可使用 Elastic Network；单跨膜螺旋允许关闭；无序蛋白禁止通用网络。
 自动检查可以证明拓扑自洽、净电荷、盐浓度、双层朝向和几何范围，但不能判定
@@ -141,7 +153,7 @@ COBY 1.0.14，支持标准蛋白水相、平面纯/混合/非对称膜和标准�
 及 backmapping 均不支持。输入审计会阻断，不能将原子级模块的近似参数带入 CG。
 当前安装的权威脂质列表、后端版本和功能边界由
 `GET /api/coarse-grained/capabilities` 返回，操作流程见
-[用户手册](GMXBUILDER_USER_MANUAL_V1.0.1.zh-CN.md)。
+[用户手册](GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md)。
 
 ## 8. 构建质量与责任边界
 

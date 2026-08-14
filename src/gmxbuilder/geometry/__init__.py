@@ -22,7 +22,6 @@ from gmxbuilder.geometry.grid import (
 )
 from gmxbuilder.geometry.overlap import (
     find_overlapping_atoms,
-    remove_overlapping_molecules,
 )
 
 __all__ = [
@@ -39,5 +38,4 @@ __all__ = [
     "hexagonal_grid",
     "rectangular_grid",
     "find_overlapping_atoms",
-    "remove_overlapping_molecules",
 ]

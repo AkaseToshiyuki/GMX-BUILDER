@@ -49,7 +49,6 @@ class GROReader:
         if len(lines) < 3:
             raise ParseError(f"GRO file too short: {path}")
 
-        title = lines[0].strip()
         try:
             n_atoms = int(lines[1].strip())
         except ValueError as exc:
@@ -99,15 +98,22 @@ class GROReader:
         # Parse box vectors (GROMACS formats: 1/3/5/9 values).  The official
         # nine-field order is v1(x), v2(y), v3(z), v1(y), v1(z), v2(x),
         # v2(z), v3(x), v3(y) — it is not row-major matrix order.
-        box_parts = [float(x) for x in box_line.split()]
-        if len(box_parts) >= 9:
-            values = box_parts[:9]
+        try:
+            box_parts = [float(x) for x in box_line.split()]
+        except ValueError as exc:
+            raise ParseError(f"Malformed GRO box line: {box_line!r}") from exc
+        if len(box_parts) not in {1, 3, 5, 9}:
+            raise ParseError(
+                "GRO box line must contain 1, 3, 5, or 9 numeric values"
+            )
+        if len(box_parts) == 9:
+            values = box_parts
             box = np.array([
                 [values[0], values[3], values[4]],
                 [values[5], values[1], values[6]],
                 [values[7], values[8], values[2]],
             ], dtype=np.float64)
-        elif len(box_parts) >= 5:
+        elif len(box_parts) == 5:
             # 5-value: v1(x) v2(y) v3(z) v1(y) v1(z) — triclinic with v2,v3 diagonal-only
             v1x, v2y, v3z, v1y, v1z = box_parts[:5]
             box = np.array([
@@ -115,11 +121,19 @@ class GROReader:
                 [0.0, v2y, 0.0],
                 [0.0, 0.0, v3z],
             ], dtype=np.float64)
-        elif len(box_parts) >= 3:
+        elif len(box_parts) == 3:
             # Diagonal-only box
             box = np.diag([box_parts[0], box_parts[1], box_parts[2]])
         else:
-            box = np.eye(3) * 10.0
+            box = np.eye(3) * box_parts[0]
+        if (
+            not np.isfinite(box).all()
+            or np.any(np.linalg.norm(box, axis=1) <= 0)
+            or abs(float(np.linalg.det(box))) <= 1e-12
+        ):
+            raise ParseError("GRO box vectors must define a finite nonzero volume")
+        if not np.isfinite(coords).all():
+            raise ParseError("GRO atom coordinates must be finite")
 
         return Structure(
             coordinates=coords,
@@ -140,6 +154,22 @@ class GROWriter:
         box = structure.box_vectors
         n = structure.num_atoms
 
+        if not np.isfinite(coords).all():
+            raise ValueError("GRO coordinates must be finite")
+        if (
+            box.shape != (3, 3)
+            or not np.isfinite(box).all()
+            or np.any(np.linalg.norm(box, axis=1) <= 0)
+            or abs(float(np.linalg.det(box))) <= 1e-12
+        ):
+            raise ValueError("GRO box vectors must define a finite nonzero volume")
+        validated_names = []
+        for i in range(n):
+            validated_names.append((
+                _validate_gro_name(structure.resnames[i] or "UNK", "residue name", i),
+                _validate_gro_name(structure.atom_names[i] or "X", "atom name", i),
+            ))
+
         with open(path, "w") as fh:
             fh.write(f"{title}\n")
             fh.write(f"{n:5d}\n")
@@ -151,14 +181,12 @@ class GROWriter:
 
             for i in range(n):
                 resid = structure.resids[i] if i < len(structure.resids) else i + 1
-                resname = structure.resnames[i] if i < len(structure.resnames) else "UNK"
-                aname = structure.atom_names[i] if i < len(structure.atom_names) else "X"
-                resname = _validate_gro_name(resname or "UNK", "residue name", i)
-                aname = _validate_gro_name(aname or "X", "atom name", i)
+                resname, aname = validated_names[i]
                 x, y, z = coords[i]
 
                 # GRO format: 5-digit fields, wrap at 100000 (GROMACS convention)
-                wrapped_resid = (resid - 1) % 99999 + 1
+                normalized_resid = max(1, int(resid))
+                wrapped_resid = (normalized_resid - 1) % 99999 + 1
                 wrapped_atom = i % 99999 + 1
                 fh.write(f"{wrapped_resid:5d}{resname:<5s}{aname:>5s}{wrapped_atom:5d}{x:8.3f}{y:8.3f}{z:8.3f}\n")
 

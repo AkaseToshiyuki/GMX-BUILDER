@@ -26,9 +26,28 @@ MIN_INWARD_COSINE = 0.10
 # effective diameter, while allowing finite coordinate/percentile noise.
 MAX_TAIL_CORE_GAP_NM = 0.62
 
+# A leaflet change is an orientation change, not a mirror operation.  This
+# 180-degree rotation about X maps +Z to -Z while keeping determinant +1, so
+# stereochemistry and every internal distance are preserved.
+_OPPOSITE_LEAFLET_ROTATION = np.diag([1.0, -1.0, -1.0])
+
 
 class LipidOrientationError(ValueError):
     """Raised when a molecule cannot define a physical amphiphile axis."""
+
+
+def rotate_to_opposite_leaflet(coordinates: np.ndarray) -> np.ndarray:
+    """Return a chirality-preserving rigid rotation to the opposite leaflet.
+
+    Coordinates are rotated around the origin.  Callers that need a specific
+    anchor at the origin must translate to that anchor before this operation.
+    """
+    coords = np.asarray(coordinates, dtype=float)
+    if coords.ndim != 2 or coords.shape[1] != 3:
+        raise LipidOrientationError("Lipid coordinates must have shape (N, 3)")
+    if not np.isfinite(coords).all():
+        raise LipidOrientationError("Lipid coordinates contain non-finite values")
+    return coords @ _OPPOSITE_LEAFLET_ROTATION.T
 
 
 @dataclass(frozen=True)

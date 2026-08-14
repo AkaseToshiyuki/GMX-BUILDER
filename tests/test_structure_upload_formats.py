@@ -8,8 +8,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 import numpy as np
+import pytest
 
 from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.exceptions import ParseError
 from gmxbuilder.core.system import System
 from gmxbuilder.io.cif import CIFParser
 from gmxbuilder.io.pdb import PDBParser
@@ -85,6 +87,41 @@ def test_mmcif_prefers_author_identifiers_selects_first_model_and_estimates_box(
     assert np.allclose(np.diag(structure.box_vectors), [3.0, 3.0, 3.0])
 
 
+def test_mmcif_selects_highest_occupancy_altloc_and_rejects_insertion(tmp_path):
+    header = """data_alt
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+"""
+    alternate = tmp_path / "alternate.cif"
+    alternate.write_text(
+        header
+        + "ATOM 1 C CA A ALA A 10 ? 1.0 0.0 0.0 0.40\n"
+        + "ATOM 2 C CA B ALA A 10 ? 2.0 0.0 0.0 0.60\n#\n"
+    )
+    structure = CIFParser().parse(alternate)
+    assert structure.num_atoms == 1
+    assert structure.coordinates[0, 0] == pytest.approx(0.2)
+
+    insertion = tmp_path / "insertion.cif"
+    insertion.write_text(
+        header + "ATOM 1 C CA . ALA A 10 A 1.0 0.0 0.0 1.00\n#\n"
+    )
+    with pytest.raises(ParseError, match="insertion codes"):
+        CIFParser().parse(insertion)
+
+
 def test_upload_accepts_mmcif_and_preserves_original_for_input_step(tmp_path, monkeypatch):
     manager = TaskManager(tmp_path / "tasks")
     monkeypatch.setattr(server, "task_manager", manager)
@@ -115,13 +152,13 @@ def test_coarse_grained_mmcif_check_writes_canonical_mapping_pdb(
     server._step_runners.clear()
 
     with TestClient(app) as client:
-        created = client.post("/api/tasks", json={"task_type": "coarse-grained"})
+        created = client.post("/api/tasks", json={"task_type": "martini3-bilayer"})
         assert created.status_code == 200, created.text
         task_id = created.json()["task_id"]
         uploaded = client.post(
             "/api/upload-pdb",
             files={"file": ("cg-model.mmcif", MMCIF_TEXT, "chemical/x-mmcif")},
-            data={"task_type": "coarse-grained", "task_id": task_id},
+            data={"task_type": "martini3-bilayer", "task_id": task_id},
         )
         assert uploaded.status_code == 200, uploaded.text
         checked = client.post(

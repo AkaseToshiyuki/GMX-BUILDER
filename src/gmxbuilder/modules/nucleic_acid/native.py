@@ -453,7 +453,8 @@ def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
     log = [
         f"Native nucleic-acid topology: {record['polymer_type']} chain "
         f"{record['chain_id']} ({record['residue_count']} residues, "
-        f"{record['atom_count']} atoms, charge {record['net_charge']:+.0f} e)"
+        f"{record['atom_count']} atoms, charge {record['net_charge']:+.0f} e); "
+        "coordinates were replaced by the hydrogen-complete pdb2gmx output"
         for record in native_records
     ]
     return system, log

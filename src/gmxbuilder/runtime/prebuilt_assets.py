@@ -18,6 +18,11 @@ import tarfile
 import tempfile
 from typing import Iterator
 
+from gmxbuilder.modules.membrane.equilibrated_library import (
+    SCHEMA_VERSION as LIBRARY_SCHEMA_VERSION,
+    EquilibratedLipidLibrary,
+)
+
 
 ASSET_SCHEMA_VERSION = 1
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "prebuilt_assets"
@@ -47,6 +52,10 @@ def _read_manifest(path: Path = _MANIFEST_PATH) -> dict:
         raise RuntimeError("The prebuilt lipid asset manifest is invalid") from exc
     if manifest.get("schema_version") != ASSET_SCHEMA_VERSION:
         raise RuntimeError("Unsupported prebuilt lipid asset manifest schema")
+    if manifest.get("library_schema_version") != LIBRARY_SCHEMA_VERSION:
+        raise RuntimeError(
+            "Prebuilt lipid assets do not match the current strict-library schema"
+        )
     filename = str(manifest.get("archive", "")).strip()
     digest = str(manifest.get("archive_sha256", "")).strip().lower()
     if not filename or Path(filename).name != filename:
@@ -169,6 +178,74 @@ def _merge_tree(source: Path, destination: Path) -> int:
     return installed
 
 
+def _validate_staging(staging: Path, manifest: dict) -> None:
+    """Reject a hash-valid archive whose scientific entries are unusable."""
+    lipid_root = staging / "lipid_equilibrated"
+    metadata_files = sorted(lipid_root.glob("*/*/metadata.json"))
+    expected_lipids = int(manifest["contents"]["strict_library_entries"])
+    if len(metadata_files) != expected_lipids:
+        raise RuntimeError(
+            "Prebuilt lipid asset entry count does not match its manifest"
+        )
+
+    library = EquilibratedLipidLibrary([lipid_root])
+    for metadata_path in metadata_files:
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            name = metadata_path.parent.name
+            force_field = str(metadata["force_field"])
+            lipid_ff = str(metadata["lipid_ff"])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError(
+                f"Invalid strict lipid metadata in release archive: "
+                f"{metadata_path.relative_to(staging)}"
+            ) from exc
+        if library.inspect(name, force_field, lipid_ff) is None:
+            raise RuntimeError(
+                f"Prebuilt lipid entry is incompatible with the current runtime: "
+                f"{metadata_path.relative_to(staging)}"
+            )
+
+    gaff_root = staging / "gaff2"
+    gaff_entries = [path for path in gaff_root.iterdir()] if gaff_root.is_dir() else []
+    expected_gaff = int(manifest["contents"]["gaff2_cache_entries"])
+    if len([path for path in gaff_entries if path.is_dir()]) != expected_gaff:
+        raise RuntimeError(
+            "Prebuilt GAFF2 cache entry count does not match its manifest"
+        )
+
+
+def _remove_stale_lipid_entries(staging: Path, destination: Path) -> int:
+    """Replace only existing strict entries that the current runtime rejects."""
+    removed = 0
+    library = EquilibratedLipidLibrary([destination])
+    for metadata_path in sorted(
+        (staging / "lipid_equilibrated").glob("*/*/metadata.json")
+    ):
+        source_entry = metadata_path.parent
+        relative = source_entry.relative_to(staging / "lipid_equilibrated")
+        target = destination / relative
+        if not target.exists() and not target.is_symlink():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            valid = library.inspect(
+                source_entry.name,
+                str(metadata["force_field"]),
+                str(metadata["lipid_ff"]),
+            ) is not None
+        except (OSError, ValueError, KeyError, TypeError):
+            valid = False
+        if valid:
+            continue
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+        removed += 1
+    return removed
+
+
 def install_prebuilt_assets(
     *,
     manifest_path: str | Path = _MANIFEST_PATH,
@@ -191,6 +268,7 @@ def install_prebuilt_assets(
                 "status": "ready",
                 "asset_version": manifest["asset_version"],
                 "installed_files": 0,
+                "replaced_lipid_entries": 0,
                 "lipid_root": str(lipid_destination),
                 "gaff_root": str(gaff_destination),
             }
@@ -217,6 +295,10 @@ def install_prebuilt_assets(
                         )
                     with source, target.open("wb") as destination:
                         shutil.copyfileobj(source, destination)
+            _validate_staging(staging, manifest)
+            replaced_lipids = _remove_stale_lipid_entries(
+                staging, lipid_destination,
+            )
             installed_lipid = _merge_tree(
                 staging / "lipid_equilibrated", lipid_destination,
             )
@@ -227,6 +309,7 @@ def install_prebuilt_assets(
         "status": "installed",
         "asset_version": manifest["asset_version"],
         "installed_files": installed_lipid + installed_gaff,
+        "replaced_lipid_entries": replaced_lipids,
         "lipid_root": str(lipid_destination),
         "gaff_root": str(gaff_destination),
     }

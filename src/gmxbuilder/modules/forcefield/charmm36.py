@@ -12,6 +12,7 @@ import numpy as np
 from gmxbuilder.core.system import System
 from gmxbuilder.core.topology import Topology, AtomType, MoleculeBlock
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.exceptions import ForceFieldError
 from gmxbuilder.modules.forcefield.base_ff import ForceField
 from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
 
@@ -95,12 +96,6 @@ class CHARMM36ForceField(ForceField):
             n_mol = 1
 
             if comp.kind == ComponentKind.MEMBRANE:
-                # Extract dominant lipid name from composition metadata
-                lipid_name = "POPC"
-                comp_upper = comp.metadata.get("composition_upper", [])
-                if comp_upper:
-                    lipid_name = comp_upper[0][0] if isinstance(comp_upper[0], (list, tuple)) else "POPC"
-                type_name = lipid_name
                 # Split into individual lipid molecules using per-lipid atom counts
                 # (supports mixed-size lipids like POPC+CHOL)
                 n_upper = comp.metadata.get("n_lipids_upper", 0)
@@ -120,10 +115,18 @@ class CHARMM36ForceField(ForceField):
                             start = offsets[li]
                             end = offsets[li + 1]
                             lipid_indices = list(comp.atom_indices[start:end])
+                            residue_names = {
+                                system.structure.resnames[int(index)].strip().upper()
+                                for index in lipid_indices
+                            }
+                            if len(residue_names) != 1:
+                                raise ForceFieldError(
+                                    "A membrane molecule block contains mixed residue names"
+                                )
                             topology.molecule_blocks.append(MoleculeBlock(
                                 atom_indices=lipid_indices,
                                 nrexcl=nrexcl,
-                                type_name=type_name,
+                                type_name=residue_names.pop(),
                                 num_molecules=1,
                             ))
                         continue  # skip default block creation

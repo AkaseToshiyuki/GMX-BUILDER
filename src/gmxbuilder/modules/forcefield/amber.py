@@ -90,9 +90,9 @@ class _AmberBase(ForceField):
 
     def get_ff_includes(self) -> list[str]:
         return [
-            f'#include "forcefield.itp"',
-            f'#include "tip3p.itp"',
-            f'#include "ions.itp"',
+            '#include "forcefield.itp"',
+            '#include "tip3p.itp"',
+            '#include "ions.itp"',
         ]
 
 

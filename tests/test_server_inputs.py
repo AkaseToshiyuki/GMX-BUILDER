@@ -247,7 +247,7 @@ def test_protonate_endpoint_reports_failed_environment_sensitive_fallback(
     assert "could not produce" in response.json()["propka_warning"]
 
 
-def test_options_reject_unstable_gaff2_chol_and_advertise_charmm():
+def test_options_advertise_validated_lipid21_but_reject_gaff2_chol():
     with TestClient(app) as client:
         response = client.get("/api/options")
 
@@ -256,8 +256,20 @@ def test_options_reject_unstable_gaff2_chol_and_advertise_charmm():
     assert "lipid21" in chol["parameterizations"]
     assert "gaff2" not in chol["parameterizations"]
     assert "charmm36m" in chol["parameterizations"]
-    assert "CHARMM36m" in chol["parameterization"]
-    assert "orientation gate" in chol["gaff2_unavailable_reason"]
+    assert "Amber Lipid21" in chol["parameterization"]
+    assert "93.8% correctly oriented" in chol["gaff2_unavailable_reason"]
+
+
+def test_options_reject_thin_gaff2_bsm_and_advertise_exact_charmm():
+    with TestClient(app) as client:
+        response = client.get("/api/options")
+
+    assert response.status_code == 200
+    bsm = next(item for item in response.json()["lipids"] if item["name"] == "BSM")
+    assert "gaff2" not in bsm["parameterizations"]
+    assert set(bsm["parameterizations"]) == {"charmm36m", "charmm36"}
+    assert "experimental C24:0 sphingomyelin DHH" in bsm["gaff2_unavailable_reason"]
+    assert "use CHARMM36m or CHARMM36" in bsm["gaff2_unavailable_reason"]
 
 
 def test_options_advertise_exact_lipid21_popc_support():

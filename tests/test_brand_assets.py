@@ -35,7 +35,7 @@ def test_both_readmes_use_the_canonical_logo_asset() -> None:
 
 
 def test_public_documentation_points_to_current_user_manual() -> None:
-    manual_stem = "GMXBUILDER_USER_MANUAL_V1.0.1"
+    manual_stem = "GMXBUILDER_USER_MANUAL_V1.0.2"
     for suffix in (".md", ".pdf", ".zh-CN.md", ".zh-CN.pdf"):
         assert (ROOT / "docs" / f"{manual_stem}{suffix}").is_file()
     for name in (
@@ -47,12 +47,12 @@ def test_public_documentation_points_to_current_user_manual() -> None:
 
     source = (ROOT / "docs" / f"{manual_stem}.md").read_text()
     chinese = (ROOT / "docs" / f"{manual_stem}.zh-CN.md").read_text()
-    assert "| Document version | V1.0.1 |" in source
-    assert "| Software | GMXBUILDER v0.8.8 or later |" in source
-    assert "| V1.0.1 | 2026-08-11 |" in source
+    assert "| Document version | V1.0.2 |" in source
+    assert "| Software | GMXBUILDER v0.9.0 or later |" in source
+    assert "| V1.0.2 | 2026-08-14 |" in source
     assert "| V1.0.0 | 2026-07-26 | Initial release |" in source
-    assert "| 文档版本 | V1.0.1 |" in chinese
-    assert "| 适用软件 | GMXBUILDER v0.8.8 或更高版本 |" in chinese
+    assert "| 文档版本 | V1.0.2 |" in chinese
+    assert "| 适用软件 | GMXBUILDER v0.9.0 或更高版本 |" in chinese
     assert "## 附录 B：文档维护要求" not in chinese
 
 
@@ -84,8 +84,8 @@ def test_each_public_user_document_has_a_language_switch() -> None:
         ("README.md", "README.zh-CN.md"),
         ("docs/README.md", "docs/README.zh-CN.md"),
         (
-            "docs/GMXBUILDER_USER_MANUAL_V1.0.1.md",
-            "docs/GMXBUILDER_USER_MANUAL_V1.0.1.zh-CN.md",
+            "docs/GMXBUILDER_USER_MANUAL_V1.0.2.md",
+            "docs/GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md",
         ),
         (
             "docs/SCIENTIFIC_COMPATIBILITY.md",

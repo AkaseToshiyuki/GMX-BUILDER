@@ -3,7 +3,10 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import Descriptors, rdMolDescriptors
 
-from gmxbuilder.geometry.rdkit_lipid import build_rdkit_lipid_geometry
+from gmxbuilder.geometry.rdkit_lipid import (
+    _seed_explicit_stereochemistry,
+    build_rdkit_lipid_geometry,
+)
 from gmxbuilder.modules.forcefield.lipid_policy import lipid_rtp_name
 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 from gmxbuilder.modules.membrane.builder import _select_spread_positions
@@ -13,6 +16,30 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
     outward_orientation,
 )
 from gmxbuilder.modules.membrane.lipids import LipidRegistry
+
+
+def test_explicit_smiles_stereochemistry_seeds_rtp_ordered_coordinates():
+    smiles = "C[C@H](O)C(=O)O"
+    reference = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    target = Chem.Mol(reference)
+    for atom in target.GetAtoms():
+        atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
+    target.RemoveAllConformers()
+
+    assert _seed_explicit_stereochemistry(target, smiles, 17) is True
+    Chem.AssignAtomChiralTagsFromStructure(target, confId=0, replaceExistingTags=True)
+    Chem.AssignStereochemistry(target, cleanIt=True, force=True)
+    Chem.AssignStereochemistry(reference, cleanIt=True, force=True)
+
+    expected = [
+        atom.GetProp("_CIPCode") for atom in reference.GetAtoms()
+        if atom.HasProp("_CIPCode")
+    ]
+    observed = [
+        atom.GetProp("_CIPCode") for atom in target.GetAtoms()
+        if atom.HasProp("_CIPCode")
+    ]
+    assert observed == expected == ["S"]
 
 
 @pytest.mark.parametrize("lipid_name", ["MGDG", "DGDG"])
@@ -169,6 +196,28 @@ def test_gaff_tail_alignment_never_introduces_intramolecular_overlap():
     np.fill_diagonal(distances, np.inf)
     assert len(names) == len(coords)
     assert float(distances.min()) >= 0.05
+
+
+def test_rtp_tail_alignment_falls_back_when_it_creates_overlap(monkeypatch):
+    import gmxbuilder.geometry.rdkit_lipid as module
+
+    module._build_cached.cache_clear()
+    original = module._align_tail_subtrees
+
+    def collapsed(coords, names, rtp):
+        result = original(coords, names, rtp)
+        result[1] = result[0]
+        return result
+
+    monkeypatch.setattr(module, "_align_tail_subtrees", collapsed)
+    lipid = LipidRegistry.get("POPC")
+    coords, names = module.build_rdkit_lipid_geometry(
+        "POPC", lipid.smiles, force_field="charmm36m", seed=928,
+    )
+
+    assert not module._has_intramolecular_overlap(coords)
+    assert len(coords) == len(names)
+    module._build_cached.cache_clear()
 
 
 @pytest.mark.parametrize("lipid_name", ["POPC", "DPPC", "DOPC", "POPE", "POPG"])

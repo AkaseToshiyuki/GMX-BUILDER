@@ -132,7 +132,6 @@
     <section class="panel" id="panel-input">
       <h2>Upload Structure File</h2>
       <div id="cg-input-options" class="form-grid hidden">
-        <div class="field"><label for="cg-environment">CG system type</label><select id="cg-environment"><option value="bilayer">Flat bilayer</option><option value="solution">Protein in water</option></select></div>
         <div class="field checkbox-field"><label><input type="checkbox" id="cg-include-protein" checked> Include a protein</label><span class="hint">Clear for a protein-free bilayer. Solution mode requires a standard protein.</span></div>
         <div class="validation-warnings">Martini 3 v1 accepts standard protein residues only. Ligands, PTMs, glycans, nucleic acids, custom molecules, curved membranes, and backmapping are rejected rather than discarded.</div>
       </div>
@@ -203,18 +202,49 @@
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
+    <section class="panel" id="panel-cg_orientation">
+      <h2>Protein Orientation in Membrane</h2>
+      <p class="section-desc">Position the mapped Martini protein relative to the bilayer midplane before adding lipids.</p>
+      <div class="validation-info"><b>Automatic mode:</b> a local PPM-like transfer-free-energy scan ranks whole-protein and hydrophobic-segment axes. Grey planes mark the hydrophobic-core boundaries; inspect the result because this is not the external OPM/PPM server.</div>
+      <div class="form-grid" id="cg-orientation-controls">
+        <div class="field"><label for="cg-orientation-method">Method</label><select id="cg-orientation-method"><option value="ppm">Automatic PPM-like positioning</option><option value="manual">Manual adjustment</option></select></div>
+        <div class="field"><label for="cg-orientation-half-thickness">Hydrophobic half-thickness (nm)</label><input id="cg-orientation-half-thickness" type="number" value="1.4" min="0.8" max="2.5" step="0.1"><span class="hint">Distance from the bilayer midplane to one hydrophobic-core boundary.</span></div>
+        <div class="field cg-orientation-manual"><label for="cg-orient-rotate-x">Rotation X (°)</label><input id="cg-orient-rotate-x" type="number" value="0" min="-180" max="180"></div>
+        <div class="field cg-orientation-manual"><label for="cg-orient-rotate-y">Rotation Y (°)</label><input id="cg-orient-rotate-y" type="number" value="0" min="-180" max="180"></div>
+        <div class="field cg-orientation-manual"><label for="cg-orient-rotate-z">Rotation Z (°)</label><input id="cg-orient-rotate-z" type="number" value="0" min="-180" max="180"></div>
+        <div class="field cg-orientation-manual"><label for="cg-orient-z-offset">Z offset (nm)</label><input id="cg-orient-z-offset" type="number" value="0" min="-8" max="8" step="0.1"></div>
+      </div>
+      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-orientation-check">&#10003; Position Protein</button><span class="hint" id="cg-orientation-status"></span></div>
+      <div class="viewer-box" id="cg-orientation-viewer" style="height:360px"></div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
     <section class="panel" id="panel-cg_environment">
       <h2>CG Environment</h2>
-      <p class="section-desc">Set the periodic box, protein pose, and independent upper/lower flat-bilayer compositions.</p>
-      <div class="form-grid">
-        <div class="field"><label for="cg-box-xy">Box X/Y (nm)</label><input id="cg-box-xy" type="number" value="12" min="5" max="40" step="0.5"></div>
-        <div class="field"><label for="cg-box-z">Box Z (nm)</label><input id="cg-box-z" type="number" value="14" min="6" max="50" step="0.5"></div>
-        <div class="field"><label for="cg-rotate-x">Protein rotation X (°)</label><input id="cg-rotate-x" type="number" value="0" min="-180" max="180"></div>
-        <div class="field"><label for="cg-rotate-y">Protein rotation Y (°)</label><input id="cg-rotate-y" type="number" value="0" min="-180" max="180"></div>
-        <div class="field"><label for="cg-rotate-z">Protein rotation Z (°)</label><input id="cg-rotate-z" type="number" value="0" min="-180" max="180"></div>
-        <div class="field"><label for="cg-z-offset">Protein Z offset (nm)</label><input id="cg-z-offset" type="number" value="0" min="-8" max="8" step="0.1"></div>
-        <div class="field cg-bilayer-control"><label for="cg-upper-lipids">Upper leaflet</label><input id="cg-upper-lipids" value="POPC:100"><span class="hint">Comma-separated ratios, e.g. POPC:70,CHOL:30</span></div>
-        <div class="field cg-bilayer-control"><label for="cg-lower-lipids">Lower leaflet</label><input id="cg-lower-lipids" value="POPC:100"></div>
+      <p class="section-desc" id="cg-environment-description">Build the Martini 3 environment from explicit molecular composition.</p>
+      <div id="cg-bilayer-environment-controls">
+        <div class="form-grid">
+          <div class="field"><label for="cg-n-lipids-per-leaflet">Lipids per leaflet</label><input id="cg-n-lipids-per-leaflet" type="number" value="150" min="64" max="5000" step="10"><span class="hint">The initial periodic X/Y area is derived automatically from the exact count and a conservative composition-weighted construction area; NPT equilibration relaxes the area.</span></div>
+          <div class="field checkbox-field"><label><input id="cg-asymmetric-bilayer" type="checkbox"> Asymmetric bilayer (different composition per leaflet)</label></div>
+        </div>
+        <div class="lipid-composition">
+          <div class="leaflet-section">
+            <h4 id="cg-upper-leaflet-label">Bilayer <span class="hint">(same composition in both leaflets)</span></h4>
+            <div class="lipid-mix-list" id="cg-upper-lipid-list"></div>
+            <button type="button" class="btn add-lipid-btn cg-add-lipid-btn" data-leaflet="upper">+ Add Lipid</button>
+            <div class="lipid-count-table" id="cg-upper-lipid-counts"></div>
+          </div>
+          <div class="leaflet-section hidden" id="cg-lower-leaflet-section">
+            <h4>Lower Leaflet <span class="hint">(cytoplasmic / inner)</span></h4>
+            <div class="lipid-mix-list" id="cg-lower-lipid-list"></div>
+            <button type="button" class="btn add-lipid-btn cg-add-lipid-btn" data-leaflet="lower">+ Add Lipid</button>
+            <div class="lipid-count-table" id="cg-lower-lipid-counts"></div>
+          </div>
+        </div>
+        <div class="lipid-picker-dropdown hidden" id="cg-lipid-picker-dropdown">
+          <div class="lipid-picker-search"><input type="text" placeholder="Search Martini lipids..." id="cg-lipid-picker-search"></div>
+          <div class="lipid-picker-list" id="cg-lipid-picker-list"></div>
+        </div>
       </div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-environment-check">&#10003; Build Environment</button><span class="hint" id="cg-environment-status"></span></div>
       <div class="viewer-box" id="cg-environment-viewer" style="height:360px"></div>
@@ -223,16 +253,17 @@
 
     <section class="panel" id="panel-cg_solvation">
       <h2>CG Solvation</h2>
-      <p class="section-desc">Add regular Martini water. The preview contains only neutralizing counterions; target bulk salt is added at Final CG System.</p>
-      <div class="form-grid"><div class="field checkbox-field"><label><input id="cg-include-solvent" type="checkbox" checked> Include water and ions</label></div><div class="field"><label for="cg-salt">Target NaCl concentration (M)</label><input id="cg-salt" type="number" value="0.15" min="0" max="1" step="0.01"></div></div>
+      <p class="section-desc">Set the solvent padding and add regular Martini water. Target bulk salt is added in the next Ions step.</p>
+      <div class="form-grid"><div class="field checkbox-field"><label><input id="cg-include-solvent" type="checkbox" checked> Include Martini water</label></div><div class="field"><label for="cg-padding" id="cg-padding-label">Z padding above and below the bilayer (nm)</label><input id="cg-padding" type="number" value="2.0" min="1.0" max="8" step="0.1"><span class="hint" id="cg-padding-hint">The membrane X/Y area remains fixed by the bilayer composition.</span></div></div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-solvation-check">&#10003; Solvate</button><span class="hint" id="cg-solvation-status"></span></div>
       <div class="viewer-box" id="cg-solvation-viewer" style="height:360px"></div>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
     <section class="panel" id="panel-cg_system">
-      <h2>Final CG System</h2>
-      <p class="section-desc">Construct the exact coordinates that will be exported and enforce neutral charge, box, water, membrane orientation, and leaflet-separation checks.</p>
+      <h2>Ions &amp; Final CG System</h2>
+      <p class="section-desc">Add neutralizing ions and target bulk salt, then enforce charge, box, solvent, and membrane-quality checks on the exact export coordinates.</p>
+      <div class="form-grid"><div class="field"><label for="cg-salt">Target NaCl concentration (M)</label><input id="cg-salt" type="number" value="0.15" min="0" max="1" step="0.01"></div></div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-system-check">&#10003; Build &amp; Check Final System</button><span class="hint" id="cg-system-status"></span></div>
       <div class="viewer-box" id="cg-system-viewer" style="height:420px"></div>
       <div class="field checkbox-field"><label><input id="cg-confirm-system" type="checkbox"> I inspected and confirm this final coarse-grained system</label></div>
@@ -677,7 +708,7 @@
 <script src="/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js"></script>
 <script src="/static/constants.js?v=1"></script>
 <script src="/static/ions.js?v=10"></script>
-<script src="/static/app.js?v=63"></script>
+<script src="/static/app.js?v=68"></script>
 
 <!-- Custom Lipid Modal -->
 <div class="modal-overlay hidden" id="custom-lipid-modal">

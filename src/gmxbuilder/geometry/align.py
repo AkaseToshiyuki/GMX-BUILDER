@@ -27,9 +27,23 @@ def compute_principal_axes(
         axes[0] = longest axis, axes[1] = medium, axes[2] = shortest.
     """
     coords = np.asarray(coords, dtype=np.float64)
+    if (
+        coords.ndim != 2
+        or coords.shape[1] != 3
+        or len(coords) < 2
+        or not np.isfinite(coords).all()
+    ):
+        raise ValueError("coordinates must contain at least two finite 3D points")
     if masses is None:
         center = coords.mean(axis=0)
     else:
+        masses = np.asarray(masses, dtype=np.float64)
+        if (
+            masses.shape != (len(coords),)
+            or not np.isfinite(masses).all()
+            or np.any(masses <= 0)
+        ):
+            raise ValueError("masses must be positive finite values for every point")
         center = np.average(coords, axis=0, weights=masses)
 
     centered = coords - center
@@ -38,10 +52,45 @@ def compute_principal_axes(
 
     cov = centered.T @ centered / (len(coords) - 1)
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    if not np.isfinite(eigenvalues).all() or float(eigenvalues.max()) <= 1e-16:
+        raise ValueError("coordinates do not define a non-degenerate principal axis")
 
     # eigh returns ascending order; reverse for descending
     order = np.argsort(eigenvalues)[::-1]
     axes = eigenvectors[:, order].T
+
+    # A nearly repeated largest eigenvalue has no unique PCA direction and
+    # LAPACK implementations may return different bases.  Use a deterministic
+    # farthest-pair direction, then complete a right-handed basis against the
+    # least-aligned Cartesian axis.  This keeps identical inputs reproducible
+    # across CPU/library builds without pretending the degenerate PCA axis is
+    # physically unique.
+    ordered_values = eigenvalues[order]
+    if abs(ordered_values[0] - ordered_values[1]) <= max(
+        1e-12, 1e-8 * abs(ordered_values[0])
+    ):
+        first = int(np.lexsort((coords[:, 2], coords[:, 1], coords[:, 0]))[0])
+        second = int(np.argmax(np.sum((coords - coords[first]) ** 2, axis=1)))
+        third = int(np.argmax(np.sum((coords - coords[second]) ** 2, axis=1)))
+        principal = coords[third] - coords[second]
+        norm = float(np.linalg.norm(principal))
+        if norm <= 1e-12:
+            raise ValueError("coordinates do not define a deterministic principal axis")
+        principal /= norm
+        basis = np.eye(3)[int(np.argmin(np.abs(principal)))]
+        medium = np.cross(basis, principal)
+        medium /= np.linalg.norm(medium)
+        shortest = np.cross(principal, medium)
+        axes = np.asarray([principal, medium, shortest])
+
+    # Eigenvector signs are otherwise arbitrary.  Canonicalize each row by
+    # making its largest-magnitude component positive.
+    for axis in axes:
+        pivot = int(np.argmax(np.abs(axis)))
+        if axis[pivot] < 0:
+            axis *= -1.0
+    if np.linalg.det(axes) < 0:
+        axes[-1] *= -1.0
 
     return axes
 

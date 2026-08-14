@@ -12,6 +12,7 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
     infer_lipid_orientation,
     orient_lipid_to_outward_normal,
     outward_orientation,
+    rotate_to_opposite_leaflet,
 )
 
 
@@ -29,6 +30,32 @@ def _amphiphile():
         [0.0, 0.1, -0.9],
     ])
     return coordinates, names
+
+
+def _signed_tetrahedron(coordinates):
+    a, b, c, d = np.asarray(coordinates, dtype=float)[:4]
+    return float(np.linalg.det(np.stack([b - a, c - a, d - a])))
+
+
+def test_opposite_leaflet_rotation_preserves_handedness_and_distances():
+    coordinates = np.asarray([
+        [0.0, 0.0, 0.0],
+        [0.2, 0.0, 0.0],
+        [0.0, 0.3, 0.0],
+        [0.0, 0.0, 0.4],
+    ])
+    before = np.linalg.norm(
+        coordinates[:, None, :] - coordinates[None, :, :], axis=2
+    )
+
+    rotated = rotate_to_opposite_leaflet(coordinates)
+    after = np.linalg.norm(rotated[:, None, :] - rotated[None, :, :], axis=2)
+
+    assert np.allclose(after, before)
+    assert _signed_tetrahedron(rotated) == pytest.approx(
+        _signed_tetrahedron(coordinates)
+    )
+    assert rotated[3, 2] == pytest.approx(-coordinates[3, 2])
 
 
 @pytest.mark.parametrize("upper", [True, False])

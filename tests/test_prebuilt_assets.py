@@ -5,6 +5,11 @@ import tarfile
 
 import pytest
 
+from gmxbuilder.modules.membrane.equilibrated_library import (
+    ACCEPTED_METHOD,
+    SCHEMA_VERSION,
+    topology_signature,
+)
 from gmxbuilder.runtime.prebuilt_assets import (
     install_prebuilt_assets,
     prebuilt_asset_status,
@@ -17,8 +22,28 @@ def _fixture_bundle(tmp_path: Path) -> Path:
     gaff = source / "gaff2" / "TEST-key"
     lipid.mkdir(parents=True)
     gaff.mkdir(parents=True)
-    (lipid / "metadata.json").write_text('{"status":"ready"}')
-    (lipid / "conf_0000.npz").write_bytes(b"fixture")
+    atom_names = ["C1"]
+    (lipid / "metadata.json").write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "coordinate_handedness": "preserved",
+        "leaflet_transform": "proper_rotation",
+        "status": "ready",
+        "method": ACCEPTED_METHOD,
+        "parameter_family": "amber-gaff2",
+        "n_conformations": 20,
+        "topology_sha256": topology_signature(
+            atom_names, "amber14sb", "gaff2",
+        ),
+        "atom_names": atom_names,
+        "force_field": "amber14sb",
+        "lipid_ff": "gaff2",
+        "quality": {
+            "passed": True,
+            "orientation": {"passed": True, "n_lipids_checked": 20},
+        },
+    }))
+    for index in range(20):
+        (lipid / f"conf_{index:04d}.npz").write_bytes(b"fixture")
     (gaff / "metadata.json").write_text('{"name":"TEST"}')
     (gaff / "lipid.itp").write_text("[ atoms ]\n")
     archive_dir = tmp_path / "bundle"
@@ -31,6 +56,7 @@ def _fixture_bundle(tmp_path: Path) -> Path:
     manifest = {
         "schema_version": 1,
         "asset_version": 1,
+        "library_schema_version": SCHEMA_VERSION,
         "archive": archive.name,
         "archive_bytes": archive.stat().st_size,
         "archive_sha256": digest,
@@ -57,7 +83,7 @@ def test_prebuilt_assets_install_once_without_overwriting(tmp_path):
     )
 
     assert first["status"] == "installed"
-    assert first["installed_files"] == 3
+    assert first["installed_files"] == 22
     assert second["status"] == "ready"
     assert second["installed_files"] == 0
     assert existing.read_text() == "newer user cache"
@@ -100,3 +126,39 @@ def test_prebuilt_assets_reject_lfs_pointer(tmp_path):
             lipid_root=tmp_path / "lipids",
             gaff_root=tmp_path / "gaff",
         )
+
+
+def test_prebuilt_assets_reject_stale_library_schema(tmp_path):
+    manifest = _fixture_bundle(tmp_path)
+    data = json.loads(manifest.read_text())
+    data["library_schema_version"] = SCHEMA_VERSION - 1
+    manifest.write_text(json.dumps(data))
+
+    with pytest.raises(RuntimeError, match="strict-library schema"):
+        install_prebuilt_assets(
+            manifest_path=manifest,
+            lipid_root=tmp_path / "lipids",
+            gaff_root=tmp_path / "gaff",
+        )
+
+
+def test_prebuilt_assets_replace_stale_strict_entry_on_upgrade(tmp_path):
+    manifest = _fixture_bundle(tmp_path)
+    lipid_root = tmp_path / "cache" / "lipids"
+    stale = lipid_root / "amber-gaff2" / "TEST"
+    stale.mkdir(parents=True)
+    (stale / "metadata.json").write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION - 1,
+        "status": "ready",
+    }))
+    (stale / "obsolete.txt").write_text("old release")
+
+    result = install_prebuilt_assets(
+        manifest_path=manifest,
+        lipid_root=lipid_root,
+        gaff_root=tmp_path / "cache" / "gaff",
+    )
+
+    assert result["replaced_lipid_entries"] == 1
+    assert not (stale / "obsolete.txt").exists()
+    assert json.loads((stale / "metadata.json").read_text())["schema_version"] == SCHEMA_VERSION

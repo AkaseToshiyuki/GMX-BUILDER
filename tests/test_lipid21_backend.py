@@ -12,7 +12,10 @@ from gmxbuilder.modules.forcefield.lipid21_backend import (
     lipid21_lipids,
     load_lipid21_geometry,
 )
-from gmxbuilder.modules.forcefield.lipid_policy import amber_lipid_backend
+from gmxbuilder.modules.forcefield.lipid_policy import (
+    amber_lipid_backend,
+    amber_lipid_backend_candidates,
+)
 from gmxbuilder.modules.membrane.equilibrated_library import lipid_parameter_family
 from gmxbuilder.modules.membrane.lipid_orientation import infer_lipid_orientation
 
@@ -26,11 +29,16 @@ def test_exact_lipid21_inventory_and_nonester_exclusion():
 
 def test_amber_backend_priority_and_coherent_fallback():
     assert amber_lipid_backend(["POPC"])[0] == "lipid21"
-    blocked, reason = amber_lipid_backend(["POPC", "CHOL"])
-    assert blocked is None
-    assert "NPT starting-conformer library" in reason
+    assert amber_lipid_backend(["POPC", "CHOL"])[0] == "lipid21"
+    backend, reason = amber_lipid_backend(["POPC", "DPPE"])
+    assert backend == "gaff2"
+    assert "Lipid21 NPT library is unavailable" in reason
     assert amber_lipid_backend(["POPC", "POPI"])[0] == "gaff2"
     assert amber_lipid_backend(["POPC", "GM1"])[0] is None
+
+
+def test_amber_candidates_include_exact_and_gaff_backends():
+    assert amber_lipid_backend_candidates(["POPC", "CHOL"]) == ("lipid21",)
 
 
 def test_exact_lipid21_membrane_can_explicitly_switch_to_gaff2(monkeypatch):

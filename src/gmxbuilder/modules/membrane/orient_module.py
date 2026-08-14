@@ -237,10 +237,22 @@ class OrientModule(BaseModule):
     description = "Determine protein orientation in membrane (PPM-like or manual)"
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {"method", "z_offset", "tilt", "phi", "seed"})
+        self.validate_config_keys(
+            config,
+            {"method", "z_offset", "tilt", "phi", "half_thickness", "seed"},
+        )
         method = config.get("method", "ppm")
         if method not in ("ppm", "hmoment", "tmd", "pca", "com", "manual"):
             raise ModuleConfigError(f"Unknown orientation method: {method}")
+        if config.get("half_thickness") is not None:
+            try:
+                half_thickness = float(config["half_thickness"])
+            except (TypeError, ValueError) as exc:
+                raise ModuleConfigError("half_thickness must be a finite number") from exc
+            if not np.isfinite(half_thickness) or not 0.5 <= half_thickness <= 3.0:
+                raise ModuleConfigError(
+                    "half_thickness must be between 0.5 and 3.0 nm"
+                )
         if method == "manual":
             values: dict[str, float] = {}
             for key, default in (("tilt", 0.0), ("z_offset", 0.0), ("phi", 0.0)):
@@ -269,6 +281,11 @@ class OrientModule(BaseModule):
 
     def run(self, system: System, config: dict) -> ModuleResult:
         method = config.get("method", "ppm")
+        half_thickness = (
+            float(config["half_thickness"])
+            if config.get("half_thickness") is not None
+            else None
+        )
         has_protein = bool(system.component_by_kind(ComponentKind.PROTEIN))
         log = []
         optimal_score = None
@@ -285,7 +302,7 @@ class OrientModule(BaseModule):
                 from gmxbuilder.modules.membrane.orient import _find_best_ppm_orientation
                 from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
                 best_axis, _, _, _, _, _ = _find_best_ppm_orientation(
-                    system.structure, half_thickness=None)
+                    system.structure, half_thickness=half_thickness)
                 rot = rotation_matrix_from_vectors(best_axis, np.array([0, 0, 1]))
                 system.structure.rotate(rot)
                 # Apply manual Z offset (replaces PPM's z_offset)
@@ -307,76 +324,18 @@ class OrientModule(BaseModule):
                     f"tilt={tilt:.1f}°, phi={phi:.0f}°"
                 )
             else:
-                # Auto methods: dispatch to the correct orientation algorithm.
-                # Each algorithm returns the axis/direction to align to Z plus
-                # a Z-offset; PPM additionally returns tilt.
-                from gmxbuilder.modules.membrane.orient import (
-                    _find_best_ppm_orientation,
-                    compute_hydrophobic_moment_orientation,
-                    compute_tmd_orientation,
+                from gmxbuilder.modules.membrane.orient import apply_auto_orientation
+
+                orientation = apply_auto_orientation(
+                    system.structure,
+                    method=method,
+                    half_thickness=half_thickness,
                 )
-                from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
-                from gmxbuilder.geometry.align import orient_protein_to_membrane as _pca_orient
-
-                method = config.get("method", "ppm")
-                z_off = 0.0
-                tilt_vec = np.array([1.0, 0.0, 0.0])
-                tilt_angle = 0.0
-                phi_z = 0.0
-                aligned = False  # True once axis→Z rotation has been applied
-
-                if method == "ppm":
-                    best_axis, z_off, tilt_vec, tilt_angle, phi_z, _score = \
-                        _find_best_ppm_orientation(system.structure, half_thickness=None)
-                    optimal_score = float(_score)
-                    rot = rotation_matrix_from_vectors(best_axis, np.array([0, 0, 1]))
-                    system.structure.rotate(rot)
-                    aligned = True
-                elif method == "hmoment":
-                    z_off, moment_dir, _ = \
-                        compute_hydrophobic_moment_orientation(system.structure)
-                    rot = rotation_matrix_from_vectors(moment_dir, np.array([0, 0, 1]))
-                    system.structure.rotate(rot)
-                    aligned = True
-                elif method == "tmd":
-                    z_off, best_axis, _ = \
-                        compute_tmd_orientation(system.structure)
-                    rot = rotation_matrix_from_vectors(best_axis, np.array([0, 0, 1]))
-                    system.structure.rotate(rot)
-                    aligned = True
-                elif method == "pca":
-                    rot = _pca_orient(system.structure.coordinates, method="pca")
-                    system.structure.rotate(rot)
-                    com_z = system.structure.center_of_geometry()[2]
-                    system.structure.translate(np.array([0.0, 0.0, -com_z]))
-                    z_off = float(-com_z)
-                elif method == "com":
-                    com_z = system.structure.center_of_geometry()[2]
-                    system.structure.translate(np.array([0.0, 0.0, -com_z]))
-                    z_off = float(-com_z)
-                else:
-                    # Unknown method — fallback to ppm
-                    best_axis, z_off, tilt_vec, tilt_angle, phi_z, _score = \
-                        _find_best_ppm_orientation(system.structure, half_thickness=None)
-                    optimal_score = float(_score)
-                    rot = rotation_matrix_from_vectors(best_axis, np.array([0, 0, 1]))
-                    system.structure.rotate(rot)
-                    aligned = True
-                    log.append(f"Unknown method {method!r} — falling back to ppm")
-
-                # Apply Z-offset and tilt for methods that did axis alignment
-                if aligned:
-                    if abs(z_off) > 0.001:
-                        system.structure.translate(np.array([0.0, 0.0, z_off]))
-                    if tilt_angle > 0.01:
-                        R = rotation_matrix_from_axis_angle(tilt_vec, tilt_angle)
-                        system.structure.rotate(R)
-
-                tilt_phi = 0.0
-                if tilt_angle > 0.01:
-                    tilt_phi = float(
-                        np.mod(np.arctan2(-tilt_vec[0], tilt_vec[1]), 2 * np.pi)
-                    )
+                z_off = orientation["z_offset"]
+                tilt_angle = orientation["tilt_radians"]
+                tilt_phi = orientation["tilt_phi_radians"]
+                if np.isfinite(orientation["score"]):
+                    optimal_score = orientation["score"]
                 system.metadata["_orient_params"] = {
                     "z_offset": float(z_off),
                     "tilt": float(np.degrees(tilt_angle)),
@@ -385,7 +344,7 @@ class OrientModule(BaseModule):
                     "phi": float(np.degrees(tilt_phi)),
                 }
                 system.metadata["_orientation_azimuth_degrees"] = float(
-                    np.degrees(phi_z)
+                    np.degrees(orientation["azimuth_radians"])
                 )
                 log.append(
                     f"Auto orientation ({method}): "
@@ -394,11 +353,17 @@ class OrientModule(BaseModule):
             # Mark as oriented — MembraneBuilder will skip re-orientation
             system.metadata["_oriented"] = True
             system.metadata["_orientation_method"] = method
+            system.metadata["_orientation_half_thickness_nm"] = (
+                float(half_thickness) if half_thickness is not None else 1.4
+            )
             if optimal_score is None:
                 system.metadata.pop("_orientation_optimal_score", None)
             else:
                 system.metadata["_orientation_optimal_score"] = optimal_score
-            quality = assess_membrane_orientation(system)
+            quality = assess_membrane_orientation(
+                system,
+                half_thickness=(half_thickness if half_thickness is not None else 1.4),
+            )
             system.metadata["_orientation_quality"] = quality
             if quality.get("tm_bundle_tilt_degrees") is not None:
                 log.append(

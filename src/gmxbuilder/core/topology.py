@@ -106,6 +106,7 @@ class Topology:
     exclusions: list[set[int]] = field(default_factory=list)
     molecule_blocks: list[MoleculeBlock] = field(default_factory=list)
     force_field: str = ""
+    atom_count: int | None = None
 
     def assign_atom_types(self, types: list[AtomType]) -> None:
         self.atom_types = types
@@ -142,7 +143,8 @@ class Topology:
 
     def merge(self, other: Topology) -> Topology:
         """Combine two topologies. Returns self with *other* appended."""
-        offset = len(self.atom_types)
+        offset = self.num_atoms()
+        combined_count = offset + other.num_atoms()
         other.reindex(offset)
         self.atom_types.extend(other.atom_types)
         self.bonds.extend(other.bonds)
@@ -152,7 +154,28 @@ class Topology:
         self.pairs.extend(other.pairs)
         self.exclusions.extend(other.exclusions)
         self.molecule_blocks.extend(other.molecule_blocks)
+        self.atom_count = combined_count
         return self
+
+    def num_atoms(self) -> int:
+        """Return the topology's atom count without assuming atom-type density."""
+        if self.atom_count is not None:
+            if self.atom_count < 0:
+                raise ValueError("topology atom_count cannot be negative")
+            return int(self.atom_count)
+        indices: list[int] = []
+        for bond in self.bonds:
+            indices.extend((bond.i, bond.j))
+        for angle in self.angles:
+            indices.extend((angle.i, angle.j, angle.k))
+        for term in (*self.dihedrals, *self.impropers):
+            indices.extend((term.i, term.j, term.k, term.l))
+        for pair in self.pairs:
+            indices.extend((pair.i, pair.j))
+        for block in self.molecule_blocks:
+            indices.extend(block.atom_indices)
+        inferred = max(indices, default=-1) + 1
+        return max(len(self.atom_types), inferred)
 
     def num_atom_types(self) -> int:
         return len(self.atom_types)

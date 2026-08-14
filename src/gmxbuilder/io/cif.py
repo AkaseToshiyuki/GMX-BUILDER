@@ -63,6 +63,48 @@ class CIFParser:
             ]
         else:
             rows = all_rows
+
+        selected: dict[tuple[str, str, str, str], tuple[int, tuple[float, int]]] = {}
+        for row_idx in rows:
+            base = row_idx * len(atom_fields)
+            insertion = self._str(
+                atom_data, base, col, "pdbx_PDB_ins_code", ""
+            ).strip()
+            if insertion not in {"", ".", "?"}:
+                chain = self._preferred_str(
+                    atom_data, base, col, ("auth_asym_id", "label_asym_id"), "?"
+                )
+                resid = self._preferred_str(
+                    atom_data, base, col, ("auth_seq_id", "label_seq_id"), "?"
+                )
+                raise ParseError(
+                    "mmCIF insertion codes are not yet representable in the integer "
+                    f"residue model (chain {chain} residue {resid}{insertion}); "
+                    "renumber residues uniquely before upload"
+                )
+            atom_name = self._preferred_str(
+                atom_data, base, col, ("auth_atom_id", "label_atom_id"), ""
+            )
+            resname = self._preferred_str(
+                atom_data, base, col, ("auth_comp_id", "label_comp_id"), "UNK"
+            )
+            chain = self._preferred_str(
+                atom_data, base, col, ("auth_asym_id", "label_asym_id"), ""
+            )
+            resid = self._preferred_str(
+                atom_data, base, col, ("auth_seq_id", "label_seq_id"), ""
+            )
+            altloc = self._str(atom_data, base, col, "label_alt_id", "").strip()
+            if altloc in {".", "?"}:
+                altloc = ""
+            occupancy = self._float(atom_data, base, col, "occupancy", 1.0)
+            preference = 2 if not altloc else 1 if altloc == "A" else 0
+            key = (chain, resid, resname, atom_name)
+            rank = (occupancy, preference)
+            previous = selected.get(key)
+            if previous is None or rank > previous[1]:
+                selected[key] = (row_idx, rank)
+        rows = sorted(row_idx for row_idx, _rank in selected.values())
         n_atoms = len(rows)
         if n_atoms == 0:
             raise ParseError("Empty _atom_site loop")
@@ -278,8 +320,8 @@ class CIFParser:
         ga = np.radians(gamma or 90.0)
 
         # Convert to triclinic box vectors
-        cos_al, sin_al = np.cos(al), np.sin(al)
-        cos_be, sin_be = np.cos(be), np.sin(be)
+        cos_al = np.cos(al)
+        cos_be = np.cos(be)
         cos_ga, sin_ga = np.cos(ga), np.sin(ga)
 
         v1 = np.array([a_nm, 0.0, 0.0])

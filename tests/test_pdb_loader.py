@@ -1,12 +1,15 @@
 """Regression tests for the first pipeline stage: PDB Loader."""
 
 import numpy as np
+import pytest
 
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.exceptions import ParseError
 from gmxbuilder.modules.input.pdb_input import PDBInputModule
 from gmxbuilder.pipeline.step_executor import _compute_step_metrics
+from gmxbuilder.io.pdb import PDBParser, PDBWriter
 
 
 def _empty_system(metadata=None):
@@ -17,6 +20,70 @@ def _empty_system(metadata=None):
         ),
         metadata=metadata or {},
     )
+
+
+def test_blank_element_column_respects_pdb_atom_name_alignment(tmp_path):
+    pdb = tmp_path / "blank-elements.pdb"
+    pdb.write_text(
+        "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+        "ATOM      2  CD  GLU A   2       1.000   0.000   0.000  1.00  0.00\n"
+        "ATOM      3 1HG1 VAL A   3       2.000   0.000   0.000  1.00  0.00\n"
+        "HETATM    4 CL   CL  B   4       3.000   0.000   0.000  1.00  0.00\n"
+        "HETATM    5 FE   HEM B   5       4.000   0.000   0.000  1.00  0.00\n"
+        "END\n"
+    )
+
+    structure = PDBParser().parse(pdb)
+
+    assert structure.elements == ["C", "C", "H", "CL", "FE"]
+
+
+def test_pdb_writer_rejects_identifier_overflow_unless_viewer_wrap_is_explicit(
+    tmp_path,
+):
+    structure = Structure(
+        coordinates=np.zeros((1, 3)),
+        box_vectors=np.eye(3),
+        atom_names=["CA"],
+        resnames=["ALA"],
+        resids=[10000],
+        chain_ids=["A"],
+        elements=["C"],
+    )
+    output = tmp_path / "overflow.pdb"
+
+    with pytest.raises(ValueError, match="fixed-width PDB"):
+        PDBWriter.write(structure, output)
+    assert not output.exists()
+
+    PDBWriter.write(structure, output, wrap_ids_for_viewer=True)
+    assert output.is_file()
+
+
+def test_pdb_parser_selects_highest_occupancy_alternate_location(tmp_path):
+    pdb = tmp_path / "altloc.pdb"
+    pdb.write_text(
+        "ATOM      1  CA AALA A   1       1.000   0.000   0.000  0.40  0.00           C\n"
+        "ATOM      2  CA BALA A   1       2.000   0.000   0.000  0.60  0.00           C\n"
+        "ATOM      3  C   ALA A   1       3.000   0.000   0.000  1.00  0.00           C\n"
+        "END\n"
+    )
+
+    structure = PDBParser().parse(pdb)
+
+    assert structure.atom_names == ["CA", "C"]
+    assert structure.coordinates[0, 0] == pytest.approx(0.2)
+
+
+def test_pdb_parser_rejects_insertion_codes_instead_of_merging_residues(tmp_path):
+    pdb = tmp_path / "insertion.pdb"
+    pdb.write_text(
+        "ATOM      1  CA  ALA A  10A      1.000   0.000   0.000  1.00  0.00           C\n"
+        "END\n"
+    )
+
+    with pytest.raises(ParseError, match="insertion codes"):
+        PDBParser().parse(pdb)
 
 
 def test_pdb_loader_preserves_build_metadata_and_centers_solute(small_pdb_file):

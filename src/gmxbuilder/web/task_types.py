@@ -31,23 +31,51 @@ class TaskType:
 
 _TASK_TYPES: list[TaskType] = [
     TaskType(
-        id="coarse-grained",
+        id="martini3-bilayer",
         category="Coarse Grained",
-        title="Martini 3 Builder",
-        description="Build Martini 3 protein solution, pure bilayer, or protein/bilayer systems",
+        title="Martini 3 Bilayer Builder",
+        description="Build a Martini 3 protein/bilayer complex or protein-free bilayer",
         icon="🧬",
         enabled=True,
-        pipeline="coarse_grained",
+        pipeline="martini_bilayer",
         requires_input=False,
-        route_slug="CoarseGrainedBuilder",
-        required_modules=["input", "cg_model", "cg_mapping", "cg_environment", "cg_solvation", "cg_system"],
-        visible_modules=["input", "cg_model", "cg_mapping", "cg_environment", "cg_solvation", "cg_system", "simparams"],
+        route_slug="Martini3BilayerBuilder",
+        required_modules=["input", "cg_model", "cg_mapping", "cg_orientation", "cg_environment", "cg_solvation", "cg_system"],
+        visible_modules=["input", "cg_model", "cg_mapping", "cg_orientation", "cg_environment", "cg_solvation", "cg_system", "simparams"],
         default_config={
             "input": {"include_protein": True, "environment": "bilayer"},
             "cg_model": {"model": "martini3", "water_model": "W"},
             "cg_mapping": {"protein_model": "folded", "secondary_structure": "auto", "elastic": True},
-            "cg_environment": {"box_xy": 12.0, "box_z": 14.0},
-            "cg_solvation": {"include_solvent": True, "salt_molarity": 0.15},
+            "cg_orientation": {"method": "ppm", "half_thickness": 1.4},
+            "cg_environment": {
+                "n_lipids_per_leaflet": 150,
+                "upper_leaflet": [{"name": "POPC", "ratio": 100}],
+                "lower_leaflet": [{"name": "POPC", "ratio": 100}],
+                "asymmetric": False,
+            },
+            "cg_solvation": {"include_solvent": True, "padding_nm": 2.0},
+            "cg_system": {"salt_molarity": 0.15},
+        },
+    ),
+    TaskType(
+        id="martini3-solvent",
+        category="Coarse Grained",
+        title="Martini 3 Solvent Builder",
+        description="Map a standard protein and build a solvated Martini 3 system",
+        icon="💧",
+        enabled=True,
+        pipeline="martini_solvent",
+        requires_input=True,
+        route_slug="Martini3SolventBuilder",
+        required_modules=["input", "cg_model", "cg_mapping", "cg_environment", "cg_solvation", "cg_system"],
+        visible_modules=["input", "cg_model", "cg_mapping", "cg_environment", "cg_solvation", "cg_system", "simparams"],
+        default_config={
+            "input": {"include_protein": True, "environment": "solution"},
+            "cg_model": {"model": "martini3", "water_model": "W"},
+            "cg_mapping": {"protein_model": "folded", "secondary_structure": "auto", "elastic": True},
+            "cg_environment": {},
+            "cg_solvation": {"include_solvent": True, "padding_nm": 1.5},
+            "cg_system": {"salt_molarity": 0.15},
         },
     ),
     TaskType(
@@ -173,7 +201,6 @@ _TASK_TYPES: list[TaskType] = [
     #   databases and will be re-added when the data is ready.
     # Nanomaterial: no implementation plan — very niche.
 ]
-
 
 def get_all_task_types() -> list[dict]:
     """Return all task types as dictionaries for the API."""

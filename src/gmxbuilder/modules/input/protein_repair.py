@@ -95,10 +95,10 @@ def _protein_residue_groups(
     return groups
 
 
-def find_repairable_missing_atoms(
+def assess_repairable_missing_atoms(
     structure: Structure,
-) -> dict[tuple[str, int, str], tuple[str, ...]]:
-    """Return conservative repair candidates or raise for ambiguous damage."""
+) -> tuple[dict[tuple[str, int, str], tuple[str, ...]], list[str]]:
+    """Return safe repair candidates and separately reported blockers."""
     candidates: dict[tuple[str, int, str], tuple[str, ...]] = {}
     blockers: list[str] = []
 
@@ -142,6 +142,20 @@ def find_repairable_missing_atoms(
             continue
         candidates[key] = tuple(missing)
 
+    return candidates, blockers
+
+
+def find_repairable_missing_atoms(
+    structure: Structure,
+) -> dict[tuple[str, int, str], tuple[str, ...]]:
+    """Return conservative repair candidates or raise for ambiguous damage.
+
+    This strict public helper is retained for callers that require a fully
+    repairable structure.  The upload workflow uses
+    :func:`assess_repairable_missing_atoms` so one ambiguous residue does not
+    prevent independent, safe side-chain repairs elsewhere in the protein.
+    """
+    candidates, blockers = assess_repairable_missing_atoms(structure)
     if blockers:
         preview = "; ".join(blockers[:10])
         suffix = f"; and {len(blockers) - 10} more" if len(blockers) > 10 else ""
@@ -310,9 +324,19 @@ def _validate_repair(
 
 def repair_standard_protein_heavy_atoms(
     structure: Structure,
+    *,
+    allow_partial_damage: bool = False,
 ) -> tuple[Structure, list[RepairRecord]]:
     """Repair safe standard-residue omissions with PDBFixer/OpenMM."""
-    candidates = find_repairable_missing_atoms(structure)
+    candidates, blockers = assess_repairable_missing_atoms(structure)
+    if blockers and not allow_partial_damage:
+        preview = "; ".join(blockers[:10])
+        suffix = f"; and {len(blockers) - 10} more" if len(blockers) > 10 else ""
+        raise ModuleConfigError(
+            "Protein damage requires user review: " + preview + suffix
+            + ". Automatic repair is limited to complete backbones with an unbroken "
+              "partial side chain. Upload a repaired model for ambiguous residues."
+        )
     if not candidates:
         return structure, []
 

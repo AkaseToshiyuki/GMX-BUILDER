@@ -14,12 +14,14 @@ import numpy as np
 from gmxbuilder.core.system import System
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.component import Component
+from gmxbuilder.core.chemistry import PROTEIN_RESNAMES, is_hydrogen
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 from gmxbuilder.io.pdb import PDBParser
 from gmxbuilder.modules import register_module
 from gmxbuilder.modules.input.protein_repair import (
+    assess_repairable_missing_atoms,
     repair_report,
     repair_standard_protein_heavy_atoms,
 )
@@ -33,74 +35,14 @@ from gmxbuilder.modules.input.modification_detection import (
 # for the lightweight display filter (no file I/O, no Structure dependency).
 # ---------------------------------------------------------------------------
 
-def _is_hydrogen(atom_name: str, element: str) -> bool:
-    """Return True if *atom_name* / *element* describes a hydrogen atom."""
-    name = (atom_name or "").strip()
-    if not name:
-        return False
-    if (element or "").strip().upper() == "H":
-        return True
-    # Common hydrogen naming: H, HA, HB, HG*, HD*, HE*, HZ*, HH*, 1H, 2H, …
-    # Exclude genuine elements: HE (helium), HG (mercury), HF (hafnium)
-    if len(name) >= 1 and name[0] == "H" and len(name) <= 4:
-        if name.upper() not in ("HE", "HG", "HF", "HO", "HS"):
-            return True
-    # CHARMM convention: digit-prefixed hydrogens (1H, 2H, 3H …)
-    if len(name) >= 2 and name[-1] == "H" and name[:-1].isdigit():
-        return True
-    return False
+_is_hydrogen = is_hydrogen
 
 
 # ---------------------------------------------------------------------------
 # Residue-name classification sets
 # ---------------------------------------------------------------------------
 
-# Standard protein residues + all common modifications / protonation variants.
-# Expanded set ensures that rare PTMs and D-amino acids are recognised as
-# PROTEIN rather than dumped into UNKNOWN — critical for the chain/molecule
-# selector in the web UI and for correct downstream topology assignment.
-_PROTEIN_RESNAMES = {
-    # ── standard 20 ──────────────────────────────────────────────────────
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS",
-    "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP",
-    "TYR", "VAL",
-    # ── protonation / tautomer variants ──────────────────────────────────
-    "ASH", "GLH",                 # ASP / GLU protonated
-    "CYX", "CYM",                 # CYS disulfide / deprotonated
-    "HID", "HIE", "HIP",          # HIS tautomers (CHARMM)
-    "HSD", "HSE", "HSP",          # HIS tautomers (AMBER)
-    "LYN",                        # LYS neutral
-    # ── seleno / pyrro ───────────────────────────────────────────────────
-    "MSE",                        # selenomethionine
-    "SEC",                        # selenocysteine
-    "PYL",                        # pyrrolysine
-    # ── D-amino acids ────────────────────────────────────────────────────
-    "DAL", "DAR", "DAS", "DCY", "DGL", "DGN", "DHI", "DIL", "DLE",
-    "DLY", "DME", "DPN", "DPR", "DSG", "DSN", "DTH", "DTR", "DTY",
-    "DVA",
-    # ── phosphorylated ───────────────────────────────────────────────────
-    "SEP", "TPO", "PTR", "S1P", "T1P", "Y1P", "ALY", "CIR", "CSO", "CSX", "TYS",
-    # ── methylated / acetylated lysine ───────────────────────────────────
-    "ALY", "SLY", "CLY", "MLY", "CRY", "BLY", "PLY", "GRY",
-    "KME", "KM2", "KM3", "RME", "RM2",
-    "MLZ", "MLY", "M3L", "MLU", "2MR", "DA2",
-    # ── oxidized cysteine ────────────────────────────────────────────────
-    "CSO", "CSD", "CSX", "CSN", "CSW", "CSS", "SNC", "SMC", "OCS",
-    # ── other modifications ──────────────────────────────────────────────
-    "ACE", "NME", "NMA",         # termini caps
-    "PCA", "HYP", "LYZ",          # pyroglutamate / hydroxy amino acids
-    "ORN",                        # ornithine
-    "FME",                        # N-formyl methionine
-    "KCX", "NIY", "OAS", "SME", # carboxylated/nitrated/acetylated/oxidized
-    "CME",                        # carboxymethyl cysteine
-    "LLP",                        # conjugated lysine (retinal Schiff base)
-    "YCM",                        # modified tyrosine
-    "DHA",                        # dehydroalanine
-    # ── lipid-modified ───────────────────────────────────────────────────
-    "CIR", "MYR", "TYS",
-    # ── saccharide-linked / other ────────────────────────────────────────
-    "SAC", "TAC", "GCS", "GCT", "GPL", "WOH", "FOR",
-}
+_PROTEIN_RESNAMES = PROTEIN_RESNAMES
 
 _WATER_RESNAMES = {"HOH", "SOL", "WAT", "TIP", "TIP3", "SPC", "SPCE", "DOD"}
 
@@ -279,8 +221,12 @@ class PDBInputModule(BaseModule):
         # Only complete standard-residue backbones with an unbroken partial
         # side chain are eligible.  Missing loops/backbone atoms and
         # disconnected fragments remain explicit errors.
-        structure, repair_records = repair_standard_protein_heavy_atoms(structure)
+        _repair_candidates, repair_blockers = assess_repairable_missing_atoms(structure)
+        structure, repair_records = repair_standard_protein_heavy_atoms(
+            structure, allow_partial_damage=True
+        )
         repair_metadata = repair_report(repair_records)
+        repair_metadata["unrepairable_warnings"] = list(repair_blockers)
         if repair_records:
             log.append(
                 "Automatic protein heavy-atom repair: "
@@ -294,6 +240,16 @@ class PDBInputModule(BaseModule):
                     f"added {','.join(record.added_atoms)}"
                 )
             log.append("Repair validation passed: " + repair_metadata["validation"])
+        if repair_blockers:
+            log.append(
+                f"Protein repair warnings ({len(repair_blockers)}): ambiguous damage "
+                "was preserved for user review; simulation topology remains blocked "
+                "until these residues are repaired."
+            )
+            for warning in repair_blockers[:10]:
+                log.append(f"  • {warning}")
+            if len(repair_blockers) > 10:
+                log.append(f"  • and {len(repair_blockers) - 10} more")
 
         # ---- 3c. Center solute at origin ----
         # Downstream steps (orient, membrane, solvation) all assume the

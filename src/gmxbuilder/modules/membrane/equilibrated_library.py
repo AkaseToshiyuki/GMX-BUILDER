@@ -1,8 +1,8 @@
 """Force-field-specific, validated lipid conformer library.
 
 Only conformers extracted from an explicit-solvent, semi-isotropic NPT
-bilayer are accepted.  The older ``lipid_conformations`` directory contains
-geometric bootstrap structures and is deliberately not searched here.
+bilayer are accepted. Geometry-only bootstrap structures are deliberately
+excluded.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MIN_CONFORMERS = 20
 ACCEPTED_METHOD = "explicit_solvent_semiisotropic_npt"
 
@@ -158,6 +158,8 @@ class EquilibratedLipidLibrary:
             orientation = quality.get("orientation", {})
             valid = (
                 metadata.get("schema_version") == SCHEMA_VERSION
+                and metadata.get("coordinate_handedness") == "preserved"
+                and metadata.get("leaflet_transform") == "proper_rotation"
                 and metadata.get("status") == "ready"
                 and metadata.get("method") == ACCEPTED_METHOD
                 and metadata.get("parameter_family") == expected_family
@@ -254,7 +256,7 @@ class EquilibratedLipidLibrary:
     def coverage(self, force_fields: list[str] | None = None) -> list[dict]:
         """Return all scientifically compatible built-in library jobs."""
         from gmxbuilder.modules.forcefield.lipid_policy import (
-            amber_lipid_backend,
+            amber_lipid_backend_candidates,
             charmm_lipid_capability,
         )
         from gmxbuilder.modules.membrane.lipids import LipidRegistry
@@ -266,8 +268,10 @@ class EquilibratedLipidLibrary:
         for force_field in fields:
             for lipid_name in LipidRegistry.list():
                 if force_field.startswith("amber"):
-                    lipid_ff, _reason = amber_lipid_backend([lipid_name])
-                    compatible = lipid_ff not in {None, "none"}
+                    lipid_backends = list(
+                        amber_lipid_backend_candidates([lipid_name])
+                    )
+                    compatible = bool(lipid_backends)
                 else:
                     lipid_ff = force_field
                     compatible = charmm_lipid_capability(
@@ -275,13 +279,18 @@ class EquilibratedLipidLibrary:
                     )[0]
                 if not compatible:
                     continue
-                jobs.append({
-                    "lipid_name": lipid_name,
-                    "force_field": force_field,
-                    "lipid_ff": lipid_ff,
-                    "parameter_family": lipid_parameter_family(force_field, lipid_ff),
-                    "ready": self.has(lipid_name, force_field, lipid_ff),
-                })
+                backends = (
+                    lipid_backends if force_field.startswith("amber")
+                    else [lipid_ff]
+                )
+                for lipid_ff in backends:
+                    jobs.append({
+                        "lipid_name": lipid_name,
+                        "force_field": force_field,
+                        "lipid_ff": lipid_ff,
+                        "parameter_family": lipid_parameter_family(force_field, lipid_ff),
+                        "ready": self.has(lipid_name, force_field, lipid_ff),
+                    })
         return jobs
 
 

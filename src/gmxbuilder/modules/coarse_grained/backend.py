@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from gmxbuilder.core.exceptions import ModuleConfigError
+from gmxbuilder.io.gro import GROReader
 from gmxbuilder.modules.coarse_grained.assets import materialize_assets
 from gmxbuilder.modules.coarse_grained.common import (
     coby_lipid_tokens,
@@ -32,11 +33,9 @@ def _finite_number(value: object, label: str, low: float, high: float) -> float:
     return number
 
 
-def normalize_environment(config: dict, metadata: dict) -> dict:
+def normalize_environment(config: dict, metadata: dict, coordinates=None) -> dict:
     environment = str(metadata.get("cg_environment", config.get("environment", "bilayer"))).lower()
     include_protein = metadata.get("cg_include_protein", True) is True
-    box_xy = _finite_number(config.get("box_xy", 12.0), "Box XY", 5.0, 40.0)
-    box_z = _finite_number(config.get("box_z", 14.0 if environment == "bilayer" else 12.0), "Box Z", 6.0, 50.0)
     rotations = {
         axis: _finite_number(config.get(f"rotate_{axis}", 0.0), f"Rotation {axis.upper()}", -180.0, 180.0)
         for axis in "xyz"
@@ -53,37 +52,108 @@ def normalize_environment(config: dict, metadata: dict) -> dict:
     normalized = {
         "environment": environment,
         "include_protein": include_protein,
-        "box_xy": box_xy,
-        "box_z": box_z,
         "rotate_x": rotations["x"],
         "rotate_y": rotations["y"],
         "rotate_z": rotations["z"],
         "z_offset": z_offset,
         "seed": seed,
     }
+    protein_extent = np.zeros(3, dtype=float)
+    if include_protein and coordinates is not None:
+        protein_coordinates = np.asarray(coordinates, dtype=float)
+        if (
+            protein_coordinates.ndim != 2
+            or protein_coordinates.shape[1] != 3
+            or not np.isfinite(protein_coordinates).all()
+        ):
+            raise ModuleConfigError("Mapped protein coordinates are invalid")
+        if len(protein_coordinates):
+            centered = protein_coordinates - protein_coordinates.mean(axis=0)
+            angles = [math.radians(rotations[axis]) for axis in "xyz"]
+            cx, cy, cz = (math.cos(value) for value in angles)
+            sx, sy, sz = (math.sin(value) for value in angles)
+            rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+            ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+            rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+            protein_extent = np.ptp(centered @ (rx @ ry @ rz).T, axis=0)
+    normalized["protein_extent_nm"] = protein_extent.tolist()
     if environment == "bilayer":
         upper = normalize_composition(
             config.get("upper_leaflet", [{"name": "POPC", "ratio": 1}]), label="Upper"
         )
         asymmetric = strict_bool(config, "asymmetric", False)
+        if asymmetric and "lower_leaflet" not in config:
+            raise ModuleConfigError(
+                "Asymmetric bilayer mode requires an explicit lower-leaflet composition"
+            )
         lower = normalize_composition(
-            config.get("lower_leaflet", upper if asymmetric else [
+            config.get("lower_leaflet", [
                 {"name": item["name"], "ratio": item["ratio"]} for item in upper
             ]),
             label="Lower",
         )
-        normalized.update({"upper_leaflet": upper, "lower_leaflet": lower, "asymmetric": asymmetric})
+        if not asymmetric and lower != upper:
+            raise ModuleConfigError(
+                "Lower-leaflet composition differs from the upper leaflet; "
+                "enable asymmetric bilayer mode to use it"
+            )
+        raw_count = config.get("n_lipids_per_leaflet", 150)
+        if isinstance(raw_count, bool):
+            raise ModuleConfigError("Lipids per leaflet must be an integer")
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError) as exc:
+            raise ModuleConfigError("Lipids per leaflet must be an integer") from exc
+        if count != raw_count or not 64 <= count <= 5000:
+            raise ModuleConfigError("Lipids per leaflet must be an integer from 64 to 5000")
+        from gmxbuilder.modules.coarse_grained.assets import load_manifest
+
+        lipid_manifest = load_manifest()["lipids"]
+        upper_apl = sum(item["ratio"] * lipid_manifest[item["name"]]["apl_nm2"] for item in upper)
+        lower_apl = sum(item["ratio"] * lipid_manifest[item["name"]]["apl_nm2"] for item in lower)
+        weighted_apl = 0.5 * (upper_apl + lower_apl)
+        protein_xy_area = float(max(protein_extent[0], protein_extent[1]) ** 2)
+        # The box is server-derived.  Keep the explicit leaflet packing area,
+        # but always add the same three-nanometre total protein clearance that
+        # the PBC safety gate requires.  Previously Z used only 1 nm and then
+        # immediately failed its own 3 nm validator.
+        required_xy = float(max(protein_extent[0], protein_extent[1])) + 3.0
+        required_z = float(protein_extent[2]) + 2.0 * abs(z_offset) + 3.0
+        box_xy = max(math.sqrt(count * weighted_apl + protein_xy_area), required_xy, 5.0)
+        dry_box_z = max(6.0, required_z)
+        normalized.update({
+            "upper_leaflet": upper,
+            "lower_leaflet": lower,
+            "asymmetric": asymmetric,
+            "n_lipids_per_leaflet": count,
+            "weighted_apl_nm2": weighted_apl,
+            "box_xy": box_xy,
+            "box_z": dry_box_z,
+            "dry_box_z": dry_box_z,
+        })
+    elif environment == "solution":
+        padding = 1.5
+        box_xy = max(float(max(protein_extent[0], protein_extent[1])) + 2.0 * padding, 5.0)
+        box_z = max(float(protein_extent[2]) + 2.0 * abs(z_offset) + 2.0 * padding, 6.0)
+        normalized.update({
+            "box_xy": box_xy,
+            "box_z": box_z,
+            "dry_box_z": box_z,
+        })
+    else:
+        raise ModuleConfigError("environment must be solution or bilayer")
     return normalized
 
 
 def validate_protein_box(system, environment: dict, *, clearance_nm: float = 3.0) -> None:
-    """Reject a PBC box that would make COBY wrap a rotated mapped protein.
+    """Expand a server-derived PBC box before COBY can wrap the protein.
 
     COBY rotates centered coordinates in X/Y/Z order and then wraps them into
     the requested rectangular cell.  Three nanometres of total clearance also
     covers its internal bead-radius placement margin.  A wrapped protein can
-    look fragmented and is not a safe starting structure, so validation must
-    happen before COBY.
+    look fragmented and is not a safe starting structure, so the automatic
+    dimensions are reconciled with the actual transformed coordinates before
+    COBY.  Users never need to supply the physical box size.
     """
     if not environment.get("include_protein", True) or system.num_atoms == 0:
         return
@@ -101,21 +171,15 @@ def validate_protein_box(system, environment: dict, *, clearance_nm: float = 3.0
     extent = np.ptp(rotated, axis=0)
     required_xy = float(max(extent[0], extent[1]) + clearance_nm)
     required_z = float(extent[2] + 2.0 * abs(float(environment["z_offset"])) + clearance_nm)
-    failures = []
+    adjustments = {}
     if float(environment["box_xy"]) + 1e-9 < required_xy:
-        failures.append(
-            f"Box X/Y {environment['box_xy']:.2f} nm is smaller than the rotated protein "
-            f"extent ({max(extent[0], extent[1]):.2f} nm); use at least {required_xy:.2f} nm"
-        )
+        adjustments["box_xy"] = [float(environment["box_xy"]), required_xy]
+        environment["box_xy"] = required_xy
     if float(environment["box_z"]) + 1e-9 < required_z:
-        failures.append(
-            f"Box Z {environment['box_z']:.2f} nm is smaller than the positioned protein "
-            f"extent ({extent[2]:.2f} nm); use at least {required_z:.2f} nm"
-        )
-    if failures:
-        raise ModuleConfigError(
-            "; ".join(failures) + ". Increase the box to prevent periodic wrapping of the protein"
-        )
+        adjustments["box_z"] = [float(environment["box_z"]), required_z]
+        environment["box_z"] = required_z
+    if adjustments:
+        environment["automatic_box_adjustments"] = adjustments
 
 
 def normalize_solvation(config: dict, metadata: dict) -> dict:
@@ -124,7 +188,14 @@ def normalize_solvation(config: dict, metadata: dict) -> dict:
     if environment == "solution" and not include:
         raise ModuleConfigError("Solution-phase Martini systems require solvent")
     salt = _finite_number(config.get("salt_molarity", 0.15), "Salt concentration", 0.0, 1.0)
-    return {"include_solvent": include, "salt_molarity": salt, "water_model": "W"}
+    default_padding = 2.0 if environment == "bilayer" else 1.5
+    padding = _finite_number(config.get("padding_nm", default_padding), "Solvent padding", 1.0, 8.0)
+    return {
+        "include_solvent": include,
+        "salt_molarity": salt,
+        "padding_nm": padding,
+        "water_model": "W",
+    }
 
 
 def _materialize_inputs(system, config: dict, work: Path) -> tuple[list[str], str | None]:
@@ -182,6 +253,79 @@ def _materialize_inputs(system, config: dict, work: Path) -> tuple[list[str], st
     return itp_input, protein_arg
 
 
+def _integer_leaflet_composition(entries: list[dict], total: int) -> dict[str, int]:
+    """Allocate an exact leaflet count with deterministic largest remainders."""
+    exact = [(str(item["name"]), float(item["ratio"]) * total) for item in entries]
+    counts = {name: int(math.floor(value)) for name, value in exact}
+    remainder = total - sum(counts.values())
+    ranked = sorted(exact, key=lambda item: (-(item[1] - math.floor(item[1])), item[0]))
+    for name, _value in ranked[:remainder]:
+        counts[name] += 1
+    return counts
+
+
+def _membrane_command(environment: dict, corrections: dict | None = None) -> str:
+    """Build one COBY bilayer command, including optional exact-count offsets."""
+    corrections = corrections or {}
+    parts = ["params:LTF", "leaflet:upper", *coby_lipid_tokens(environment["upper_leaflet"])]
+    for name, value in sorted(dict(corrections.get("upper") or {}).items()):
+        if int(value):
+            parts.append(
+                f"lipid_extra:name:{name}:extra_type:absolute:extra_val:{int(value)}"
+            )
+    parts.extend(["leaflet:lower", *coby_lipid_tokens(environment["lower_leaflet"])])
+    for name, value in sorted(dict(corrections.get("lower") or {}).items()):
+        if int(value):
+            parts.append(
+                f"lipid_extra:name:{name}:extra_type:absolute:extra_val:{int(value)}"
+            )
+    parts.extend(["leaflet:membrane", "protein_buffer:0.264", "kick:0.02"])
+    return " ".join(parts)
+
+
+def _built_leaflet_counts(builder) -> dict[str, dict[str, int]]:
+    """Read final per-leaflet counts from the pinned COBY builder state."""
+    membranes = getattr(builder, "MEMBRANES", None)
+    if not isinstance(membranes, dict) or len(membranes) != 1:
+        raise ModuleConfigError("COBY did not expose one completed bilayer")
+    membrane = next(iter(membranes.values()))
+    leaflets = membrane.get("leaflets") if isinstance(membrane, dict) else None
+    if not isinstance(leaflets, dict):
+        raise ModuleConfigError("COBY did not expose completed leaflet counts")
+    result: dict[str, dict[str, int]] = {}
+    for public_name, coby_name in (("upper", "upper_leaf"), ("lower", "lower_leaf")):
+        leaflet = leaflets.get(coby_name)
+        counts = leaflet.get("leaf_lipid_count_dict") if isinstance(leaflet, dict) else None
+        if not isinstance(counts, dict):
+            raise ModuleConfigError(f"COBY did not expose the {public_name}-leaflet count")
+        result[public_name] = {str(name): int(value) for name, value in counts.items()}
+    return result
+
+
+def _leaflet_count_corrections(environment: dict, actual: dict) -> dict[str, dict[str, int]]:
+    total = int(environment["n_lipids_per_leaflet"])
+    desired = {
+        "upper": _integer_leaflet_composition(environment["upper_leaflet"], total),
+        "lower": _integer_leaflet_composition(environment["lower_leaflet"], total),
+    }
+    corrections: dict[str, dict[str, int]] = {"upper": {}, "lower": {}}
+    for leaflet in ("upper", "lower"):
+        if set(actual[leaflet]) - set(desired[leaflet]):
+            unexpected = ", ".join(sorted(set(actual[leaflet]) - set(desired[leaflet])))
+            raise ModuleConfigError(
+                f"COBY generated unexpected {leaflet}-leaflet lipid type(s): {unexpected}"
+            )
+        corrections[leaflet] = {
+            name: desired[leaflet][name] - int(actual[leaflet].get(name, 0))
+            for name in desired[leaflet]
+        }
+    return corrections
+
+
+def _has_corrections(corrections: dict[str, dict[str, int]]) -> bool:
+    return any(value for leaflet in corrections.values() for value in leaflet.values())
+
+
 def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) -> tuple[Path, Path, str]:
     """Build one deterministic stage and return GRO, topology and COBY log."""
     try:
@@ -208,28 +352,70 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
     }
     if protein_arg:
         kwargs["protein"] = protein_arg
+    existing_corrections = dict(env.get("lipid_count_corrections") or {})
     if env.get("environment") == "bilayer":
-        upper = " ".join(coby_lipid_tokens(env["upper_leaflet"]))
-        lower = " ".join(coby_lipid_tokens(env["lower_leaflet"]))
-        kwargs["membrane"] = " ".join([
-            "params:LTF", f"leaflet:upper {upper}", f"leaflet:lower {lower}",
-            "leaflet:membrane protein_buffer:0.264 kick:0.02",
-        ])
+        kwargs["membrane"] = _membrane_command(env, existing_corrections)
     if solvate and solv.get("include_solvent", True):
         salt = float(solv.get("salt_molarity", 0.15)) if final_salt else 0.0
         kwargs["solvation"] = f"solv:W pos:NA neg:CL salt_molarity:{salt:g}"
 
     output_capture = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(output_capture), contextlib.redirect_stderr(output_capture):
-            COBY(**kwargs)
-    except (AssertionError, KeyError, OSError, TypeError, ValueError) as exc:
-        detail = str(exc).strip() or exc.__class__.__name__
-        raise ModuleConfigError(f"COBY system construction failed: {detail}") from exc
+
+    def _run_coby():
+        try:
+            with contextlib.redirect_stdout(output_capture), contextlib.redirect_stderr(output_capture):
+                return COBY(**kwargs)
+        except (AssertionError, KeyError, OSError, TypeError, ValueError) as exc:
+            detail = str(exc).strip() or exc.__class__.__name__
+            raise ModuleConfigError(f"COBY system construction failed: {detail}") from exc
+
+    builder = _run_coby()
+    if env.get("environment") == "bilayer":
+        actual = _built_leaflet_counts(builder)
+        residual = _leaflet_count_corrections(env, actual)
+        if _has_corrections(residual):
+            combined = {
+                leaflet: {
+                    name: int(dict(existing_corrections.get(leaflet) or {}).get(name, 0)) + delta
+                    for name, delta in residual[leaflet].items()
+                }
+                for leaflet in ("upper", "lower")
+            }
+            for name in ("system.gro", "topol.top", "coby.log"):
+                (work / name).unlink(missing_ok=True)
+            kwargs["membrane"] = _membrane_command(env, combined)
+            builder = _run_coby()
+            actual = _built_leaflet_counts(builder)
+            final_residual = _leaflet_count_corrections(env, actual)
+            if _has_corrections(final_residual):
+                details = "; ".join(
+                    f"{leaflet}={sum(actual[leaflet].values())}"
+                    for leaflet in ("upper", "lower")
+                )
+                raise ModuleConfigError(
+                    "COBY could not satisfy the requested exact leaflet counts after "
+                    f"deterministic correction ({details})"
+                )
+            env["lipid_count_corrections"] = combined
+            system.metadata["cg_environment_config"] = env
     gro = work / "system.gro"
     top = work / "topol.top"
     if not gro.is_file() or not top.is_file():
         raise ModuleConfigError("COBY completed without coordinate and topology outputs")
+    built_structure = GROReader().read(gro)
+    try:
+        fractional = built_structure.coordinates @ np.linalg.inv(
+            built_structure.box_vectors
+        )
+    except np.linalg.LinAlgError as exc:
+        raise ModuleConfigError("COBY produced a singular periodic box") from exc
+    outside = np.any((fractional < -1e-5) | (fractional >= 1.0 + 1e-5), axis=1)
+    if np.any(outside):
+        raise ModuleConfigError(
+            f"COBY produced {int(np.count_nonzero(outside))} bead(s) outside the "
+            "primary periodic cell. Increase the box dimensions or reduce the "
+            "protein offset; wrapped output was rejected."
+        )
     # COBY must receive absolute inputs because the Web process cannot safely
     # change its process-wide cwd.  Convert emitted includes back to package-
     # relative paths before persisting; exports must be portable and must not
@@ -238,9 +424,4 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
     topology_text = topology_text.replace(str(work) + "/", "")
     top.write_text(topology_text, encoding="utf-8")
     log = (work / "coby.log").read_text(encoding="utf-8", errors="replace") if (work / "coby.log").is_file() else output_capture.getvalue()
-    if protein_arg and "Protein beads are outside pbc" in log:
-        raise ModuleConfigError(
-            "COBY detected mapped protein beads outside the periodic box. "
-            "Increase the box dimensions or reduce the protein offset; wrapped protein coordinates were rejected"
-        )
     return gro, top, log

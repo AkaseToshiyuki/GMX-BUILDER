@@ -47,11 +47,6 @@ class ProtonationState:
     charge: int         # net sidechain charge
     description: str    # human-readable
 
-    @property
-    def is_default(self) -> bool:
-        return self.residue_name == self.description.split("→")[0].strip()
-
-
 _TITRATABLE_STATES: dict[str, list[ProtonationState]] = {
     "HIS": [
         ProtonationState("HSD", 0, "Neutral (proton on Nδ)"),
@@ -176,6 +171,7 @@ def assign_protonation(
         "state_label": state.description,
         "pKa": round(pka_val, 1),
         "is_titratable": True,
+        "ambiguous_at_pka": abs(float(pH) - pka_val) < 1e-9,
         "alternatives": [
             {"name": s.residue_name, "charge": s.charge, "label": s.description}
             for s in states
@@ -226,10 +222,12 @@ def get_charge_adjustment(
     Returns dict with original_charge, new_charge, delta, and per-residue details.
     """
     assignments = assign_all_protonations(original_residues, pH=pH)
-    original_charge = 0  # default charge at pH 7 (can be refined)
+    reference_assignments = assign_all_protonations(original_residues, pH=7.0)
+    original_charge = compute_net_charge_from_protonation(reference_assignments)
     new_charge = compute_net_charge_from_protonation(assignments)
     return {
         "assignments": assignments,
+        "reference_pH": 7.0,
         "original_charge": original_charge,
         "new_charge": new_charge,
         "delta": new_charge - original_charge,
@@ -278,7 +276,11 @@ def predict_pka_from_pdb(pdb_path: str | Path) -> list[dict]:
             normalized_lines.append(line)
         tmp_pdb.write_text("".join(normalized_lines))
 
-        # Try 'propka3' first, then 'propka'
+        # Try 'propka3' first, then 'propka'.  A command that starts but exits
+        # non-zero is a calculation failure; never parse its possibly partial
+        # .pka file as if it were complete.
+        failures: list[str] = []
+        executable_found = False
         for cmd in ["propka3", "propka"]:
             try:
                 result = subprocess.run(
@@ -288,18 +290,27 @@ def predict_pka_from_pdb(pdb_path: str | Path) -> list[dict]:
                     text=True,
                     timeout=120,
                 )
+                executable_found = True
                 if result.returncode == 0:
                     break
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+                detail = (result.stderr or result.stdout or "no diagnostic output").strip()
+                failures.append(f"{cmd} exited {result.returncode}: {detail[:300]}")
+            except FileNotFoundError:
                 continue
+            except subprocess.TimeoutExpired:
+                executable_found = True
+                failures.append(f"{cmd} timed out after 120 seconds")
         else:
-            # Neither command found
+            if executable_found:
+                raise RuntimeError("PROPKA calculation failed: " + "; ".join(failures))
+            # Neither command is installed; the caller can explicitly report
+            # that model-pKa fallback is being used.
             return []
 
         # Find the .pka output file
         pka_files = list(Path(tmpdir).glob("*.pka"))
         if not pka_files:
-            return []
+            raise RuntimeError("PROPKA completed without producing a .pka result file")
 
         predictions = _parse_propka_output(pka_files[0])
 

@@ -79,6 +79,17 @@ def test_public_mode_requires_complete_auth_tls_proxy_and_https_origins(monkeypa
     assert any("https://" in error for error in config.errors)
 
 
+def test_liveness_survives_invalid_public_security_configuration(monkeypatch):
+    monkeypatch.setenv("GMXBUILDER_DEPLOYMENT_MODE", "public")
+    monkeypatch.delenv("GMXBUILDER_AUTH_USER", raising=False)
+    monkeypatch.delenv("GMXBUILDER_AUTH_PASSWORD", raising=False)
+    monkeypatch.delenv("GMXBUILDER_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("GMXBUILDER_TRUSTED_PROXIES", raising=False)
+    with TestClient(server.app, base_url="http://testserver") as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/api/task-types").status_code == 503
+
+
 def test_public_mode_auth_https_origin_and_liveness(monkeypatch, tmp_path):
     _public_environment(monkeypatch, tmp_path)
     monkeypatch.setattr(server, "task_manager", TaskManager(tmp_path / "tasks"))
@@ -113,6 +124,30 @@ def test_public_mode_auth_https_origin_and_liveness(monkeypatch, tmp_path):
             json={"task_type": "pure-membrane"},
         )
         assert response.status_code == 200
+
+
+def test_json_body_limit_rejects_declared_and_chunked_requests(monkeypatch):
+    monkeypatch.setenv("GMXBUILDER_JSON_BODY_LIMIT", "64")
+    with TestClient(server.app) as client:
+        declared = client.post(
+            "/api/tasks",
+            content=b"x" * 65,
+            headers={"Content-Type": "application/json"},
+        )
+
+        def chunks():
+            yield b'{"task_type":"'
+            yield b"x" * 80
+            yield b'"}'
+
+        chunked = client.post(
+            "/api/tasks",
+            content=chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert declared.status_code == 413
+    assert chunked.status_code == 413
 
 
 def test_forwarded_client_and_proto_are_used_only_from_trusted_proxy(monkeypatch):

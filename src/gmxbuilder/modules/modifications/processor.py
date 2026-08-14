@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from gmxbuilder.core.chemistry import is_hydrogen
+
 from gmxbuilder.core.topology import Bond, Topology
 from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
@@ -192,10 +194,7 @@ def _validate_protein_heavy_atoms(system: System, force_field: str) -> None:
 
 
 def _is_hydrogen_name(name: str) -> bool:
-    stripped = name.strip().upper()
-    return stripped.startswith("H") or (
-        len(stripped) > 1 and stripped[0].isdigit() and stripped[1] == "H"
-    )
+    return is_hydrogen(name)
 
 
 def _remap_system_atoms(system: System, keep: list[int]) -> None:

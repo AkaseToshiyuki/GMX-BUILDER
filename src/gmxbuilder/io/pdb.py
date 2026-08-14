@@ -6,10 +6,11 @@ Coordinates are converted from Angstroms (PDB) to nanometers (internal).
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 import numpy as np
+
+from gmxbuilder.core.chemistry import PROTEIN_RESNAMES
 
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import ParseError
@@ -50,25 +51,25 @@ def format_pdb_atom_name(atom_name: str, element: str) -> str:
     return f"{name:<4s}"
 
 
+def _infer_element_from_atom_field(atom_field: str) -> str:
+    """Infer an element without discarding PDB atom-name alignment.
+
+    A leading blank or digit denotes a one-letter element (``" CA "`` is an
+    alpha carbon and ``"1HG1"`` is hydrogen).  A left-aligned alphabetic name
+    may denote a two-letter element such as ``"CL  "`` or ``"FE  "``.
+    """
+    field = str(atom_field)[:4].ljust(4)
+    letters = "".join(character for character in field if character.isalpha())
+    if not letters:
+        return ""
+    if field[0].isspace() or field[0].isdigit():
+        return letters[0].upper()
+    candidate = letters[:2].upper()
+    return candidate if candidate in _ELEMENTS else letters[0].upper()
+
+
 # Standard protein residue names (20 standard + common variants)
-_PROTEIN_RESNAMES = {
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-    # Protonation variants
-    "ASH", "GLH", "CYX", "CYM", "HID", "HIE", "HIP", "HSD", "HSE", "HSP", "LYN",
-    # Termini (ACE=acetyl, NME/NMA=N-methylamide, NH2=C-terminal amide)
-    "ACE", "NME", "NMA", "NH2",
-    # PTM / non-standard
-    "MSE", "SEC", "PYL", "PTR", "SEP", "TPO", "S1P", "T1P", "Y1P", "ALY", "CIR",
-    "CSO", "CSX", "TYS", "PCA", "HYP",
-    "ALY", "SLY", "CLY", "MLY", "CRY", "BLY", "PLY", "GRY",
-    "KME", "KM2", "KM3", "RME", "RM2",
-    "MLZ", "M3L", "2MR", "DA2", "KCX", "SNC", "SMC", "OCS", "OAS", "NIY",
-    "SME", "LYZ",
-    "CSO", "CSD", "CSX", "CSN", "CIR", "MYR", "TYS",
-    "SAC", "TAC", "GCS", "GCT", "GPL", "WOH", "FOR",
-    "UNK",
-}
+_PROTEIN_RESNAMES = PROTEIN_RESNAMES
 # Common solvent / buffer / ion residue names
 _SOLVENT_IONS = {
     "HOH", "SOL", "WAT", "TIP", "TIP3", "SPC", "SPCE", "DOD",
@@ -195,6 +196,28 @@ class PDBParser:
         if not atoms:
             raise ParseError(f"No atoms found in PDB file: {path}")
 
+        insertion = next((atom for atom in atoms if atom["icode"]), None)
+        if insertion is not None:
+            raise ParseError(
+                "PDB insertion codes are not yet representable in the integer residue "
+                f"model (chain {insertion['chain'] or '?'} residue "
+                f"{insertion['resid']}{insertion['icode']}); renumber residues uniquely "
+                "before upload"
+            )
+
+        # Resolve explicit alternate locations before constructing Structure.
+        # Highest occupancy wins; blank and then A are deterministic tie-breaks.
+        selected: dict[tuple[str, int, str, str], tuple[int, tuple[float, int]]] = {}
+        for index, atom in enumerate(atoms):
+            key = (atom["chain"], atom["resid"], atom["resname"], atom["name"])
+            preference = 2 if not atom["altloc"] else 1 if atom["altloc"] == "A" else 0
+            rank = (float(atom["occupancy"]), preference)
+            previous = selected.get(key)
+            if previous is None or rank > previous[1]:
+                selected[key] = (index, rank)
+        keep_indices = sorted(index for index, _rank in selected.values())
+        atoms = [atoms[index] for index in keep_indices]
+
         n = len(atoms)
         coords = np.zeros((n, 3), dtype=np.float64)
         atom_names = [""] * n
@@ -296,7 +319,8 @@ class PDBParser:
                 # Accept hybrid-36/overflow labels instead of rejecting an
                 # otherwise valid large structure.
                 serial = 0
-            name = line[12:16].strip()
+            atom_field = line[12:16]
+            name = atom_field.strip()
             altloc = line[16:17].strip()
             resname = line[17:20].strip()
             chain = line[21:22].strip() if len(line) > 21 else ""
@@ -332,12 +356,7 @@ class PDBParser:
 
             # Fallback: derive element from atom name
             if not element and name:
-                element = name.lstrip("0123456789 ")[:2].strip()
-                # Compare uppercase — prevents Fe→F, Cl→C, Ca→C misidentification
-                if element.upper() not in _ELEMENTS:
-                    element = element[0].upper()
-                else:
-                    element = element.upper()
+                element = _infer_element_from_atom_field(atom_field)
 
             return {
                 "serial": serial,
@@ -404,6 +423,16 @@ class PDBWriter:
         coords = structure.coordinates
         box = structure.box_vectors
         dims = np.sqrt((box ** 2).sum(axis=1))
+        if not wrap_ids_for_viewer:
+            invalid_resids = [
+                int(resid) for resid in structure.resids
+                if int(resid) < -999 or int(resid) > 9999
+            ]
+            if structure.num_atoms > 99999 or invalid_resids:
+                raise ValueError(
+                    "Structure exceeds fixed-width PDB atom/residue identifier limits; "
+                    "use GRO/mmCIF for simulation data or explicit viewer wrapping"
+                )
 
         with open(path, "w") as fh:
             # Title
@@ -412,7 +441,7 @@ class PDBWriter:
                 fh.write(f"COMPND    {title[:50]}\n")
 
             # REMARK
-            fh.write(f"REMARK    Generated by GMXBUILDER\n")
+            fh.write("REMARK    Generated by GMXBUILDER\n")
             if wrap_ids_for_viewer and structure.num_atoms > 99999:
                 fh.write(
                     "REMARK    Atom/residue identifiers wrap at PDB field limits; "
@@ -482,11 +511,13 @@ class PDBValidator:
         except Exception as e:
             return {"valid": False, "errors": [f"Cannot read file: {e}"], "warnings": []}
 
-        lines = [l for l in content.split("\n") if l.strip()]
+        lines = [line for line in content.split("\n") if line.strip()]
         if not lines:
             return {"valid": False, "errors": ["File is empty"], "warnings": []}
 
-        atom_hetatm_lines = [l for l in lines if l[:6].strip() in ("ATOM", "HETATM")]
+        atom_hetatm_lines = [
+            line for line in lines if line[:6].strip() in ("ATOM", "HETATM")
+        ]
         if not atom_hetatm_lines:
             errors.append("No ATOM or HETATM records found — file contains no atomic coordinates")
 
@@ -496,7 +527,7 @@ class PDBValidator:
         coord_x: list[float] = []
         coord_y: list[float] = []
         coord_z: list[float] = []
-        has_cryst1 = any(l[:6].strip() == "CRYST1" for l in lines)
+        has_cryst1 = any(line[:6].strip() == "CRYST1" for line in lines)
 
         for line in atom_hetatm_lines:
             try:
@@ -593,7 +624,11 @@ class PDBValidator:
         except (ParseError, OSError, ValueError):
             polymer_residues = {}
         content = path.read_text()
-        lines = [l for l in content.split("\n") if l[:6].strip() in ("ATOM", "HETATM")]
+        lines = [
+            line
+            for line in content.split("\n")
+            if line[:6].strip() in ("ATOM", "HETATM")
+        ]
 
         # Group by (resname, chain, resid)
         groups: dict[tuple[str, str, int], list[tuple[str, str]]] = {}

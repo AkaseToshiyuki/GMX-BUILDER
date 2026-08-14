@@ -13,18 +13,20 @@ from fastapi.testclient import TestClient
 from click.testing import CliRunner
 
 from gmxbuilder.app import main
+from gmxbuilder.core.component import Component
+from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
 from gmxbuilder.modules.coarse_grained import (
-    CGEnvironmentModule,
     CGExportModule,
-    CGInputModule,
-    CGMappingModule,
-    CGModelModule,
-    CGSolvationModule,
     CGSystemCheckModule,
-    CGTopologyModule,
 )
-from gmxbuilder.modules.coarse_grained.assets import public_capabilities, verify_assets
+from gmxbuilder.modules.coarse_grained.assets import (
+    load_manifest,
+    public_capabilities,
+    verify_assets,
+)
 from gmxbuilder.modules.coarse_grained.backend import (
     normalize_environment,
     normalize_solvation,
@@ -32,34 +34,44 @@ from gmxbuilder.modules.coarse_grained.backend import (
 )
 from gmxbuilder.modules.coarse_grained.common import normalize_composition
 from gmxbuilder.modules.coarse_grained.protocol import normalize_protocol
+from gmxbuilder.modules.martini3_bilayer.orientation import CGOrientationModule
 from gmxbuilder.pipeline.step_executor import StepRunner, _get_module, get_pipeline_steps
 from gmxbuilder.web import server
 from gmxbuilder.web.server import app, task_manager
-from gmxbuilder.web.task_types import get_task_type
+from gmxbuilder.web.task_types import get_all_task_types, get_task_type
 
 
-def test_coarse_grained_task_and_modules_are_independent():
-    task = get_task_type("coarse-grained")
-    assert task is not None and task.enabled and not task.requires_input
-    assert task.pipeline == "coarse_grained"
-    assert get_pipeline_steps("coarse-grained") == [
+def test_martini_task_types_and_workflow_modules_are_independent():
+    bilayer = get_task_type("martini3-bilayer")
+    solvent = get_task_type("martini3-solvent")
+    assert bilayer is not None and bilayer.enabled and not bilayer.requires_input
+    assert bilayer.pipeline == "martini_bilayer"
+    assert solvent is not None and solvent.enabled and solvent.requires_input
+    assert solvent.pipeline == "martini_solvent"
+    advertised = {item["id"] for item in get_all_task_types()}
+    assert {"martini3-bilayer", "martini3-solvent"} <= advertised
+    assert "coarse-grained" not in advertised
+    bilayer_steps = [
+        "input", "cg_model", "cg_mapping", "cg_orientation",
+        "cg_environment", "cg_solvation", "cg_system", "topology", "export",
+    ]
+    solvent_steps = [
         "input", "cg_model", "cg_mapping", "cg_environment",
         "cg_solvation", "cg_system", "topology", "export",
     ]
-    expected = {
-        "input": CGInputModule,
-        "cg_model": CGModelModule,
-        "cg_mapping": CGMappingModule,
-        "cg_environment": CGEnvironmentModule,
-        "cg_solvation": CGSolvationModule,
-        "cg_system": CGSystemCheckModule,
-        "topology": CGTopologyModule,
-        "export": CGExportModule,
-    }
-    for step, module_type in expected.items():
-        module = _get_module(step, "coarse-grained")
-        assert isinstance(module, module_type)
-        assert module.__class__.__module__.startswith("gmxbuilder.modules.coarse_grained")
+    assert get_pipeline_steps("martini3-bilayer") == bilayer_steps
+    assert get_pipeline_steps("martini3-solvent") == solvent_steps
+    for pipeline, expected in (
+        ("martini3-bilayer", bilayer_steps), ("martini3-solvent", solvent_steps),
+    ):
+        classes = []
+        for step in expected:
+            module = _get_module(step, pipeline)
+            assert module.__class__.__module__.startswith(
+                f"gmxbuilder.modules.{pipeline.replace('-', '_')}"
+            )
+            classes.append(module.__class__)
+        assert len(set(classes)) == len(expected)
 
 
 def test_martini_assets_and_public_boundaries_are_explicit():
@@ -70,8 +82,12 @@ def test_martini_assets_and_public_boundaries_are_explicit():
     assert capabilities["ready"] is True
     assert capabilities["force_field"] == "Martini 3.0.0"
     assert {item["name"] for item in capabilities["lipids"]} >= {
-        "POPC", "POPE", "POPG", "POPS", "CHOL",
+        "POPC", "POPE", "POPG", "POPS", "CHOL", "DLPC", "DAPE", "SAPS", "BSM",
     }
+    assert len(capabilities["lipids"]) >= 170
+    # An exact PE topology is not enough by itself: the pinned COBY release
+    # lacks an OAPE LTF placement scaffold, so it must not be advertised.
+    assert "OAPE" not in {item["name"] for item in capabilities["lipids"]}
     assert capabilities["boundaries"] == {
         "standard_protein_residues": True,
         "elastic_network": True,
@@ -80,6 +96,33 @@ def test_martini_assets_and_public_boundaries_are_explicit():
         "curved_membranes": False,
         "backmapping": False,
     }
+    for lipid, definition in load_manifest()["lipids"].items():
+        assert definition["head_beads"], lipid
+        assert definition["midplane_beads"], lipid
+        assert definition["tail_beads"], lipid
+
+
+def test_cg_input_ignores_crystallographic_water_explicitly(tmp_path):
+    pdb = tmp_path / "protein_with_water.pdb"
+    pdb.write_text(
+        "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\n"
+        "HETATM    2  O   HOH A 101       5.000   5.000   5.000  1.00  0.00           O\n"
+        "END\n",
+        encoding="utf-8",
+    )
+    runner = StepRunner(tmp_path / "task", pipeline_type="martini3-solvent")
+
+    result = runner.run_step("input", {
+        "pdb": str(pdb),
+        "include_protein": True,
+        "environment": "solution",
+    })
+
+    assert result["status"] == "ok", result
+    system = runner.load_system("input")
+    assert system is not None
+    assert system.structure.resnames == ["ALA"]
+    assert any("Ignored 1 crystallographic water" in line for line in result["log"])
 
 
 def test_composition_and_protocol_reject_silent_scientific_drift():
@@ -106,6 +149,22 @@ def test_composition_and_protocol_reject_silent_scientific_drift():
     assert normalize_protocol(protocol, has_membrane=True) == protocol
     assert protocol["eq1_timestep_fs"] == 10.0
     assert protocol["production_timestep_fs"] == 20.0
+
+
+def test_asymmetric_bilayer_requires_an_explicit_lower_leaflet():
+    with pytest.raises(ModuleConfigError, match="explicit lower-leaflet"):
+        normalize_environment(
+            {"asymmetric": True}, {"cg_environment": "bilayer"}
+        )
+    with pytest.raises(ModuleConfigError, match="enable asymmetric"):
+        normalize_environment(
+            {
+                "asymmetric": False,
+                "upper_leaflet": [{"name": "POPC", "ratio": 1}],
+                "lower_leaflet": [{"name": "POPE", "ratio": 1}],
+            },
+            {"cg_environment": "bilayer"},
+        )
     with pytest.raises(ModuleConfigError, match="include_solvent must be true or false"):
         normalize_solvation({"include_solvent": "false"}, {"cg_environment": "bilayer"})
     with pytest.raises(ModuleConfigError, match="asymmetric must be true or false"):
@@ -123,13 +182,51 @@ def test_rotated_protein_must_fit_periodic_box_before_coby_wraps_it():
         structure=SimpleNamespace(coordinates=coordinates),
     )
     environment = normalize_environment(
-        {"box_xy": 12.0, "box_z": 14.0},
+        {},
         {"cg_environment": "solution", "cg_include_protein": True},
+        coordinates,
     )
-    with pytest.raises(ModuleConfigError, match="periodic wrapping"):
-        validate_protein_box(system, environment)
-    environment["box_xy"] = 18.0
+    environment["box_xy"] = 12.0
     validate_protein_box(system, environment)
+    assert environment["box_xy"] == pytest.approx(18.0)
+    assert environment["box_z"] == pytest.approx(6.0)
+    assert environment["automatic_box_adjustments"]
+    validate_protein_box(system, environment)
+
+
+def test_cg_orientation_keeps_detected_tm_segment_in_membrane_core(tmp_path):
+    helix = np.column_stack((np.linspace(-3.6, 3.6, 19), np.zeros(19), np.zeros(19)))
+    soluble = np.asarray([
+        [0.2 * (index % 7), 2.0 + 0.25 * (index // 7), 2.5 + 0.08 * (index % 5)]
+        for index in range(42)
+    ])
+    coordinates = np.vstack((helix, soluble))
+    names = ["LEU"] * len(helix) + ["GLU"] * len(soluble)
+    structure = Structure(
+        coordinates=coordinates,
+        box_vectors=np.eye(3) * 20.0,
+        atom_names=["BB"] * len(coordinates),
+        resnames=names,
+        resids=list(range(1, len(coordinates) + 1)),
+        chain_ids=["A"] * len(coordinates),
+        elements=["C"] * len(coordinates),
+    )
+    system = System(
+        structure=structure,
+        components=[Component(
+            name="Martini 3 Protein", kind=ComponentKind.PROTEIN,
+            atom_indices=np.arange(len(coordinates), dtype=np.int64),
+        )],
+        metadata={"cg_environment": "bilayer", "cg_include_protein": True},
+    )
+    result = CGOrientationModule().execute(system, {
+        "method": "ppm", "half_thickness": 1.4,
+        "_task_dir": str(tmp_path), "_step_dir": str(tmp_path / "step"),
+    })
+    metrics = result.system.metadata["cg_orientation"]
+    assert metrics["tm_window_residues"] >= 15
+    assert metrics["tm_core_fraction"] >= 0.65
+    assert (tmp_path / "step" / "oriented_protein.pdb").is_file()
 
 
 def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkeypatch):
@@ -139,7 +236,7 @@ def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkey
         capabilities = client.get("/api/coarse-grained/capabilities")
         assert capabilities.status_code == 200
         assert capabilities.json()["ready"] is True
-        created = client.post("/api/tasks", json={"task_type": "coarse-grained"})
+        created = client.post("/api/tasks", json={"task_type": "martini3-bilayer"})
         assert created.status_code == 200
         task_id = created.json()["task_id"]
         checked = client.post(
@@ -156,9 +253,9 @@ def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkey
                 "protein_model": "folded", "secondary_structure": "auto",
                 "elastic": True,
             },
+            "cg_orientation": {"method": "ppm", "half_thickness": 1.4},
             "cg_environment": {
-                "environment": "bilayer", "box_xy": 5.0, "box_z": 8.0,
-                "seed": 99, "asymmetric": False,
+                "seed": 99, "asymmetric": False, "n_lipids_per_leaflet": 64,
                 "upper_leaflet": [{"name": "POPC", "ratio": 1}],
             },
             "cg_solvation": {"include_solvent": False, "salt_molarity": 0.15},
@@ -169,7 +266,7 @@ def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkey
             assert response.status_code == 200, response.text
             assert response.json()["status"] == "ok", response.text
 
-        runner = server._get_step_runner(task_id, "coarse-grained")
+        runner = server._get_step_runner(task_id, "martini3-bilayer")
         before = runner.load_system("cg_system")
         assert before is not None and before.metadata["system_confirmed"] is False
         exact_coordinates = np.array(before.structure.coordinates, copy=True)
@@ -202,6 +299,8 @@ def test_coarse_grained_frontend_keeps_step_validation_and_viewer_confirmation_s
     assert 'id="cg-mapping-controls"' in template
     assert "Execution Hardware" in template
     assert 'class="btn primary cg-check-button" id="cg-mapping-check"' in template
+    assert 'id="panel-cg_orientation"' in template
+    assert 'id="cg-orientation-check"' in template
     assert "stepName !== 'cg_mapping'" in app_source
 
 
@@ -210,16 +309,87 @@ def _run(runner: StepRunner, step: str, config: dict) -> None:
     assert result["status"] == "ok", result
 
 
+def _write_glycine_hairpin(path: Path) -> None:
+    lines: list[str] = []
+    serial = 1
+    ca_points = np.asarray([
+        [0.00, 0.00], [3.80, 0.00], [7.60, 0.00], [11.40, 0.00],
+        [11.40, 3.80], [7.60, 3.80], [3.80, 3.80], [0.00, 3.80],
+    ])
+    for index, ca in enumerate(ca_points):
+        previous = ca_points[max(0, index - 1)]
+        following = ca_points[min(len(ca_points) - 1, index + 1)]
+        tangent = following - previous
+        tangent = tangent / np.linalg.norm(tangent)
+        normal = np.asarray([-tangent[1], tangent[0]])
+        for name, element, xy in (
+            ("N", "N", ca - 1.45 * tangent),
+            ("CA", "C", ca),
+            ("C", "C", ca + 1.45 * tangent),
+            ("O", "O", ca + 1.45 * tangent + normal),
+        ):
+            lines.append(
+                f"ATOM  {serial:5d} {name:^4s} GLY A{index + 1:4d}    "
+                f"{xy[0]:8.3f}{xy[1]:8.3f}{0.0:8.3f}{1.0:6.2f}{0.0:6.2f}          "
+                f"{element:>2s}"
+            )
+            serial += 1
+    path.write_text("\n".join(lines) + "\nEND\n", encoding="utf-8")
+
+
+def test_real_martinize_and_coby_solution_protein_path(tmp_path):
+    """Exercise the previously uncovered atomistic-to-CG protein path."""
+    pdb = tmp_path / "gly_hairpin.pdb"
+    _write_glycine_hairpin(pdb)
+    runner = StepRunner(tmp_path / "task", pipeline_type="martini3-solvent")
+    _run(runner, "input", {
+        "pdb": str(pdb), "include_protein": True, "environment": "solution",
+    })
+    _run(runner, "cg_model", {"model": "martini3", "water_model": "W"})
+    _run(runner, "cg_mapping", {
+        "protein_model": "folded",
+        "secondary_structure": "manual",
+        "secondary_structure_string": "HHHHHHHH",
+        "elastic": True,
+        "elastic_lower": 0.3,
+        "elastic_upper": 0.9,
+    })
+    mapped = runner.load_system("cg_mapping")
+    assert mapped is not None
+    assert mapped.component_by_kind(ComponentKind.PROTEIN)
+    assert mapped.metadata["cg_mapping"]["beads"] == 8
+    assert mapped.metadata["cg_mapping"]["elastic_network"] is True
+    topology_text = "\n".join(mapped.metadata["cg_topology_texts"].values())
+    assert "Rubber band" in topology_text or "RUBBER" in topology_text.upper()
+    _run(runner, "cg_environment", {
+        "seed": 2718,
+    })
+    _run(runner, "cg_solvation", {
+        "include_solvent": True, "salt_molarity": 0.15,
+    })
+    _run(runner, "cg_system", {
+        "salt_molarity": 0.15, "confirm_system": False,
+    })
+    final = runner.load_system("cg_system")
+    assert final is not None
+    quality = final.metadata["cg_scientific_check"]
+    assert quality["passed"] is True
+    assert quality["net_charge_e"] == pytest.approx(0.0, abs=1e-5)
+    assert quality["actual_salt_molarity"] == pytest.approx(0.15, abs=0.02)
+    assert final.component_by_kind(ComponentKind.PROTEIN)
+
+
 def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
     """Run the pinned builder, not a mock, across the complete pure-bilayer path."""
-    runner = StepRunner(tmp_path / "task", pipeline_type="coarse-grained")
+    runner = StepRunner(tmp_path / "task", pipeline_type="martini3-bilayer")
     _run(runner, "input", {"include_protein": False, "environment": "bilayer"})
     _run(runner, "cg_model", {"model": "martini3", "water_model": "W"})
     _run(runner, "cg_mapping", {
         "protein_model": "folded", "secondary_structure": "auto", "elastic": True,
     })
+    _run(runner, "cg_orientation", {"method": "ppm", "half_thickness": 1.4})
     _run(runner, "cg_environment", {
-        "environment": "bilayer", "box_xy": 6.0, "box_z": 10.0, "seed": 1729,
+        "seed": 1729, "n_lipids_per_leaflet": 64,
         "asymmetric": True,
         "upper_leaflet": [
             {"name": "POPC", "ratio": 3}, {"name": "CHOL", "ratio": 1},
@@ -238,6 +408,8 @@ def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
     assert quality["net_charge_e"] == pytest.approx(0.0, abs=1e-5)
     assert quality["actual_salt_molarity"] == pytest.approx(0.15, abs=0.02)
     assert quality["bilayer_orientation"]["correct_fraction"] >= 0.98
+    assert quality["bilayer_orientation"]["upper_leaflet_lipids"] == 64
+    assert quality["bilayer_orientation"]["lower_leaflet_lipids"] == 64
     assert 2.5 <= quality["bilayer_orientation"]["headgroup_separation_nm"] <= 6.0
     assert quality["solvent_layers"]["water_beads_below"] >= 10
     assert quality["solvent_layers"]["water_beads_above"] >= 10
@@ -273,11 +445,16 @@ def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
             assert not member.startswith("/") and ".." not in Path(member).parts
 
 
-def test_coarse_grained_cli_builds_dry_bilayer_package(tmp_path):
+def test_coarse_grained_cli_builds_dry_bilayer_package(tmp_path, monkeypatch):
     output = tmp_path / "cli-output"
+
+    def unexpected_validation(*_args, **_kwargs):
+        raise AssertionError("dry geometry export must not require GROMACS")
+
+    monkeypatch.setattr(CGExportModule, "_validate_with_gromacs", unexpected_validation)
     result = CliRunner().invoke(main, [
-        "coarse-grained", "--dry", "--yes", "--box-xy", "5",
-        "--box-z", "8", "--production-ns", "10", "--threads", "2",
+        "martini3-bilayer", "--dry", "--yes", "--lipids-per-leaflet", "64",
+        "--production-ns", "10", "--threads", "2",
         "--output", str(output),
     ])
 
@@ -290,3 +467,5 @@ def test_coarse_grained_cli_builds_dry_bilayer_package(tmp_path):
     with zipfile.ZipFile(archives[0]) as archive:
         assert "run_md.sh" not in archive.namelist()
         assert not any(name.startswith("mdp/") for name in archive.namelist())
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["gromacs_validation"] == "not-requested"

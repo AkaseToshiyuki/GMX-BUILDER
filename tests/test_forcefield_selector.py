@@ -4,6 +4,10 @@ import pytest
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+from gmxbuilder.modules.forcefield.catalog import (
+    get_force_field_profile,
+    validate_local_gromacs,
+)
 
 
 def test_forcefield_selector_uses_default_force_field(empty_system):
@@ -17,6 +21,27 @@ def test_forcefield_selector_uses_default_force_field(empty_system):
     assert result.system.metadata["force_field_release"] == "GROMACS-2026.3"
     assert result.system.metadata["force_field_family"] == "amber"
     assert result.system.metadata["ff_water_model"] == "tip3p"
+
+
+def test_amber14sb_port_requires_gromacs_2026():
+    assert get_force_field_profile("amber14sb").minimum_gromacs == (2026, 0)
+
+
+def test_amber14sb_rejects_gromacs_2025_even_when_files_parse(monkeypatch):
+    monkeypatch.setattr(
+        "gmxbuilder.modules.forcefield.catalog.detect_gromacs_version",
+        lambda executable=None: (2025, 4),
+    )
+    with pytest.raises(RuntimeError, match=r"requires GROMACS 2026\.0"):
+        validate_local_gromacs("amber14sb")
+
+
+def test_amber14sb_accepts_gromacs_2026(monkeypatch):
+    monkeypatch.setattr(
+        "gmxbuilder.modules.forcefield.catalog.detect_gromacs_version",
+        lambda executable=None: (2026, 0),
+    )
+    assert "detected 2026.0" in validate_local_gromacs("amber14sb")
 
 
 @pytest.mark.parametrize("config", [{"name": ""}, {"name": "not-a-force-field"}])

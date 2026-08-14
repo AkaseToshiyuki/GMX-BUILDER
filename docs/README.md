@@ -8,7 +8,7 @@ precedence over static examples.
 
 | Document | Contents |
 |---|---|
-| [User Manual V1.0.1](GMXBUILDER_USER_MANUAL_V1.0.1.md) ([PDF](GMXBUILDER_USER_MANUAL_V1.0.1.pdf)) | Installation, Web, CLI, API, output packages, and troubleshooting |
+| [User Manual V1.0.2](GMXBUILDER_USER_MANUAL_V1.0.2.md) ([PDF](GMXBUILDER_USER_MANUAL_V1.0.2.pdf)) | Installation, Web, CLI, API, output packages, and troubleshooting |
 | [Scientific Compatibility](SCIENTIFIC_COMPATIBILITY.md) | Force fields, lipids, ligands, modifications, nucleic acids, and scientific limitations |
 
 For a concise overview and quick installation commands, return to the project

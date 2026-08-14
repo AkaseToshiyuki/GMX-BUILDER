@@ -28,6 +28,12 @@ class Structure:
     tempfactors: list[float] = field(default_factory=list)
 
     def __post_init__(self):
+        self.coordinates = np.asarray(self.coordinates, dtype=np.float64)
+        self.box_vectors = np.asarray(self.box_vectors, dtype=np.float64)
+        if self.coordinates.ndim != 2 or self.coordinates.shape[1] != 3:
+            raise ValueError("coordinates must have shape (N, 3)")
+        if self.box_vectors.shape != (3, 3):
+            raise ValueError("box_vectors must have shape (3, 3)")
         n_atoms = len(self.coordinates)
         if not self.atom_names:
             self.atom_names = [""] * n_atoms
@@ -45,6 +51,22 @@ class Structure:
             self.occupancies = [1.0] * n_atoms
         if not self.tempfactors:
             self.tempfactors = [0.0] * n_atoms
+        fields = {
+            "atom_names": self.atom_names,
+            "resnames": self.resnames,
+            "resids": self.resids,
+            "chain_ids": self.chain_ids,
+            "segids": self.segids,
+            "elements": self.elements,
+            "occupancies": self.occupancies,
+            "tempfactors": self.tempfactors,
+        }
+        mismatched = [name for name, values in fields.items() if len(values) != n_atoms]
+        if mismatched:
+            raise ValueError(
+                f"Per-atom field length mismatch for {n_atoms} coordinates: "
+                + ", ".join(mismatched)
+            )
 
     @property
     def num_atoms(self) -> int:
@@ -98,7 +120,6 @@ class Structure:
         Uses numpy for vectorised concatenation — avoids O(N) Python list copies
         that become a bottleneck for large systems (>100k atoms).
         """
-        n_self = self.num_atoms
         new_coords = np.vstack([self.coordinates, other.coordinates])
 
         # Convert to numpy arrays for fast C-level concatenation, then back to lists
@@ -108,8 +129,11 @@ class Structure:
                 np.asarray(arr_b, dtype=dtype),
             ]).tolist()
 
-        max_resid = max(self.resids) if self.resids else 0
-        shifted_resids = np.asarray(other.resids, dtype=int) + max_resid + 1
+        if self.resids and other.resids:
+            shift = max(self.resids) + 1 - min(other.resids)
+        else:
+            shift = 0
+        shifted_resids = np.asarray(other.resids, dtype=int) + shift
 
         return Structure(
             coordinates=new_coords,

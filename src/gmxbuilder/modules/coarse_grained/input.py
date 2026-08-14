@@ -11,6 +11,7 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.io.cif import CIFParser
 from gmxbuilder.io.pdb import PDBParser, PDBWriter
+from gmxbuilder.core.structure import Structure
 from gmxbuilder.modules.coarse_grained.common import (
     STANDARD_PROTEIN_RESIDUES,
     strict_bool,
@@ -74,12 +75,34 @@ class CGInputModule(BaseModule):
             if source_is_cif
             else PDBParser().parse(source)
         )
+        water_names = {"HOH", "WAT", "SOL", "TIP", "TIP3", "SPC", "SPCE"}
+        keep = np.asarray([
+            str(name).strip().upper() not in water_names
+            for name in parsed.resnames
+        ], dtype=bool)
+        ignored_water_atoms = int(np.count_nonzero(~keep))
+        if ignored_water_atoms:
+            indices = np.flatnonzero(keep)
+            parsed = Structure(
+                coordinates=parsed.coordinates[indices],
+                box_vectors=parsed.box_vectors.copy(),
+                atom_names=[parsed.atom_names[index] for index in indices],
+                resnames=[parsed.resnames[index] for index in indices],
+                resids=[parsed.resids[index] for index in indices],
+                chain_ids=[parsed.chain_ids[index] for index in indices],
+                segids=[parsed.segids[index] for index in indices],
+                elements=[parsed.elements[index] for index in indices],
+                occupancies=[parsed.occupancies[index] for index in indices],
+                tempfactors=[parsed.tempfactors[index] for index in indices],
+            )
         observed = sorted({str(name).strip().upper() for name in parsed.resnames})
         unsupported = [name for name in observed if name not in STANDARD_PROTEIN_RESIDUES]
         if unsupported:
             raise ModuleConfigError(
-                "Martini 3 initial release supports standard protein residues only; "
-                "remove or separately parameterize: " + ", ".join(unsupported)
+                "Martini 3 mapping accepts standard protein residues after ignoring "
+                "crystallographic water. Ligands, cofactors, PTMs, glycans, nucleic "
+                "acids, and terminal cap residues require a separate Martini mapping; "
+                "remove or parameterize: " + ", ".join(unsupported)
             )
         if parsed.num_atoms == 0:
             raise ModuleConfigError("Uploaded structure contains no protein atoms")
@@ -101,10 +124,17 @@ class CGInputModule(BaseModule):
             "cg_input_residues": observed,
             "cg_input_atom_count": parsed.num_atoms,
         })
-        return ModuleResult(True, output, [
+        log = [
             (
                 f"Accepted {parsed.num_atoms} protein atoms for Martini 3 mapping"
                 f"{' (mmCIF converted to canonical PDB)' if source_is_cif else ''}"
             ),
             "No ligands, PTMs, glycans, nucleic acids, or unknown residues were discarded",
-        ])
+        ]
+        if ignored_water_atoms:
+            log.insert(
+                0,
+                f"Ignored {ignored_water_atoms} crystallographic water atom(s); "
+                "CG solvation is generated in the dedicated solvation step",
+            )
+        return ModuleResult(True, output, log)

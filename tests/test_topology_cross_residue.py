@@ -6,9 +6,13 @@ import numpy as np
 import pytest
 
 from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
+from gmxbuilder.core.component import Component
+from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import TopologyError
 from gmxbuilder.io.top import TopologyWriter
 from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
+from gmxbuilder.modules.forcefield.charmm36 import CHARMM36mForceField
 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 from gmxbuilder.modules.modifications.processor import StructureProcessor
 from tests.test_structure_processor import _disulfide_system
@@ -25,6 +29,28 @@ def _ala_gly_structure() -> Structure:
         chain_ids=["A"] * len(atom_names),
         elements=["N", "C", "C", "O", "C", "N", "C", "C", "O"],
     )
+
+
+def test_charmm_mixed_membrane_blocks_keep_each_lipid_identity():
+    structure = Structure(
+        coordinates=np.zeros((4, 3)),
+        box_vectors=np.eye(3) * 5.0,
+        atom_names=["C1", "C2", "C1", "O3"],
+        resnames=["POPC", "POPC", "CHOL", "CHOL"],
+        resids=[1, 1, 2, 2],
+        elements=["C", "C", "C", "O"],
+    )
+    system = System(structure, components=[Component(
+        "MEMBRANE", ComponentKind.MEMBRANE, np.arange(4),
+        metadata={"n_lipids_upper": 1, "n_lipids_lower": 1,
+                  "lipid_sizes": [2, 2]},
+    )])
+
+    topology = CHARMM36mForceField().build_system_topology(system)
+
+    assert [block.type_name for block in topology.molecule_blocks] == [
+        "POPC", "CHOL",
+    ]
 
 
 def _bond_pairs(itp_path: Path) -> set[tuple[int, int]]:

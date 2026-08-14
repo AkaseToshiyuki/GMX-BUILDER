@@ -10,8 +10,40 @@ from gmxbuilder.io.pdb import PDBParser
 from gmxbuilder.modules.export.exporter import ExportModule
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.exceptions import ParseError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
+from gmxbuilder.core.topology import Bond, Topology
+
+
+def test_structure_rejects_mismatched_per_atom_arrays():
+    with pytest.raises(ValueError, match="atom_names"):
+        Structure(
+            coordinates=np.zeros((2, 3)),
+            box_vectors=np.eye(3),
+            atom_names=["CA"],
+        )
+
+
+def test_structure_append_uses_contiguous_residue_numbers():
+    first = Structure(
+        coordinates=np.zeros((1, 3)), box_vectors=np.eye(3), resids=[7]
+    )
+    second = Structure(
+        coordinates=np.ones((2, 3)), box_vectors=np.eye(3), resids=[1, 2]
+    )
+
+    assert first.append(second).resids == [7, 8, 9]
+
+
+def test_topology_merge_infers_offset_when_atom_types_are_absent():
+    first = Topology(bonds=[Bond(0, 1)], atom_count=2)
+    second = Topology(bonds=[Bond(0, 1)], atom_count=2)
+
+    first.merge(second)
+
+    assert first.num_atoms() == 4
+    assert (first.bonds[-1].i, first.bonds[-1].j) == (2, 3)
 
 
 def test_pdb_parser_converts_coordinates_and_box(small_pdb_file):
@@ -285,6 +317,50 @@ def test_gro_triclinic_box_uses_official_field_order(tmp_path):
     assert np.allclose(loaded.box_vectors, structure.box_vectors, atol=1e-5)
 
 
+@pytest.mark.parametrize("box_line", ["bad box", "0 0 0", "1 2"])
+def test_gro_reader_rejects_malformed_or_degenerate_box(tmp_path, box_line):
+    path = tmp_path / "invalid-box.gro"
+    path.write_text(
+        "invalid\n"
+        "1\n"
+        "    1ALA     CA    1   0.000   0.000   0.000\n"
+        f"{box_line}\n"
+    )
+
+    with pytest.raises(ParseError, match="GRO box|Malformed GRO box"):
+        GROReader().read(path)
+
+
+def test_gro_writer_validates_before_creating_partial_file(tmp_path):
+    structure = Structure(
+        coordinates=np.asarray([[np.nan, 0.0, 0.0]]),
+        box_vectors=np.eye(3),
+        atom_names=["CA"],
+        resnames=["ALA"],
+        resids=[1],
+    )
+    path = tmp_path / "partial.gro"
+
+    with pytest.raises(ValueError, match="coordinates"):
+        GROWriter.write(structure, path)
+    assert not path.exists()
+
+
+def test_gro_writer_normalizes_nonpositive_residue_id(tmp_path):
+    structure = Structure(
+        coordinates=np.zeros((1, 3)),
+        box_vectors=np.eye(3),
+        atom_names=["CA"],
+        resnames=["ALA"],
+        resids=[0],
+    )
+    path = tmp_path / "resid-zero.gro"
+
+    GROWriter.write(structure, path)
+
+    assert path.read_text().splitlines()[2][:5] == "    1"
+
+
 @pytest.mark.parametrize(
     ("atom_name", "resname", "match"),
     [
@@ -488,6 +564,31 @@ def test_mdp_global_settings_fail_closed(params, pattern):
 def test_mdp_stage_settings_fail_closed(stage, pattern):
     with pytest.raises(ValueError, match=pattern):
         MDPWriter.validate_protocol({}, [stage], [{"nsteps": 1000}])
+
+
+def test_mdp_writer_hydrates_minimal_user_stages(tmp_path):
+    paths = MDPWriter().generate_all(
+        tmp_path,
+        {"has_membrane": True, "force_field": "amber99sb-ildn"},
+        eq_stages=[{
+            "enabled": True,
+            "ensemble": "nvt",
+            "nsteps": 1000,
+            "dt": 1.0,
+            "dt_unit": "fs",
+        }],
+        prod_iters=[{
+            "enabled": True,
+            "nsteps": 1000,
+            "dt": 2.0,
+            "dt_unit": "fs",
+        }],
+    )
+    assert {path.name for path in paths} == {
+        "mini.mdp", "equili_1.mdp", "production.mdp",
+    }
+    assert "ref-t" in (tmp_path / "equili_1.mdp").read_text()
+    assert "pcoupl" in (tmp_path / "production.mdp").read_text()
 
 
 def test_run_script_discovers_the_exact_generated_stage_set(tmp_path):

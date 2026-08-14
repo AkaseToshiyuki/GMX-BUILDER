@@ -65,9 +65,16 @@ class MDPWriter:
 
         self.validate_protocol(params, eq_stages, prod_iters, minimization)
         schedule_source = _default_schedule(params) if eq_stages is None else eq_stages
+        hydrated_schedule: list[dict] = []
+        for source_index, stage in enumerate(schedule_source):
+            ensemble = str(
+                stage.get("ensemble", "nvt" if source_index < 2 else "npt")
+            ).lower()
+            hydrated = _stage_defaults(params, ensemble)
+            hydrated.update(copy.deepcopy(stage))
+            hydrated_schedule.append(hydrated)
         schedule = [
-            copy.deepcopy(stage) for stage in schedule_source
-            if stage.get("enabled", True)
+            stage for stage in hydrated_schedule if stage.get("enabled", True)
         ]
         # Convert the explicitly declared unit exactly once.  Never infer a
         # timestep unit from magnitude: 0.5 can legitimately mean either
@@ -98,7 +105,7 @@ class MDPWriter:
 
         # ---- Stages 1-N: Equilibration ----
         enabled_schedule = [
-            (index, stage) for index, stage in enumerate(schedule_source)
+            (index, stage) for index, stage in enumerate(hydrated_schedule)
             if stage.get("enabled", True)
         ]
         for active_index, (source_index, _source_stage) in enumerate(enabled_schedule):
@@ -125,8 +132,10 @@ class MDPWriter:
         for stage in production_source:
             if not stage.get("enabled", True):
                 continue
+            hydrated = _stage_defaults(params, "npt")
+            hydrated.update(copy.deepcopy(stage))
             for _ in range(int(stage.get("repeat", 1))):
-                production.append(copy.deepcopy(stage))
+                production.append(copy.deepcopy(hydrated))
         for pr in production:
             pr.pop("repeat", None)
             _convert_timestep_to_ps(pr)
@@ -708,9 +717,13 @@ def _stage_defaults(params: dict, ensemble: str) -> dict[str, object]:
     has_membrane = bool(params.get("has_membrane", True))
     values: dict[str, object] = {
         "enabled": True,
+        "bb": 4000 if has_membrane else 400,
+        "sc": 2000 if has_membrane else 40,
+        "lipid": 1000 if has_membrane else 0,
+        "dih": 1000 if has_membrane else 0,
         "tcoupl": "v-rescale",
         "tau_t": 1.0,
-        "temperature": 310.15,
+        "temperature": params.get("temperature", 310.15),
         "comm_mode": "linear",
         "comm_grps": "SOLU_MEMB SOLV" if has_membrane else "SOLU SOLV",
         "nstcomm": 100,
@@ -723,7 +736,7 @@ def _stage_defaults(params: dict, ensemble: str) -> dict[str, object]:
         "nstcalcenergy": 100,
         "nstenergy": 1000,
         "nstlog": 1000,
-        "gen_seed": -1,
+        "gen_seed": params.get("gen_seed", -1),
         "mdp_overrides": {},
         **_nonbond_defaults(params),
     }

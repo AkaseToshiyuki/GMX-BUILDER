@@ -8,10 +8,12 @@ from dataclasses import dataclass
 import numpy as np
 
 from gmxbuilder.core.component import Component
+from gmxbuilder.core.chemistry import WATER_VOLUME_NM3
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
+from gmxbuilder.geometry.periodic import wrap_periodic_coordinates
 from gmxbuilder.modules import register_module
 from gmxbuilder.modules.ions.catalog import (
     KNOWN_ANIONS,
@@ -24,7 +26,6 @@ from gmxbuilder.modules.solvation.water_models import WaterRegistry
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 _AVOGADRO_NM3 = 0.602214076
-_WATER_VOLUME_NM3 = 0.0299
 _METHODS = {"replace", "random", "mc"}
 
 
@@ -148,7 +149,7 @@ class IonBuilder(BaseModule):
         if not sites:
             raise ModuleConfigError("No complete solvent water molecules are available for ion replacement")
         n_water = len(sites)
-        water_volume = n_water * _WATER_VOLUME_NM3
+        water_volume = n_water * WATER_VOLUME_NM3
         salt_counts = {
             name: round(concentrations[name] * _AVOGADRO_NM3 * water_volume)
             for name in cations + anions
@@ -394,14 +395,19 @@ class IonBuilder(BaseModule):
         if not np.isfinite(box).all() or np.any(box <= 0.0):
             raise ModuleConfigError("Ion placement requires positive periodic box dimensions")
         tree = (
-            cKDTree(np.mod(system.coordinates[solute_indices], box), boxsize=box)
+            cKDTree(
+                wrap_periodic_coordinates(system.coordinates[solute_indices], box),
+                boxsize=box,
+            )
             if solute_indices else None
         )
         eligible: list[_WaterSite] = []
         for site in sites:
             if regions and not any(lo <= site.coordinate[2] <= hi for lo, hi in regions):
                 continue
-            if tree is not None and tree.query(np.mod(site.coordinate, box), k=1)[0] < exclusion:
+            if tree is not None and tree.query(
+                wrap_periodic_coordinates(site.coordinate, box), k=1,
+            )[0] < exclusion:
                 continue
             eligible.append(site)
         return eligible

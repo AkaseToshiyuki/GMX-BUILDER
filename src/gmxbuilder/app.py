@@ -132,73 +132,79 @@ def _parse_cg_lipids(values: tuple[str, ...], label: str) -> list[dict]:
     return parsed
 
 
-@main.command("coarse-grained")
-@click.option("--mode", type=click.Choice(["solution", "bilayer"]), default="bilayer", show_default=True)
-@click.option("--pdb", type=click.Path(exists=True, dir_okay=False), help="Standard-protein PDB; omit for a protein-free bilayer")
+def _martini_common_options(command):
+    options = [
+        click.option("--protein-model", type=click.Choice(["folded", "tm_helix", "disordered"]), default="folded", show_default=True),
+        click.option("--secondary-structure", default="auto", show_default=True, help="auto or a manual DSSP string"),
+        click.option("--elastic/--no-elastic", default=True, show_default=True),
+        click.option("--rotate-x", default=0.0, type=click.FloatRange(-180, 180), show_default=True),
+        click.option("--rotate-y", default=0.0, type=click.FloatRange(-180, 180), show_default=True),
+        click.option("--rotate-z", default=0.0, type=click.FloatRange(-180, 180), show_default=True),
+        click.option("--z-offset", default=0.0, type=click.FloatRange(-8, 8), show_default=True),
+        click.option("--padding", default=2.0, type=click.FloatRange(1.0, 8.0), show_default=True),
+        click.option("--salt", default=0.15, type=click.FloatRange(0.0, 1.0), show_default=True),
+        click.option("--production-ns", default=1000.0, type=click.FloatRange(1, 100000), show_default=True),
+        click.option("--threads", default=8, type=click.IntRange(1, 1024), show_default=True),
+        click.option("--mpi-ranks", default=1, type=click.IntRange(1, 1024), show_default=True),
+        click.option("--gpu-ids", default="0", show_default=True, help="Comma-separated logical GPU IDs; empty disables GPU"),
+        click.option("--seed", default=42, type=click.IntRange(0, 2_147_483_647), show_default=True),
+        click.option("--system-name", default="martini3_system", show_default=True),
+        click.option("--output", "output_dir", required=True, type=click.Path(file_okay=False)),
+        click.option("--yes", "accept", is_flag=True, help="Accept the checked exact system non-interactively"),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
+@main.command("martini3-bilayer")
+@click.option("--pdb", type=click.Path(exists=True, dir_okay=False), help="Optional standard-protein PDB")
 @click.option("--upper", "upper_lipids", multiple=True, default=("POPC:1",), show_default=True, help="Upper leaflet NAME:RATIO; repeat for mixtures")
 @click.option("--lower", "lower_lipids", multiple=True, help="Lower leaflet NAME:RATIO; defaults to upper")
-@click.option("--box-xy", default=12.0, type=click.FloatRange(5.0, 40.0), show_default=True)
-@click.option("--box-z", default=14.0, type=click.FloatRange(6.0, 50.0), show_default=True)
-@click.option("--salt", default=0.15, type=click.FloatRange(0.0, 1.0), show_default=True, help="Target NaCl concentration in mol/L")
+@click.option("--lipids-per-leaflet", default=150, type=click.IntRange(64, 5000), show_default=True)
 @click.option("--dry", is_flag=True, help="Bilayer geometry/topology only; no simulation MDPs")
-@click.option("--protein-model", type=click.Choice(["folded", "tm_helix", "disordered"]), default="folded", show_default=True)
-@click.option("--secondary-structure", default="auto", show_default=True, help="auto or a manual DSSP string")
-@click.option("--elastic/--no-elastic", default=True, show_default=True)
-@click.option("--rotate-x", default=0.0, type=click.FloatRange(-180, 180), show_default=True)
-@click.option("--rotate-y", default=0.0, type=click.FloatRange(-180, 180), show_default=True)
-@click.option("--rotate-z", default=0.0, type=click.FloatRange(-180, 180), show_default=True)
-@click.option("--z-offset", default=0.0, type=click.FloatRange(-8, 8), show_default=True)
-@click.option("--production-ns", default=1000.0, type=click.FloatRange(1, 100000), show_default=True)
-@click.option("--threads", default=8, type=click.IntRange(1, 1024), show_default=True)
-@click.option("--mpi-ranks", default=1, type=click.IntRange(1, 1024), show_default=True)
-@click.option("--gpu-ids", default="0", show_default=True, help="Comma-separated logical GPU IDs; empty disables GPU")
-@click.option("--seed", default=42, type=click.IntRange(0, 2_147_483_647), show_default=True)
-@click.option("--system-name", default="martini3_system", show_default=True)
-@click.option("--output", "output_dir", required=True, type=click.Path(file_okay=False))
-@click.option("--yes", "accept", is_flag=True, help="Accept the scientifically checked exact system non-interactively")
-def coarse_grained(
-    mode: str,
+@_martini_common_options
+def martini3_bilayer(
     pdb: str | None,
     upper_lipids: tuple[str, ...],
     lower_lipids: tuple[str, ...],
-    box_xy: float,
-    box_z: float,
-    salt: float,
+    lipids_per_leaflet: int,
     dry: bool,
-    protein_model: str,
-    secondary_structure: str,
-    elastic: bool,
-    rotate_x: float,
-    rotate_y: float,
-    rotate_z: float,
-    z_offset: float,
-    production_ns: float,
-    threads: int,
-    mpi_ranks: int,
-    gpu_ids: str,
-    seed: int,
-    system_name: str,
-    output_dir: str,
-    accept: bool,
+    **options,
 ):
-    """Build a complete Martini 3 solution or flat-bilayer system serially.
+    """Build a Martini 3 bilayer or protein/bilayer system."""
+    upper = _parse_cg_lipids(upper_lipids, "upper")
+    lower = _parse_cg_lipids(lower_lipids or upper_lipids, "lower")
+    _run_martini3(
+        mode="bilayer", pdb=pdb, upper=upper, lower=lower,
+        lipids_per_leaflet=lipids_per_leaflet, dry=dry, **options,
+    )
 
-    Ligands, modified residues, glycans, nucleic acids, curved membranes,
-    custom molecules, and backmapping are intentionally outside this command.
-    """
+
+@main.command("martini3-solvent")
+@click.option("--pdb", required=True, type=click.Path(exists=True, dir_okay=False), help="Standard-protein PDB")
+@_martini_common_options
+def martini3_solvent(pdb: str, **options):
+    """Build a solvated Martini 3 protein system."""
+    _run_martini3(mode="solution", pdb=pdb, upper=[], lower=[], dry=False,
+                  lipids_per_leaflet=None, **options)
+
+
+def _run_martini3(
+    *, mode: str, pdb: str | None, upper: list[dict], lower: list[dict],
+    lipids_per_leaflet: int | None, dry: bool, protein_model: str,
+    secondary_structure: str, elastic: bool, rotate_x: float, rotate_y: float,
+    rotate_z: float, z_offset: float, padding: float, salt: float,
+    production_ns: float, threads: int, mpi_ranks: int, gpu_ids: str,
+    seed: int, system_name: str, output_dir: str, accept: bool,
+) -> None:
     from gmxbuilder.pipeline.step_executor import StepRunner
 
     include_protein = pdb is not None
-    if mode == "solution" and not include_protein:
-        raise click.UsageError("--mode solution requires --pdb")
-    if dry and mode != "bilayer":
-        raise click.UsageError("--dry is available only for a bilayer")
     if threads % mpi_ranks:
         raise click.BadParameter("--threads must be exactly divisible by --mpi-ranks")
     gpu_ids = gpu_ids.strip()
     use_gpu = bool(gpu_ids)
-    upper = _parse_cg_lipids(upper_lipids, "upper") if mode == "bilayer" else []
-    lower = _parse_cg_lipids(lower_lipids or upper_lipids, "lower") if mode == "bilayer" else []
     output = Path(output_dir).expanduser().resolve()
     if output.exists() and any(output.iterdir()):
         raise click.ClickException(f"Output directory is not empty: {output}")
@@ -210,21 +216,25 @@ def coarse_grained(
         "secondary_structure_string": "" if secondary_mode == "auto" else secondary_structure.strip().upper(),
         "elastic": elastic,
     }
-    environment_config = {
-        "environment": mode,
-        "box_xy": box_xy,
-        "box_z": box_z,
-        "rotate_x": rotate_x,
-        "rotate_y": rotate_y,
-        "rotate_z": rotate_z,
-        "z_offset": z_offset,
-        "seed": seed,
-    }
+    environment_config = {"seed": seed}
+    orientation_config = None
     if mode == "bilayer":
+        manual_pose = any(abs(value) > 1e-12 for value in (rotate_x, rotate_y, rotate_z, z_offset))
+        orientation_config = (
+            {"method": "manual", "rotate_x": rotate_x, "rotate_y": rotate_y,
+             "rotate_z": rotate_z, "z_offset": z_offset, "half_thickness": 1.4}
+            if manual_pose else {"method": "ppm", "half_thickness": 1.4}
+        )
         environment_config.update({
             "upper_leaflet": upper,
             "lower_leaflet": lower,
             "asymmetric": upper != lower,
+            "n_lipids_per_leaflet": lipids_per_leaflet,
+        })
+    else:
+        environment_config.update({
+            "rotate_x": rotate_x, "rotate_y": rotate_y,
+            "rotate_z": rotate_z, "z_offset": z_offset,
         })
 
     def checked_step(runner: StepRunner, name: str, config: dict) -> None:
@@ -236,12 +246,17 @@ def coarse_grained(
             click.echo(f"  {line}")
 
     with tempfile.TemporaryDirectory(prefix="gmxbuilder-martini3-") as temporary:
-        runner = StepRunner(Path(temporary) / "task", pipeline_type="coarse-grained")
+        pipeline_type = (
+            "martini3-bilayer" if mode == "bilayer" else "martini3-solvent"
+        )
+        runner = StepRunner(Path(temporary) / "task", pipeline_type=pipeline_type)
         checked_step(runner, "input", {"include_protein": include_protein, "environment": mode})
         checked_step(runner, "cg_model", {"model": "martini3", "water_model": "W"})
         checked_step(runner, "cg_mapping", mapping_config)
+        if orientation_config is not None:
+            checked_step(runner, "cg_orientation", orientation_config)
         checked_step(runner, "cg_environment", environment_config)
-        checked_step(runner, "cg_solvation", {"include_solvent": not dry, "salt_molarity": salt})
+        checked_step(runner, "cg_solvation", {"include_solvent": not dry, "padding_nm": padding})
         checked_step(runner, "cg_system", {"salt_molarity": salt, "confirm_system": False})
 
         final = runner.load_system("cg_system")
@@ -378,6 +393,14 @@ def prebuilt_assets_status():
         f"{status['contents']['strict_library_entries']} strict libraries, "
         f"{status['contents']['gaff2_cache_entries']} GAFF2 caches"
     )
+    contents = status["contents"]
+    if "compatible_force_field_jobs" in contents:
+        click.echo(
+            "Release coverage: "
+            f"{contents['validated_force_field_jobs']}/"
+            f"{contents['compatible_force_field_jobs']} validated; "
+            f"{contents['unavailable_force_field_jobs']} unavailable"
+        )
 
 
 @prebuilt_assets.command("install")
@@ -550,6 +573,10 @@ def serve(
         security = validate_server_bind(host)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    if reload and security.mode == "public":
+        raise click.ClickException(
+            "--reload is a development feature and is not permitted in public mode"
+        )
 
     configured_max_builds = os.environ.get("GMXBUILDER_MAX_BUILDS", "").strip()
     if max_builds is not None:

@@ -1,5 +1,6 @@
 """Portable CPU, CUDA and GROMACS resource configuration."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,22 @@ _ENV_KEYS = (
     "NUMEXPR_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_hardware_state():
+    """Do not leak fake executable probes or resource settings to other tests."""
+    original_environment = {key: os.environ.get(key) for key in _ENV_KEYS}
+    hardware.hardware_capabilities.cache_clear()
+    hardware._gpu_probe_cache.clear()
+    yield
+    for key, value in original_environment.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    hardware.hardware_capabilities.cache_clear()
+    hardware._gpu_probe_cache.clear()
 
 
 def _clean_environment(monkeypatch):

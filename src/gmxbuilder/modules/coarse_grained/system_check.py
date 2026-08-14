@@ -35,6 +35,7 @@ class CGSystemCheckModule(BaseModule):
         normalized = normalize_solvation({
             "include_solvent": previous.get("include_solvent", True),
             "salt_molarity": config.get("salt_molarity", previous.get("salt_molarity", 0.15)),
+            "padding_nm": previous.get("padding_nm", 2.0),
         }, output.metadata)
         output.metadata["cg_solvation_config"] = normalized
         if normalized["include_solvent"]:
@@ -89,6 +90,8 @@ class CGSystemCheckModule(BaseModule):
             target = float(normalized["salt_molarity"])
             # One integer ion pair is the intrinsic concentration resolution.
             tolerance = max(0.01, 0.55 * water_bead_molarity / water_beads)
+            if target > 0.0:
+                tolerance = min(tolerance, 0.5 * target)
             if abs(actual_salt - target) > tolerance:
                 raise ModuleConfigError(
                     "Final Martini salt concentration differs from the target: "
@@ -103,6 +106,22 @@ class CGSystemCheckModule(BaseModule):
             if membrane is None or len(membrane.atom_indices) == 0:
                 raise ModuleConfigError("Final CG bilayer contains no validated membrane beads")
             orientation = self._validate_bilayer_orientation(built)
+            requested = int(
+                (output.metadata.get("cg_environment_config") or {}).get(
+                    "n_lipids_per_leaflet", 0
+                )
+            )
+            if requested and (
+                orientation["upper_leaflet_lipids"] != requested
+                or orientation["lower_leaflet_lipids"] != requested
+            ):
+                raise ModuleConfigError(
+                    "Built Martini leaflet size differs from the explicit request: "
+                    f"upper={orientation['upper_leaflet_lipids']}, "
+                    f"lower={orientation['lower_leaflet_lipids']}, "
+                    f"requested={requested}. The system was rejected rather than "
+                    "silently changing lipid count."
+                )
             if normalized["include_solvent"]:
                 solvent_layers = self._validate_solvent_layers(built, orientation)
             protein_placement = self._report_protein_placement(built, orientation)
@@ -133,7 +152,8 @@ class CGSystemCheckModule(BaseModule):
     @staticmethod
     def _validate_bilayer_orientation(system) -> dict:
         """Require polar heads outside and hydrophobic beads toward the midplane."""
-        lipids = set(load_manifest()["lipids"])
+        lipid_manifest = load_manifest()["lipids"]
+        lipids = set(lipid_manifest)
         structure = system.structure
         molecules: list[list[int]] = []
         current: list[int] = []
@@ -142,29 +162,46 @@ class CGSystemCheckModule(BaseModule):
             key = (str(name).upper(), int(resid))
             if key[0] not in lipids:
                 if current:
-                    molecules.append(current); current = []
+                    molecules.append(current)
+                    current = []
                 previous = None
                 continue
             if previous is not None and key != previous:
-                molecules.append(current); current = []
-            current.append(index); previous = key
+                molecules.append(current)
+                current = []
+            current.append(index)
+            previous = key
         if current:
             molecules.append(current)
         oriented = 0
         upper_heads: list[float] = []
         lower_heads: list[float] = []
         evaluated = 0
-        center = float(np.median([
+        center_markers = [
             structure.coordinates[index, 2]
             for molecule in molecules for index in molecule
-            if str(structure.atom_names[index]).upper() in {"C2A", "C2B", "R4", "R5"}
-        ]))
+            if str(structure.atom_names[index]).upper() in set(
+                lipid_manifest[str(structure.resnames[index]).upper()]["midplane_beads"]
+            )
+        ]
+        if not center_markers:
+            raise ModuleConfigError("Martini lipid manifest has no usable midplane beads")
+        center = float(np.median(center_markers))
         for molecule in molecules:
             names = {str(structure.atom_names[index]).upper(): index for index in molecule}
-            head_candidates = [names[name] for name in ("PO4", "NC3", "NH3", "ROH") if name in names]
-            tail_candidates = [names[name] for name in ("C3A", "C4A", "C3B", "C4B", "R4", "R5", "C1", "C2") if name in names]
+            lipid_name = str(structure.resnames[molecule[0]]).upper()
+            definition = lipid_manifest[lipid_name]
+            head_candidates = [
+                names[name] for name in definition["head_beads"] if name in names
+            ]
+            tail_candidates = [
+                names[name] for name in definition["tail_beads"] if name in names
+            ]
             if not head_candidates or not tail_candidates:
-                continue
+                raise ModuleConfigError(
+                    f"Cannot validate {lipid_name}: expected head/tail beads from "
+                    "the Martini lipid manifest are missing"
+                )
             head_z = float(np.mean(structure.coordinates[head_candidates, 2]))
             tail_z = float(np.mean(structure.coordinates[tail_candidates, 2]))
             evaluated += 1
@@ -188,6 +225,8 @@ class CGSystemCheckModule(BaseModule):
             )
         return {
             "evaluated_lipids": evaluated,
+            "upper_leaflet_lipids": len(upper_heads),
+            "lower_leaflet_lipids": len(lower_heads),
             "correct_fraction": fraction,
             "headgroup_separation_nm": separation,
             "midplane_z_nm": center,

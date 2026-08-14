@@ -52,3 +52,39 @@ def test_queue_refuses_nonproduction_npt(tmp_path):
         assert "at least 500 ps" in str(exc)
     else:
         raise AssertionError("short non-production queue was accepted")
+
+
+def test_queue_records_worker_failure_and_continues(tmp_path, monkeypatch):
+    jobs = [{
+        "force_field": "charmm36m",
+        "lipid_name": name,
+        "ready": False,
+    } for name in ("POPC", "POPE")]
+
+    class Library:
+        def coverage(self, _fields):
+            return jobs
+
+    monkeypatch.setattr(library_queue, "EquilibratedLipidLibrary", Library)
+    monkeypatch.setattr(
+        library_queue, "configure_runtime_resources", lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(library_queue, "configured_cpu_ids", lambda: tuple(range(4)))
+    monkeypatch.setattr(library_queue, "configured_gpu_devices", lambda: ())
+    monkeypatch.setattr(library_queue, "configured_task_threads", lambda: 4)
+
+    def worker(job, **_kwargs):
+        if job["lipid_name"] == "POPC":
+            raise RuntimeError("synthetic failure")
+        return job, True, str(tmp_path / "pope.log")
+
+    monkeypatch.setattr(library_queue, "_run_job", worker)
+
+    results = library_queue.run_library_queue(
+        force_fields=("charmm36m",), log_dir=tmp_path
+    )
+
+    assert [(result[0]["lipid_name"], result[1]) for result in results] == [
+        ("POPC", False), ("POPE", True),
+    ]
+    assert "synthetic failure" in Path(results[0][2]).read_text()

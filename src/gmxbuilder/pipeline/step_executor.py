@@ -86,7 +86,19 @@ LIQUID_STEPS = [
 # Independent Martini 3 coarse-grained workflow.  These names intentionally do
 # not overlap the atomistic scientific modules, so each implementation remains
 # separately maintainable and no atomistic assumptions leak into CG systems.
-COARSE_GRAINED_STEPS = [
+MARTINI_BILAYER_STEPS = [
+    "input",
+    "cg_model",
+    "cg_mapping",
+    "cg_orientation",
+    "cg_environment",
+    "cg_solvation",
+    "cg_system",
+    "topology",
+    "export",
+]
+
+MARTINI_SOLVENT_STEPS = [
     "input",
     "cg_model",
     "cg_mapping",
@@ -96,6 +108,16 @@ COARSE_GRAINED_STEPS = [
     "topology",
     "export",
 ]
+
+MARTINI_PIPELINES = frozenset({
+    "martini3-bilayer",
+    "martini3-solvent",
+})
+
+
+def is_martini_pipeline(pipeline_type: str) -> bool:
+    """Return whether *pipeline_type* uses the Martini 3 step contract."""
+    return pipeline_type in MARTINI_PIPELINES
 
 # ---------------------------------------------------------------------------
 # Module factory — returns the BaseModule instance for a given step name
@@ -108,27 +130,11 @@ def _get_module(step_name: str, pipeline_type: str) -> BaseModule:
     """Return the task-specific module for *step_name* and pipeline type."""
     cache_key = (pipeline_type, step_name)
     if cache_key not in _MODULE_CACHE:
-        if pipeline_type == "coarse-grained":
-            from gmxbuilder.modules.coarse_grained import (
-                CGEnvironmentModule,
-                CGExportModule,
-                CGInputModule,
-                CGMappingModule,
-                CGModelModule,
-                CGSolvationModule,
-                CGSystemCheckModule,
-                CGTopologyModule,
-            )
-            cg_modules = {
-                "input": CGInputModule,
-                "cg_model": CGModelModule,
-                "cg_mapping": CGMappingModule,
-                "cg_environment": CGEnvironmentModule,
-                "cg_solvation": CGSolvationModule,
-                "cg_system": CGSystemCheckModule,
-                "topology": CGTopologyModule,
-                "export": CGExportModule,
-            }
+        if is_martini_pipeline(pipeline_type):
+            if pipeline_type == "martini3-bilayer":
+                from gmxbuilder.modules.martini3_bilayer import MODULES as cg_modules
+            else:
+                from gmxbuilder.modules.martini3_solvent import MODULES as cg_modules
             module_class = cg_modules.get(step_name)
             if module_class is None:
                 raise KeyError(f"Unknown Martini 3 step: {step_name}")
@@ -222,8 +228,10 @@ def get_pipeline_steps(pipeline_type: str) -> list[str]:
         return list(SOLUTION_STEPS)
     elif pipeline_type == "liquid-builder":
         return list(LIQUID_STEPS)
-    elif pipeline_type == "coarse-grained":
-        return list(COARSE_GRAINED_STEPS)
+    elif pipeline_type == "martini3-bilayer":
+        return list(MARTINI_BILAYER_STEPS)
+    elif pipeline_type == "martini3-solvent":
+        return list(MARTINI_SOLVENT_STEPS)
     else:
         raise ValueError(f"Unknown pipeline type: {pipeline_type}")
 
@@ -242,7 +250,7 @@ class StepRunner:
         # A browser can issue overlapping requests (double click, refresh,
         # multiple tabs). Serializing at the runner boundary prevents a later
         # step from reading a checkpoint while its predecessor is still being
-        # written. RLock allows run_export() to call run_step().
+        # written. RLock also protects nested finalization bookkeeping.
         self._operation_lock = threading.RLock()
 
     def step_dir(self, step_name: str) -> Path:
@@ -380,13 +388,16 @@ class StepRunner:
         # The independent CG modules need task-private tool working paths.
         # Atomistic module schemas predate these keys and must remain unchanged.
         # Overwrite rather than setdefault so API clients cannot redirect files.
-        if self.pipeline_type == "coarse-grained":
+        if is_martini_pipeline(self.pipeline_type):
             config["_task_dir"] = str(self.task_dir.resolve())
             config["_step_dir"] = str(self.step_dir(step_name).resolve())
         if step_name == "input" and pdb_path:
             config["pdb"] = pdb_path
         if step_name == "export":
-            config.setdefault("output_dir", str(self.step_dir("export")))
+            # Export paths are server-owned.  A caller may configure package
+            # contents, but must never redirect service writes outside its
+            # task directory.
+            config["output_dir"] = str(self.step_dir("export").resolve())
             config.setdefault("system_name", system.metadata.get("system_name", "system"))
         # Forward seed from system metadata into config
         if "seed" not in config:
@@ -481,37 +492,6 @@ class StepRunner:
             "elapsed_s": round(time.time() - t0, 1),
         }
 
-    # ------------------------------------------------------------------
-    # Final export (last step)
-    # ------------------------------------------------------------------
-
-    @_serialized_task_operation
-    def run_export(
-        self,
-        config: dict[str, Any],
-    ) -> dict:
-        """Run the final export step and return download info."""
-        result = self.run_step("export", config)
-        if result["status"] != "ok":
-            return result
-
-        out_dir = self.step_dir("export")
-        # Find the ZIP file
-        zip_files = list(out_dir.glob("*.zip"))
-        zip_path = None
-        if not zip_files:
-            # Also check the output subdirectory set by export module
-            for d in out_dir.rglob("*.zip"):
-                zip_files.append(d)
-        if zip_files:
-            zip_path = str(max(zip_files, key=lambda p: p.stat().st_size))
-
-        return {
-            **result,
-            "download_url": f"/api/step/{self.task_dir.name}/export/download" if zip_path else None,
-            "zip_path": zip_path,
-        }
-
     @_serialized_task_operation
     def finalize_from_checkpoint(
         self,
@@ -578,7 +558,7 @@ class StepRunner:
             raise RuntimeError(
                 "Topology assignment changed confirmed coordinates or atom ordering"
             )
-        if self.pipeline_type == "coarse-grained":
+        if is_martini_pipeline(self.pipeline_type):
             from gmxbuilder.modules.coarse_grained.assets import validate_toolchain
             gromacs_compatibility = {
                 "compatible": True,
@@ -595,10 +575,10 @@ class StepRunner:
         shutil.rmtree(topology_dir, ignore_errors=True)
         system.save_checkpoint(topology_dir)
 
-        export_dir = self.step_dir("export")
+        export_dir = self.step_dir("export").resolve()
         shutil.rmtree(export_dir, ignore_errors=True)
         export_cfg = dict(export_config or {})
-        export_cfg.setdefault("output_dir", str(export_dir))
+        export_cfg["output_dir"] = str(export_dir)
         export_cfg.setdefault(
             "system_name", system.metadata.get("system_name", "system")
         )

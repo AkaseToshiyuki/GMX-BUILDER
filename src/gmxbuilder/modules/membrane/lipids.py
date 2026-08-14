@@ -24,7 +24,7 @@ import re
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterator
 
 
@@ -98,12 +98,6 @@ class LipidRegistry:
     _task_lipids: ContextVar[dict[str, LipidTemplate] | None] = ContextVar(
         "gmxbuilder_task_lipids", default=None
     )
-
-    @classmethod
-    def register(cls, lipid: LipidTemplate) -> None:
-        """Register a lipid template (supports dynamic custom lipids)."""
-        cls._lipids[lipid.name.upper()] = lipid
-        cls._by_category.setdefault(lipid.category, []).append(lipid.name.upper())
 
     @classmethod
     def register_custom(cls, name: str, properties: dict) -> LipidTemplate:
@@ -583,6 +577,7 @@ class LipidRegistry:
 
     @classmethod
     def register(cls, template: LipidTemplate) -> None:
+        """Register a lipid template after loading the built-in catalog."""
         cls._ensure_loaded()
         cls._lipids[template.name.upper()] = template
         cat = template.category

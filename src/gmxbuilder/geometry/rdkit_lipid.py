@@ -7,9 +7,17 @@ import re
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from gmxbuilder.modules.membrane.lipid_orientation import atom_element
+
 
 def _element(atom_name: str) -> str:
-    return atom_name.strip()[0].upper()
+    element = atom_element(atom_name)
+    if not element:
+        raise ValueError(f"Cannot infer an element from atom name {atom_name!r}")
+    # RTP lipid names use organic elements; recognize the two-letter halogens
+    # without misclassifying carbon labels such as CA/CB as calcium/boron.
+    normalized = str(atom_name).strip().upper().lstrip("0123456789")
+    return normalized[:2].title() if normalized.startswith(("CL", "BR")) else element
 
 
 def _molecule_from_rtp(rtp: dict):
@@ -38,6 +46,68 @@ def _molecule_from_rtp(rtp: dict):
     result.UpdatePropertyCache(strict=False)
     Chem.GetSymmSSSR(result)
     return result, [atom[0] for atom in atoms]
+
+
+def _seed_explicit_stereochemistry(molecule, smiles: str, seed: int) -> bool:
+    """Seed an RTP-ordered conformer from an explicitly stereochemical SMILES.
+
+    RTP files encode bonded parameters but not portable atom chirality tags.
+    For registry entries with ``@`` stereochemistry, establish an exact
+    element/connectivity graph mapping to an explicit-H SMILES conformer and
+    reorder those coordinates into RTP atom order.  Returning random RTP
+    stereochemistry would be scientifically unsafe, so an unmappable explicit
+    stereoisomer is rejected by the caller.
+    """
+    if "@" not in smiles:
+        return False
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    reference = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    if reference is None or reference.GetNumAtoms() != molecule.GetNumAtoms():
+        return False
+
+    def connectivity_graph(source):
+        graph = Chem.RWMol(source)
+        for atom in graph.GetAtoms():
+            atom.SetFormalCharge(0)
+            atom.SetIsAromatic(False)
+            atom.SetNoImplicit(True)
+        for bond in graph.GetBonds():
+            bond.SetBondType(Chem.BondType.SINGLE)
+            bond.SetIsAromatic(False)
+        result = graph.GetMol()
+        result.UpdatePropertyCache(strict=False)
+        return result
+
+    match = connectivity_graph(molecule).GetSubstructMatch(
+        connectivity_graph(reference), useChirality=False,
+    )
+    if len(match) != reference.GetNumAtoms() or len(set(match)) != len(match):
+        return False
+
+    embedded = False
+    for attempt in range(4):
+        status = AllChem.EmbedMolecule(
+            reference,
+            randomSeed=int(seed) + attempt * 104729,
+            useRandomCoords=attempt > 0,
+            maxAttempts=1000,
+            clearConfs=True,
+        )
+        if status == 0:
+            embedded = True
+            break
+    if not embedded:
+        return False
+
+    source = reference.GetConformer()
+    conformer = Chem.Conformer(molecule.GetNumAtoms())
+    for reference_index, rtp_index in enumerate(match):
+        conformer.SetAtomPosition(rtp_index, source.GetAtomPosition(reference_index))
+    molecule.RemoveAllConformers()
+    molecule.AddConformer(conformer, assignId=True)
+    return True
 
 
 def _sample_lipid_tail_torsions(
@@ -164,11 +234,11 @@ def _align_tail_subtrees(
             adjacency[left].add(right)
             adjacency[right].add(left)
 
-    for root, first, pattern, x_component in (
-        ("C21", "C22", r"C2(\d+)", 0.12),
-        ("C31", "C32", r"C3(\d+)", -0.12),
-        ("C1F", "C2F", r"C(\d+)F", 0.12),
-        ("C3S", "C4S", r"C(\d+)S", -0.12),
+    for root, first, pattern, x_component, y_component in (
+        ("C21", "C22", r"C2(\d+)", 0.12, 0.10),
+        ("C31", "C32", r"C3(\d+)", -0.12, -0.10),
+        ("C1F", "C2F", r"C(\d+)F", 0.12, 0.10),
+        ("C3S", "C4S", r"C(\d+)S", -0.12, -0.10),
     ):
         if (
             root not in name_index
@@ -197,11 +267,38 @@ def _align_tail_subtrees(
         if np.linalg.norm(axis) < 1e-8:
             continue
         axis /= np.linalg.norm(axis)
-        target = np.array([x_component, 0.0, -1.0])
+        # Give the two inward-facing tails a small opposing azimuthal spread.
+        # This remains a rigid subtree rotation, preserves stereochemistry and
+        # bond geometry, and avoids the artificial tail/head intersections
+        # produced when both branches are forced into the same XZ plane.
+        target = np.array([x_component, y_component, -1.0])
         target /= np.linalg.norm(target)
         rotation, _ = Rotation.align_vectors([target], [axis])
         indices = [name_index[name] for name in subtree]
-        coords[indices] = rotation.apply(coords[indices] - origin) + origin
+        base_values = rotation.apply(coords[indices] - origin)
+        fixed_indices = [
+            index for index in range(len(coords)) if index not in indices
+        ]
+        fixed_values = coords[fixed_indices]
+        best_values = base_values
+        best_clearance = -np.inf
+        # Alignment fixes the root-to-terminal direction but leaves a free
+        # roll around that axis.  Select the deterministic roll with greatest
+        # clearance from the headgroup/other tail.  This prevents a valid
+        # sphingolipid tail from being discarded merely because C2F happens to
+        # land on the amide nitrogen in the zero-roll orientation.
+        for degrees in (0, 60, -60, 120, -120, 180):
+            roll = Rotation.from_rotvec(target * np.deg2rad(degrees))
+            candidate = roll.apply(base_values) + origin
+            if len(fixed_values):
+                separations = candidate[:, None, :] - fixed_values[None, :, :]
+                clearance = float(np.linalg.norm(separations, axis=2).min())
+            else:
+                clearance = np.inf
+            if clearance > best_clearance:
+                best_clearance = clearance
+                best_values = candidate
+        coords[indices] = best_values
     return coords
 
 
@@ -410,11 +507,28 @@ def _build_cached(
     from rdkit.Chem import AllChem
 
     mol, names = _molecule_from_rtp(rtp)
-    status = AllChem.EmbedMolecule(
-        mol, randomSeed=int(seed), useRandomCoords=True, maxAttempts=1000
-    )
-    if status != 0:
-        raise ValueError(f"RDKit could not embed lipid {lipid_name}")
+    stereo_seeded = _seed_explicit_stereochemistry(mol, smiles, int(seed))
+    if "@" in smiles and not stereo_seeded:
+        raise ValueError(
+            f"Explicit stereochemistry for lipid {lipid_name} cannot be mapped "
+            "exactly onto its force-field atom graph"
+        )
+    if not stereo_seeded:
+        status = -1
+        for attempt in range(4):
+            status = AllChem.EmbedMolecule(
+                mol,
+                randomSeed=int(seed) + attempt * 104729,
+                useRandomCoords=attempt > 0,
+                maxAttempts=1000,
+                clearConfs=True,
+            )
+            if status == 0:
+                break
+        if status != 0:
+            raise ValueError(
+                f"RDKit could not embed lipid {lipid_name} after four deterministic attempts"
+            )
     conformer = mol.GetConformer()
     _sample_lipid_tail_torsions(mol, conformer, names, rtp, seed)
     coords = np.asarray([
@@ -422,11 +536,16 @@ def _build_cached(
     ]) / 10.0
 
     coords = _orient_for_membrane(np.asarray(coords), list(names))
+    prealigned = coords.copy()
     # The RTP path has an exact bond graph, so orient each complete acyl-tail
     # subtree after the whole-molecule head-to-tail alignment.  This helper
     # existed previously but was never called, leaving many lipids lying in
     # the XY membrane plane and producing sub-angstrom intermolecular clashes.
-    coords = _align_tail_subtrees(coords, list(names), rtp)
+    aligned = _align_tail_subtrees(coords.copy(), list(names), rtp)
+    # Tail alignment is a packing aid, never authority to corrupt the exact
+    # RTP conformer.  Fall back to the whole-molecule rigid orientation when
+    # independently rotated subtrees interpenetrate.
+    coords = prealigned if _has_intramolecular_overlap(aligned) else aligned
     coords -= coords.mean(axis=0)
     return coords, tuple(names)
 
@@ -440,7 +559,8 @@ def build_rdkit_lipid_geometry(
     lipid_ff: str | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build one optimized all-atom lipid conformation."""
-    if str(lipid_ff or "").strip().lower() == "lipid21":
+    selected_lipid_ff = str(lipid_ff or "").strip().lower()
+    if selected_lipid_ff == "lipid21":
         from gmxbuilder.modules.forcefield.lipid21_backend import load_lipid21_geometry
         from gmxbuilder.modules.membrane.lipid_orientation import (
             orient_lipid_to_outward_normal,
@@ -454,6 +574,27 @@ def build_rdkit_lipid_geometry(
         from gmxbuilder.modules.membrane.lipids import LipidRegistry
 
         net_charge = LipidRegistry.get(lipid_name).charge
+    if selected_lipid_ff == "gaff2":
+        # An Amber force-field installation may also contain legacy lipid RTP
+        # residues.  An explicit GAFF2 selection is authoritative: coordinates
+        # and topology must originate from the same cached ACPYPE template,
+        # even when a same-named RTP residue exists (POPC and CHOL are common
+        # examples).  Falling through to _build_cached() previously produced
+        # RTP atom order with a GAFF2 topology and was correctly rejected by
+        # TopologyWriter.
+        from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
+
+        template = prepare_gaff_lipid(lipid_name, smiles, int(net_charge))
+        coords = _orient_for_membrane(
+            template.coordinates.copy(), list(template.atom_names)
+        )
+        aligned = _align_gaff_tail_subtrees(
+            coords.copy(), list(template.atom_names), smiles,
+        )
+        if not _has_intramolecular_overlap(aligned):
+            coords = aligned
+        coords -= coords.mean(axis=0)
+        return coords, list(template.atom_names)
     coords, names = _build_cached(
         lipid_name.upper(), smiles, force_field.lower(), int(seed), int(net_charge)
     )

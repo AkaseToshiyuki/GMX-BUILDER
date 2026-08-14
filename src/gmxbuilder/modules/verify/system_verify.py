@@ -63,6 +63,7 @@ class SystemVerificationModule(BaseModule):
 
     def run(self, system: System, config: dict) -> ModuleResult:
         output_dir = Path(config.get("output_dir", "./output"))
+        output_dir.mkdir(parents=True, exist_ok=True)
         log: list[str] = []
         errors: list[str] = []
 
@@ -98,16 +99,20 @@ class SystemVerificationModule(BaseModule):
         # ---- 4. Cross-check: read GRO and compare with system structure ----
         gro_path = output_dir / "input.gro"
         if gro_path.exists():
-            gro_metrics = self._compute_metrics_from_gro(gro_path, system)
-            if gro_metrics:
-                gro_errors = self._compare_gro_vs_system(built_metrics, gro_metrics)
-                if gro_errors:
-                    errors.extend(gro_errors)
-                    log.append("✗ GRO cross-check FAILED")
+            try:
+                gro_metrics = self._compute_metrics_from_gro(gro_path, system)
+                if gro_metrics:
+                    gro_errors = self._compare_gro_vs_system(built_metrics, gro_metrics)
+                    if gro_errors:
+                        errors.extend(gro_errors)
+                        log.append("✗ GRO cross-check FAILED")
+                    else:
+                        log.append("✓ GRO cross-check PASSED — GRO matches in-memory system")
                 else:
-                    log.append("✓ GRO cross-check PASSED — GRO matches in-memory system")
-            else:
-                log.append("Warning: could not parse GRO for cross-check")
+                    log.append("Warning: could not parse GRO for cross-check")
+            except (IndexError, TypeError, ValueError) as exc:
+                errors.append(f"GRO cross-check could not classify atoms safely: {exc}")
+                log.append("✗ GRO cross-check FAILED")
         else:
             log.append("Note: input.gro not found — skipping GRO cross-check")
 
@@ -201,12 +206,23 @@ class SystemVerificationModule(BaseModule):
 
         coords = gro_struct.coordinates
         box_dims = gro_struct.dimensions().tolist()
+        if gro_struct.num_atoms != system.num_atoms:
+            return {
+                "box_dimensions_nm": [round(v, 3) for v in box_dims],
+                "total_atoms": int(gro_struct.num_atoms),
+                "protein": None,
+                "membrane": None,
+            }
 
         # Classify atoms by component using System metadata
         prot_indices: list[int] = []
         memb_indices: list[int] = []
         for comp in system.components:
             indices = [int(i) for i in comp.atom_indices]
+            if any(index < 0 or index >= gro_struct.num_atoms for index in indices):
+                raise ValueError(
+                    f"component {comp.name!r} contains an atom index outside the GRO file"
+                )
             if comp.kind == ComponentKind.PROTEIN:
                 prot_indices.extend(indices)
             elif comp.kind == ComponentKind.MEMBRANE:
@@ -275,13 +291,6 @@ class SystemVerificationModule(BaseModule):
                     f"(diff={abs(bv - pv):.3f} nm > tolerance {BOX_TOLERANCE_NM} nm)"
                 )
 
-        # ---- Compute box centers for normalization ----
-        def _box_center(box_dims: list) -> list[float]:
-            return [d / 2.0 for d in box_dims]
-
-        built_center = _box_center(built_box)
-        preview_center = _box_center(preview_box)
-
         built_prot = built.get("protein")
         preview_prot = preview.get("protein")
         built_memb = built.get("membrane")
@@ -344,6 +353,13 @@ class SystemVerificationModule(BaseModule):
     def _compare_gro_vs_system(sys_metrics: dict, gro_metrics: dict) -> list[str]:
         """Cross-check: verify GRO file matches in-memory system structure."""
         errors: list[str] = []
+
+        if sys_metrics.get("total_atoms") != gro_metrics.get("total_atoms"):
+            errors.append(
+                "GRO atom count differs from the checked system: "
+                f"system={sys_metrics.get('total_atoms')}, "
+                f"gro={gro_metrics.get('total_atoms')}"
+            )
 
         sys_box = sys_metrics.get("box_dimensions_nm", [0, 0, 0])
         gro_box = gro_metrics.get("box_dimensions_nm", [0, 0, 0])

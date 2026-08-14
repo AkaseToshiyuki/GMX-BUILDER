@@ -131,8 +131,15 @@ def test_membrane_builder_preserves_checked_orientation(monkeypatch):
     )
     oriented = OrientModule().run(
         system,
-        {"method": "manual", "z_offset": 0.4, "tilt": 20.0, "phi": 35.0},
+        {
+            "method": "manual",
+            "z_offset": 0.4,
+            "tilt": 20.0,
+            "phi": 35.0,
+            "half_thickness": 1.7,
+        },
     ).system
+    assert oriented.metadata["_orientation_half_thickness_nm"] == 1.7
     checked_coordinates = oriented.structure.coordinates.copy()
     checked_params = dict(oriented.metadata["_orient_params"])
 

@@ -5,15 +5,23 @@ from __future__ import annotations
 import numpy as np
 
 
+def _unit_vector(value: np.ndarray, label: str) -> np.ndarray:
+    vector = np.asarray(value, dtype=np.float64)
+    if vector.shape != (3,) or not np.isfinite(vector).all():
+        raise ValueError(f"{label} must contain three finite values")
+    norm = float(np.linalg.norm(vector))
+    if norm <= 1e-12:
+        raise ValueError(f"{label} must be nonzero")
+    return vector / norm
+
+
 def rotation_matrix_from_vectors(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     """Return rotation matrix that rotates *v1* onto *v2*.
 
     Uses Rodrigues' rotation formula. Both vectors must be nonzero.
     """
-    v1 = np.asarray(v1, dtype=np.float64)
-    v2 = np.asarray(v2, dtype=np.float64)
-    v1_u = v1 / np.linalg.norm(v1)
-    v2_u = v2 / np.linalg.norm(v2)
+    v1_u = _unit_vector(v1, "source vector")
+    v2_u = _unit_vector(v2, "target vector")
 
     cos_theta = np.dot(v1_u, v2_u)
     cos_theta = np.clip(cos_theta, -1.0, 1.0)
@@ -37,7 +45,9 @@ def rotation_matrix_from_vectors(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
 
 def rotation_matrix_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
     """Return (3,3) rotation matrix for a given axis and angle (radians)."""
-    axis = np.asarray(axis, dtype=np.float64) / np.linalg.norm(axis)
+    axis = _unit_vector(axis, "rotation axis")
+    if not np.isfinite(angle):
+        raise ValueError("rotation angle must be finite")
     c = np.cos(angle)
     s = np.sin(angle)
     x, y, z = axis

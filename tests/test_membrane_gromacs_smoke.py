@@ -70,6 +70,12 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
     protein = StructureProcessor().run(
         _two_residue_system("charmm36m"), {"skip_protonation": True}
     ).system
+    # `_oriented` is a scientific contract: membrane-normal placement has
+    # already centered the transmembrane span around Z=0.  Keep this generated
+    # smoke fixture consistent with the real OrientModule output.
+    protein.structure.coordinates[:, 2] -= (
+        protein.structure.coordinates[:, 2].mean()
+    )
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,
@@ -282,6 +288,9 @@ def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path):
     protein = StructureProcessor().run(
         _two_residue_system("charmm36m"), {"skip_protonation": True}
     ).system
+    protein.structure.coordinates[:, 2] -= (
+        protein.structure.coordinates[:, 2].mean()
+    )
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,

@@ -14,6 +14,8 @@ from itertools import combinations
 from pathlib import Path
 
 import numpy as np
+
+from gmxbuilder.core.chemistry import is_hydrogen
 from scipy.optimize import least_squares
 
 from gmxbuilder.modules.forcefield.rtp_parser import _force_field_path
@@ -96,10 +98,7 @@ def _load_geometry_parameters(force_field: str) -> _BondedGeometryParameters:
 
 
 def _is_hydrogen(name: str) -> bool:
-    value = name.strip().upper()
-    return value.startswith("H") or (
-        len(value) > 1 and value[0].isdigit() and value[1] == "H"
-    )
+    return is_hydrogen(name)
 
 
 def _element(name: str) -> str:

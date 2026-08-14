@@ -151,6 +151,44 @@ def test_overlap_detection_uses_periodic_minimum_image_when_box_is_supplied():
     ).all()
 
 
+def test_overlap_detection_handles_large_cutoff_in_a_small_periodic_box():
+    fixed = np.array([[0.05, 0.1, 0.1]])
+    mobile = np.array([[0.45, 0.1, 0.1]])
+    assert find_overlapping_atoms(
+        mobile,
+        fixed,
+        vdw_radii_mobile=np.float64(0.2),
+        vdw_radii_fixed=np.float64(0.2),
+        scale=0.8,
+        box_dimensions=np.array([0.5, 0.5, 0.5]),
+    ).all()
+
+
+def test_topology_preserves_noncontiguous_water_runs(tmp_path):
+    water = WaterRegistry.get("tip3p")
+    atom_names = list(water.atom_names) + ["NA"] + list(water.atom_names)
+    structure = Structure(
+        coordinates=np.zeros((7, 3), dtype=float),
+        box_vectors=np.diag([3.0, 3.0, 3.0]),
+        atom_names=atom_names,
+        resnames=["SOL", "SOL", "SOL", "NA", "HOH", "HOH", "HOH"],
+        resids=[1, 1, 1, 2, 3, 3, 3],
+        chain_ids=[""] * 7,
+        elements=["O", "H", "H", "Na", "O", "H", "H"],
+    )
+    topology = tmp_path / "topol.top"
+    TopologyWriter("amber99sb-ildn", {"water_model": "tip3p"}).write_top(
+        structure, topology
+    )
+    molecules = topology.read_text().split("[ molecules ]", 1)[1]
+    records = [
+        line.split()
+        for line in molecules.splitlines()
+        if line.strip() and not line.lstrip().startswith(";")
+    ]
+    assert records[:3] == [["SOL", "1"], ["NA", "1"], ["SOL", "1"]]
+
+
 @pytest.mark.parametrize("model_name", WATER_MODELS)
 def test_grid_fallback_honors_water_site_count_and_solution_frame(model_name):
     system = _one_atom_system()

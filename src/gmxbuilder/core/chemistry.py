@@ -1,0 +1,31 @@
+"""Shared molecular classification and physical constants."""
+
+from __future__ import annotations
+
+
+PROTEIN_RESNAMES = frozenset({
+    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS",
+    "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP",
+    "TYR", "VAL", "ASH", "GLH", "CYX", "CYM", "HID", "HIE", "HIP",
+    "HSD", "HSE", "HSP", "LYN", "MSE", "SEC", "PYL", "DAL", "DAR",
+    "DAS", "DCY", "DGL", "DGN", "DHI", "DIL", "DLE", "DLY", "DME",
+    "DPN", "DPR", "DSG", "DSN", "DTH", "DTR", "DTY", "DVA", "SEP",
+    "TPO", "PTR", "S1P", "T1P", "Y1P", "ALY", "SLY", "CLY", "MLY",
+    "CRY", "BLY", "PLY", "GRY", "KME", "KM2", "KM3", "RME", "RM2",
+    "MLZ", "M3L", "MLU", "2MR", "DA2", "CSO", "CSD", "CSX", "CSN",
+    "CSW", "CSS", "SNC", "SMC", "OCS", "ACE", "NME", "NMA", "NH2",
+    "PCA", "HYP", "LYZ", "ORN", "FME", "KCX", "NIY", "OAS", "SME",
+    "CME", "LLP", "YCM", "DHA", "CIR", "MYR", "TYS", "TYM", "SAC",
+    "TAC", "GCS", "GCT", "GPL", "WOH", "FOR", "UNK",
+})
+
+WATER_VOLUME_NM3 = 0.0299
+
+
+def is_hydrogen(atom_name: str, element: str = "") -> bool:
+    """Classify H/D atoms, preferring an explicit element when available."""
+    explicit = str(element or "").strip().upper()
+    if explicit:
+        return explicit in {"H", "D"}
+    name = str(atom_name or "").strip().upper().lstrip("0123456789")
+    return name.startswith(("H", "D"))

@@ -1,0 +1,12 @@
+# Generated/bundled files that produce enormous single-line search output.
+src/gmxbuilder/web/static/vendor/
+*.min.js
+*.map
+
+# Binary and generated scientific assets are searched only when explicitly requested.
+*.npz
+*.npy
+*.zip
+*.tar
+*.tar.gz
+*.pdf

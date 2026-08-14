@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from gmxbuilder.geometry.periodic import wrap_periodic_coordinates
+
 
 def relax_interleaflet_clashes_xy(
     upper: np.ndarray,
@@ -23,7 +25,6 @@ def relax_interleaflet_clashes_xy(
     cutoff: float = 0.20,
     displacement: float = 0.025,
     n_iterations: int = 120,
-    rng: np.random.Generator | None = None,
     box_xy: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Relieve cross-leaflet tail clashes without changing membrane DHH.
@@ -35,8 +36,6 @@ def relax_interleaflet_clashes_xy(
     preserves both leaflets' APL and lateral ordering while breaking exact
     upper/lower tail coincidences before energy minimization.
     """
-    if rng is None:
-        rng = np.random.default_rng()
     if not len(upper) or not len(lower):
         return upper, lower
     if sum(upper_sizes) != len(upper) or sum(lower_sizes) != len(lower):
@@ -46,7 +45,6 @@ def relax_interleaflet_clashes_xy(
 
     from scipy.spatial import cKDTree
 
-    del rng
     z_origin = min(float(upper[:, 2].min()), float(lower[:, 2].min())) - 1.0
     z_box = (
         max(float(upper[:, 2].max()), float(lower[:, 2].max()))
@@ -55,7 +53,9 @@ def relax_interleaflet_clashes_xy(
     )
     upper_search = upper.copy()
     if box_xy is not None:
-        upper_search[:, :2] = np.mod(upper_search[:, :2], box_xy)
+        upper_search[:, :2] = wrap_periodic_coordinates(
+            upper_search[:, :2], box_xy,
+        )
     upper_search[:, 2] -= z_origin
     tree_options = (
         {"boxsize": np.asarray([box_xy, box_xy, z_box])}
@@ -75,7 +75,9 @@ def relax_interleaflet_clashes_xy(
             candidate = lower.copy()
             candidate[:, :2] += np.asarray([shift_x, shift_y])
             if box_xy is not None:
-                candidate[:, :2] = np.mod(candidate[:, :2], box_xy)
+                candidate[:, :2] = wrap_periodic_coordinates(
+                    candidate[:, :2], box_xy,
+                )
             candidate[:, 2] -= z_origin
             nearest = tree.query(candidate, k=1)[0]
             score = tuple(
@@ -207,9 +209,15 @@ def relax_lipid_clashes(
 
     # Build per-lipid offsets
     if lipid_sizes is not None:
-        sizes = list(lipid_sizes)
+        sizes = [int(size) for size in lipid_sizes]
     else:
+        if len(coords) % n_lipids:
+            raise ValueError("n_lipids must partition coordinates exactly")
         sizes = [atoms_per_lipid] * n_lipids
+    if any(size <= 0 for size in sizes) or sum(sizes) != len(coords):
+        raise ValueError("lipid_sizes must be positive and partition coordinates")
+    if len(atom_names) != len(coords):
+        raise ValueError("atom_names must match coordinates")
     offsets = np.cumsum([0] + sizes)
 
     from scipy.spatial import cKDTree
@@ -222,7 +230,7 @@ def relax_lipid_clashes(
         search_centres = centres.copy()
         tree_options = {}
         if box_xy is not None:
-            search_centres = np.mod(search_centres, box_xy)
+            search_centres = wrap_periodic_coordinates(search_centres, box_xy)
             tree_options = {"boxsize": np.asarray([box_xy, box_xy])}
         lipid_pairs = cKDTree(search_centres, **tree_options).query_pairs(
             r=vdw_cutoff, output_type="ndarray"
@@ -297,7 +305,9 @@ def rotate_lipids_away_from_clashes(
     def _tree_coords(values: np.ndarray) -> np.ndarray:
         transformed = values.copy()
         if box_xy is not None:
-            transformed[:, :2] = np.mod(transformed[:, :2], box_xy)
+            transformed[:, :2] = wrap_periodic_coordinates(
+                transformed[:, :2], box_xy,
+            )
         transformed[:, 2] -= z_origin
         return transformed
 
@@ -401,7 +411,9 @@ def rotate_lipids_away_from_external_clashes(
     def tree_coords(values: np.ndarray) -> np.ndarray:
         transformed = values.copy()
         if box_xy is not None:
-            transformed[:, :2] = np.mod(transformed[:, :2], box_xy)
+            transformed[:, :2] = wrap_periodic_coordinates(
+                transformed[:, :2], box_xy,
+            )
         transformed[:, 2] -= z_origin
         return transformed
 

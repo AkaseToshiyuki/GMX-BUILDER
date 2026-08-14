@@ -77,6 +77,10 @@ GAFF_PROTEIN_FORCE_FIELD = "amber14sb"
 # production runs.  CHARMM alternatives remain available where an exact RTP
 # exists.
 _GAFF_UNAVAILABLE: dict[str, str] = {
+    "BSM": (
+        "three independent 1000 ps explicit-solvent NPT builds retained only "
+        "about 63% of the experimental C24:0 sphingomyelin DHH"
+    ),
     "GM1": "the corrected ganglioside identity does not complete GAFF2 parameterization",
     "PAPI": "the corrected phosphoinositide identity does not complete GAFF2 parameterization",
     "POP3": "the corrected phosphoinositide identity does not complete GAFF2 parameterization",
@@ -85,7 +89,10 @@ _GAFF_UNAVAILABLE: dict[str, str] = {
     "25OHC": "repeated GAFF2 NPT builds fail the sterol orientation gate",
     "27OHC": "repeated GAFF2 NPT builds fail the sterol orientation gate",
     "CAMP": "repeated GAFF2 NPT builds fail the sterol orientation gate",
-    "CHOL": "repeated GAFF2 NPT builds fail the sterol orientation gate",
+    "CHOL": (
+        "a corrected 1000 ps explicit-solvent NPT rebuild retained only "
+        "93.8% correctly oriented membrane molecules"
+    ),
     "SITO": "repeated GAFF2 NPT builds fail the sterol orientation gate",
     "MGDG": "the corrected GAFF2 structure retains unresolved minimization overlaps",
     "SOP2": "the corrected GAFF2 bilayer does not pass the hydrophobic-core seal gate",
@@ -96,7 +103,6 @@ _GAFF_UNAVAILABLE: dict[str, str] = {
 # explicit-solvent NPT conformer gates and therefore remain unavailable in the
 # Amber workflow until a validated library exists.
 _LIPID21_LIBRARY_UNAVAILABLE: dict[str, str] = {
-    "CHOL": "the explicit-solvent Lipid21 conformer set fails the orientation gate",
     "DOPA": "no Lipid21 conformer set completed all production quality gates",
     "DOPC": "no Lipid21 conformer set completed all production quality gates",
     "DPPE": "the Lipid21 conformer set fails the minimum inward-orientation gate",
@@ -157,6 +163,30 @@ def gaff_lipid_capability(lipid_name: str) -> tuple[bool, str]:
     return False, f"Amber/GAFF2 unavailable: {reason}{suffix}"
 
 
+def amber_lipid_backend_candidates(
+    lipid_names: list[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return every scientifically eligible Amber backend in preference order."""
+    from gmxbuilder.modules.forcefield.gaff_backend import gaff_available
+    from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
+
+    names = sorted({
+        str(value).strip().upper() for value in lipid_names if str(value).strip()
+    })
+    if not names:
+        return ("none",)
+    candidates = []
+    if all(
+        lipid21_capability(name)[0]
+        and name not in _LIPID21_LIBRARY_UNAVAILABLE
+        for name in names
+    ):
+        candidates.append("lipid21")
+    if gaff_available() and all(gaff_lipid_capability(name)[0] for name in names):
+        candidates.append("gaff2")
+    return tuple(candidates)
+
+
 def amber_lipid_backend(lipid_names: list[str] | tuple[str, ...]) -> tuple[str | None, str]:
     """Resolve one coherent Amber lipid backend for the complete membrane.
 
@@ -172,32 +202,51 @@ def amber_lipid_backend(lipid_names: list[str] | tuple[str, ...]) -> tuple[str |
     if not names:
         return "none", "no membrane lipids selected"
     lipid21_missing = [name for name in names if not lipid21_capability(name)[0]]
-    if not lipid21_missing:
-        failed_libraries = [
-            (name, _LIPID21_LIBRARY_UNAVAILABLE[name])
-            for name in names
-            if name in _LIPID21_LIBRARY_UNAVAILABLE
-        ]
-        if failed_libraries:
-            reasons = "; ".join(
-                f"{name}: {reason}" for name, reason in failed_libraries
-            )
-            return None, (
-                "Exact Lipid21 topology exists, but no validated Lipid21 NPT "
-                f"starting-conformer library is available. {reasons}. "
-                "Use CHARMM36m or CHARMM36 where offered."
-            )
+    failed_libraries = [
+        (name, _LIPID21_LIBRARY_UNAVAILABLE[name])
+        for name in names
+        if name in _LIPID21_LIBRARY_UNAVAILABLE
+    ]
+    if not lipid21_missing and not failed_libraries:
         return "lipid21", "all selected lipids use exact Amber Lipid21 v1.0 parameters"
 
     # Reserved policy tier: no additional Amber-specialized lipid family has
     # yet passed GMXBUILDER's identity and real-GROMACS validation contract.
-    blocked = [(name, gaff_lipid_capability(name)[1]) for name in names if not gaff_lipid_capability(name)[0]]
+    blocked = [
+        (name, gaff_lipid_capability(name)[1])
+        for name in names
+        if not gaff_lipid_capability(name)[0]
+    ]
     if gaff_available() and not blocked:
+        fallback_causes = []
+        if lipid21_missing:
+            fallback_causes.append(
+                "exact Lipid21 coverage is absent for: " + ", ".join(lipid21_missing)
+            )
+        if failed_libraries:
+            fallback_causes.append(
+                "the Lipid21 NPT library is unavailable for: "
+                + "; ".join(f"{name} ({reason})" for name, reason in failed_libraries)
+            )
         return "gaff2", (
-            "GAFF2 fallback is required for the entire membrane because exact "
-            f"Lipid21 coverage is absent for: {', '.join(lipid21_missing)}"
+            "GAFF2 fallback is required for the entire membrane because "
+            + "; ".join(fallback_causes)
         )
     reasons = [reason for _name, reason in blocked]
+    if failed_libraries:
+        reasons.insert(
+            0,
+            "Exact Lipid21 topology exists but its validated NPT library is "
+            "unavailable: "
+            + "; ".join(
+                f"{name} ({reason})" for name, reason in failed_libraries
+            ),
+        )
+    if lipid21_missing:
+        reasons.insert(
+            0,
+            "Exact Lipid21 topology is absent for: " + ", ".join(lipid21_missing),
+        )
     if not gaff_available():
         reasons.append("AmberTools/ACPYPE is unavailable")
     return None, (

@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 import subprocess
 
 import numpy as np
@@ -105,6 +106,28 @@ def test_cgenff_package_is_imported_and_hydrogens_are_added(tmp_path):
     assert result.structure.atom_names == ["C1", "H1"]
     assert result.metadata["ligand_parameters"]["LIG"]["source"] == "cgenff"
     assert result.component_by_kind(ComponentKind.LIGAND)[0].metadata["molecule_charges"] == {"LIG": 0}
+
+
+def test_cgenff_nbfix_uses_pair_rmin_not_atom_rmin_half(tmp_path):
+    mol2, stream = _write_package(tmp_path)
+    stream.write_text(
+        STREAM.replace(
+            "HGX1 0.0 -0.0200 1.2000\nEND\n",
+            "HGX1 0.0 -0.0200 1.2000\n"
+            "NBFIX\nCGX1 HGX1 -0.0500 3.5000\nEND\n",
+        )
+    )
+    template = prepare_cgenff_molecule(
+        "LIG", mol2, stream, "charmm36m", tmp_path / "nbfix"
+    )
+    record = next(
+        line.split()
+        for line in template.atomtypes_path.read_text().splitlines()
+        if line.startswith("CGX1") and "HGX1" in line
+    )
+    expected_sigma_nm = 0.35 / (2.0 ** (1.0 / 6.0))
+    assert math.isclose(float(record[3]), expected_sigma_nm, rel_tol=1e-9)
+    assert math.isclose(float(record[4]), 0.05 * 4.184, rel_tol=1e-9)
 
 
 def test_imported_cgenff_topology_passes_grompp(tmp_path):

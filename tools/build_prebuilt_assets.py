@@ -18,11 +18,14 @@ from gmxbuilder.modules.forcefield.gaff_backend import (
     _safe_name,
 )
 from gmxbuilder.modules.forcefield.lipid_policy import gaff_lipid_capability
-from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
+from gmxbuilder.modules.membrane.equilibrated_library import (
+    SCHEMA_VERSION as LIBRARY_SCHEMA_VERSION,
+    EquilibratedLipidLibrary,
+)
 from gmxbuilder.modules.membrane.lipids import LipidRegistry
 
 
-ASSET_VERSION = 1
+ASSET_VERSION = 2
 FORCE_FIELDS = ("amber14sb", "charmm36m", "charmm36")
 
 
@@ -56,10 +59,7 @@ def build_archive(
     coverage = library.coverage(list(FORCE_FIELDS))
     for job in coverage:
         if not job["ready"]:
-            raise RuntimeError(
-                f"Required library is not ready: {job['force_field']} "
-                f"{job['lipid_name']}"
-            )
+            continue
         entry = library.inspect(
             job["lipid_name"], job["force_field"], job["lipid_ff"],
         )
@@ -69,21 +69,25 @@ def build_archive(
             (job["parameter_family"], job["lipid_name"])
         ] = entry.path
 
+    if not strict_entries:
+        raise RuntimeError("No validated lipid conformer libraries are available")
+
     gaff_cache_dirs: dict[str, Path] = {}
-    for name in LipidRegistry.list():
-        capable, _reason = gaff_lipid_capability(name)
-        if not capable:
+    for family, name in sorted(strict_entries):
+        if family != "amber-gaff2":
             continue
+        capable, reason = gaff_lipid_capability(name)
+        if not capable:
+            raise RuntimeError(
+                f"Validated Amber/GAFF2 entry has no usable GAFF capability for "
+                f"{name}: {reason}"
+            )
         lipid = LipidRegistry.get(name)
         safe_name = _safe_name(name)
         key = _cache_key(safe_name, lipid.smiles, int(lipid.charge), "bcc")
         cache_dir = gaff_source / f"{safe_name}-{key}"
         if _load_cached(cache_dir) is None:
             raise RuntimeError(f"Validated GAFF2 cache is missing for {name}")
-        entry = library.inspect(name, "amber14sb", "gaff2")
-        if entry is None:
-            raise RuntimeError(f"Validated Amber/GAFF2 conformers are missing for {name}")
-        strict_entries[("amber-gaff2", name)] = entry.path
         gaff_cache_dirs[name] = cache_dir
 
     with tempfile.TemporaryDirectory(prefix="gmxbuilder-prebuilt-build-") as temp:
@@ -104,6 +108,13 @@ def build_archive(
         strict_files = len([path for path in strict_root.rglob("*") if path.is_file()])
         gaff_files = len([path for path in gaff_root.rglob("*") if path.is_file()])
         contents = {
+            "compatible_force_field_jobs": len(coverage),
+            "validated_force_field_jobs": sum(
+                bool(job["ready"]) for job in coverage
+            ),
+            "unavailable_force_field_jobs": sum(
+                not bool(job["ready"]) for job in coverage
+            ),
             "strict_library_entries": len(strict_entries),
             "strict_library_files": strict_files,
             "conformations": conformers,
@@ -115,6 +126,7 @@ def build_archive(
     manifest = {
         "schema_version": 1,
         "asset_version": ASSET_VERSION,
+        "library_schema_version": LIBRARY_SCHEMA_VERSION,
         "software_version": __version__,
         "archive": destination.name,
         "archive_bytes": destination.stat().st_size,

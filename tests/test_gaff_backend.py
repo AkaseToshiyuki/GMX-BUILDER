@@ -12,6 +12,7 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.io.top import TopologyWriter
 from gmxbuilder.io.gro import GROWriter
 from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+from gmxbuilder.geometry.rdkit_lipid import build_rdkit_lipid_geometry
 from gmxbuilder.modules.forcefield.gaff_backend import (
     _itp_charges,
     estimate_gaff_net_charge,
@@ -126,6 +127,23 @@ def test_gaff_template_is_cached_and_namespaced(monkeypatch, tmp_path):
     assert "[ atomtypes ]" not in first.itp_path.read_text()
     assert sum(_itp_charges(first.itp_path)) == pytest.approx(lipid.charge, abs=0.02)
     assert set(Path(tmp_path).glob("CAMP-*"))
+
+
+@pytest.mark.parametrize("lipid_name", ["POPC", "CHOL"])
+def test_explicit_gaff_lipid_geometry_uses_cached_topology_order(lipid_name):
+    lipid = LipidRegistry.get(lipid_name)
+    template = prepare_gaff_lipid(lipid_name, lipid.smiles, lipid.charge)
+
+    coordinates, atom_names = build_rdkit_lipid_geometry(
+        lipid_name,
+        lipid.smiles,
+        force_field="amber14sb",
+        lipid_ff="gaff2",
+        net_charge=lipid.charge,
+    )
+
+    assert coordinates.shape == template.coordinates.shape
+    assert tuple(atom_names) == template.atom_names
 
 
 def test_force_field_policy_preserves_rtp_and_uses_one_gaff_family():

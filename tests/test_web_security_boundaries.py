@@ -81,6 +81,16 @@ def test_task_resource_validator_rejects_cross_task_path(tmp_path, monkeypatch):
         raise AssertionError("Cross-task resources must be rejected")
 
 
+def test_viewer_route_rejects_non_pipeline_step(tmp_path, monkeypatch):
+    task_id = _task(tmp_path, monkeypatch, "viewer")
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/step/{task_id}/not-a-real-step/viewer.pdb"
+        )
+    assert response.status_code == 400
+    assert response.json()["error"] == "Unknown pipeline step"
+
+
 def test_public_task_state_and_filter_response_do_not_expose_server_paths(
     tmp_path, monkeypatch
 ):

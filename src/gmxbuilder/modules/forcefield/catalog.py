@@ -48,16 +48,17 @@ class ForceFieldProfile:
 _PROFILES = {
     "amber14sb": ForceFieldProfile(
         name="amber14sb",
-        label="AMBER ff14SB (GROMACS 2026.3 port; validated with GROMACS 2025.4)",
+        label="AMBER ff14SB (GROMACS 2026.3 port)",
         family="amber",
         release="GROMACS-2026.3",
         default_water="tip3p",
         ligand_backends=("gaff2",),
         lipid_backends=("gaff2",),
         defaults_signature=(1, 2, "yes", "0.5", "0.83333333333333333"),
-        # The imported data and generated topology were regression-tested with
-        # GROMACS 2025.4; the port uses no 2026-only input syntax.
-        minimum_gromacs=(2025, 4),
+        # This port enables _FF_AMBER_LEAP_ATOM_REORDERING.  GROMACS added the
+        # corresponding LEaP-compatible improper handling in 2026, so older
+        # grompp versions can parse the files while producing different terms.
+        minimum_gromacs=(2026, 0),
     ),
     "amber99sb-ildn": ForceFieldProfile(
         name="amber99sb-ildn",

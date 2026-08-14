@@ -16,14 +16,15 @@ from typing import Optional
 
 @dataclasses.dataclass
 class PatchAtom:
-    """A new atom to add to the residue when applying a patch."""
+    """Identity of an atom added by a force-field-native residue template.
+
+    Coordinates and charges deliberately do not live in this registry.  They
+    come from the selected force field's validated RTP/template; heuristic
+    offsets or partial charges must never be mistaken for simulation input.
+    """
 
     name: str          # atom name, e.g. "P"
     element: str       # element symbol
-    x: float = 0.0     # relative coordinates (nm)
-    y: float = 0.0
-    z: float = 0.0
-    charge: float = 0.0  # partial charge (e)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,12 +71,12 @@ _PHOSPHORYLATION = Patch(
     product_name="SEP",  # default SER→SEP; overridden per target
     charge_shift=-2,
     added_atoms=[
-        PatchAtom("P", "P", x=0.16, y=0.0, z=0.0, charge=1.1),
-        PatchAtom("O1P", "O", x=0.22, y=0.0, z=0.0, charge=-0.7),
-        PatchAtom("O2P", "O", x=0.16, y=0.14, z=0.0, charge=-0.7),
-        PatchAtom("O3P", "O", x=0.16, y=-0.14, z=0.0, charge=-0.7),
+        PatchAtom("P", "P"),
+        PatchAtom("O1P", "O"),
+        PatchAtom("O2P", "O"),
+        PatchAtom("O3P", "O"),
     ],
-    bond_to="OG" if "SER" in ["SER"] else "OG1",  # override per target
+    bond_to="OG",  # overridden for threonine and tyrosine below
     mass_shift=79.98,
     formula_addition="PO3",
     requires_itp="phos.itp",
@@ -132,9 +133,9 @@ _ACETYLATION = Patch(
     product_name="ALY",
     charge_shift=-1,  # LYS +1 → ALY 0
     added_atoms=[
-        PatchAtom("C1", "C", x=0.15, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.27, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.10, y=0.12, z=0.0, charge=-0.2),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
     ],
     bond_to="NZ",
     mass_shift=42.04,
@@ -149,11 +150,11 @@ _SUCCINYLATION = Patch(
     product_name="SLY",
     charge_shift=-1,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.15, y=0.0, z=0.0, charge=0.6),
-        PatchAtom("O1", "O", x=0.27, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.10, y=0.10, z=0.0, charge=-0.3),
-        PatchAtom("C3", "C", x=0.10, y=0.20, z=0.0, charge=-0.3),
-        PatchAtom("O2", "O", x=0.18, y=0.27, z=0.0, charge=-0.5),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
+        PatchAtom("O2", "O"),
     ],
     bond_to="NZ",
     mass_shift=100.07,
@@ -168,9 +169,9 @@ _NTER_ACETYL = Patch(
     product_name="ACE",
     charge_shift=0,  # neutralises the N-terminal NH₃⁺ charge
     added_atoms=[
-        PatchAtom("CH3", "C", x=0.0, y=0.0, z=-0.15, charge=-0.3),
-        PatchAtom("C", "C", x=0.0, y=0.0, z=-0.30, charge=0.5),
-        PatchAtom("O", "O", x=0.0, y=-0.12, z=-0.33, charge=-0.5),
+        PatchAtom("CH3", "C"),
+        PatchAtom("C", "C"),
+        PatchAtom("O", "O"),
     ],
     bond_to="N",
     mass_shift=42.04,
@@ -185,8 +186,8 @@ _CTER_NME = Patch(
     product_name="NME",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("N", "N", x=0.0, y=0.0, z=0.15, charge=-0.5),
-        PatchAtom("CH3", "C", x=0.0, y=0.0, z=0.28, charge=-0.1),
+        PatchAtom("N", "N"),
+        PatchAtom("CH3", "C"),
     ],
     bond_to="C",
     mass_shift=29.04,
@@ -201,9 +202,9 @@ _CARBAMYLATION = Patch(
     product_name="CLY",
     charge_shift=-1,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.25, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("N1", "N", x=0.05, y=0.12, z=0.0, charge=-0.5),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("N1", "N"),
     ],
     bond_to="NZ",
     mass_shift=43.03,
@@ -236,7 +237,7 @@ _CITRULLINATION = Patch(
     charge_shift=-1,
     removed_atoms=["NH1", "NH2"],
     added_atoms=[
-        PatchAtom("O", "O", x=0.0, y=0.0, z=0.0, charge=-0.5),
+        PatchAtom("O", "O"),
     ],
     bond_to="CZ",
     mass_shift=0.98,
@@ -252,7 +253,7 @@ _MYRISTOYL = Patch(
     charge_shift=0,
     added_atoms=[
         # Simplified: just mark the connection point
-        PatchAtom("C1", "C", x=0.0, y=0.0, z=-0.15, charge=0.0),
+        PatchAtom("C1", "C"),
     ],
     bond_to="N",
     mass_shift=210.36,
@@ -267,8 +268,8 @@ _PALMITOYL = Patch(
     product_name="PLC",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.12, y=0.0, z=0.0, charge=0.4),
-        PatchAtom("O1", "O", x=0.22, y=0.0, z=0.0, charge=-0.4),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
     ],
     bond_to="SG",
     mass_shift=238.39,
@@ -289,7 +290,7 @@ _LYSINE_METHYL_MONO = Patch(
     name="KME", description="Lysine mono-methylation — adds methyl to ε-amine",
     target_residues=["LYS"], product_name="MLZ",
     charge_shift=0,  # still +1 (secondary ammonium)
-    added_atoms=[PatchAtom("CM", "C", x=0.12, y=0.06, z=0.0, charge=-0.1)],
+    added_atoms=[PatchAtom("CM", "C")],
     bond_to="NZ", mass_shift=14.03, formula_addition="CH2", requires_itp="kme.itp",
 )
 
@@ -298,8 +299,8 @@ _LYSINE_METHYL_DI = Patch(
     target_residues=["LYS"], product_name="MLY",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("CH1", "C", x=0.12, y=0.08, z=0.0, charge=-0.1),
-        PatchAtom("CH2", "C", x=0.12, y=-0.08, z=0.0, charge=-0.1),
+        PatchAtom("CH1", "C"),
+        PatchAtom("CH2", "C"),
     ],
     bond_to="NZ", mass_shift=28.05, formula_addition="C2H4", requires_itp="kme2.itp",
 )
@@ -309,9 +310,9 @@ _LYSINE_METHYL_TRI = Patch(
     target_residues=["LYS"], product_name="M3L",
     charge_shift=0,  # still +1 (quaternary ammonium)
     added_atoms=[
-        PatchAtom("CM1", "C", x=0.12, y=0.10, z=0.0, charge=-0.1),
-        PatchAtom("CM2", "C", x=0.12, y=-0.05, z=0.09, charge=-0.1),
-        PatchAtom("CM3", "C", x=0.12, y=-0.05, z=-0.09, charge=-0.1),
+        PatchAtom("CM1", "C"),
+        PatchAtom("CM2", "C"),
+        PatchAtom("CM3", "C"),
     ],
     bond_to="NZ", mass_shift=42.08, formula_addition="C3H6", requires_itp="kme3.itp",
 )
@@ -320,7 +321,7 @@ _ARGININE_METHYL_MONO = Patch(
     name="RME", description="Arginine mono-methylation — Nω-methyl-arginine",
     target_residues=["ARG"], product_name="RME",
     charge_shift=0,  # still +1
-    added_atoms=[PatchAtom("CM", "C", x=0.10, y=0.08, z=0.0, charge=-0.1)],
+    added_atoms=[PatchAtom("CM", "C")],
     bond_to="NH1", mass_shift=14.03, formula_addition="CH2", requires_itp="rme.itp",
 )
 
@@ -329,8 +330,8 @@ _ARGININE_METHYL_SYM = Patch(
     target_residues=["ARG"], product_name="2MR",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("CQ1", "C", x=0.10, y=0.08, z=0.0, charge=-0.1),
-        PatchAtom("CQ2", "C", x=-0.10, y=0.08, z=0.0, charge=-0.1),
+        PatchAtom("CQ1", "C"),
+        PatchAtom("CQ2", "C"),
     ],
     bond_to="NH1", mass_shift=28.05, formula_addition="C2H4", requires_itp="rme2.itp",
 )
@@ -352,7 +353,7 @@ _CYSTEINE_SULFENIC = Patch(
     name="CSO", description="Cysteine oxidation to protonated sulfenic acid (-SOH)",
     target_residues=["CYS"], product_name="CSO",
     charge_shift=0,
-    added_atoms=[PatchAtom("OD", "O", x=0.14, y=0.0, z=0.0, charge=-0.5)],
+    added_atoms=[PatchAtom("OD", "O")],
     bond_to="SG", mass_shift=16.00, formula_addition="O", requires_itp="cso.itp",
 )
 
@@ -361,8 +362,8 @@ _CYSTEINE_SULFINIC = Patch(
     target_residues=["CYS"], product_name="CSD",
     charge_shift=-1,
     added_atoms=[
-        PatchAtom("O1", "O", x=0.14, y=0.07, z=0.0, charge=-0.4),
-        PatchAtom("O2", "O", x=0.14, y=-0.07, z=0.0, charge=-0.4),
+        PatchAtom("O1", "O"),
+        PatchAtom("O2", "O"),
     ],
     bond_to="SG", mass_shift=32.00, formula_addition="O2", requires_itp="csd.itp",
 )
@@ -371,7 +372,7 @@ _CYSTEINE_SULFENATE = Patch(
     name="CSX", description="Cysteine oxidation to deprotonated sulfenic acid (-SO⁻)",
     target_residues=["CYS"], product_name="CSX",
     charge_shift=-1,
-    added_atoms=[PatchAtom("OD", "O", x=0.14, y=0.0, z=0.0, charge=-0.8)],
+    added_atoms=[PatchAtom("OD", "O")],
     bond_to="SG", mass_shift=16.00, formula_addition="O", requires_itp="csx.itp",
 )
 
@@ -380,8 +381,8 @@ _CYSTEINE_NITROSYL = Patch(
     target_residues=["CYS"], product_name="SNC",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("ND", "N", x=0.14, y=0.0, z=0.0, charge=0.2),
-        PatchAtom("OE", "O", x=0.22, y=0.0, z=0.0, charge=-0.2),
+        PatchAtom("ND", "N"),
+        PatchAtom("OE", "O"),
     ],
     bond_to="SG", mass_shift=30.01, formula_addition="NO", requires_itp="csn.itp",
 )
@@ -391,7 +392,7 @@ _METHIONINE_OXIDATION = Patch(
     description="Methionine oxidation to sulfoxide — R/S state must be specified",
     target_residues=["MET"], product_name="SME",
     charge_shift=0,
-    added_atoms=[PatchAtom("O", "O", x=0.14, y=0.0, z=0.0, charge=-0.4)],
+    added_atoms=[PatchAtom("O", "O")],
     bond_to="SD", mass_shift=16.00, formula_addition="O", requires_itp="mse.itp",
 )
 
@@ -412,7 +413,7 @@ _ASN_DEAMIDATION = Patch(
     target_residues=["ASN"], product_name="ASP",
     charge_shift=-1,  # neutral ASN → -1 ASP
     removed_atoms=["ND2"],
-    added_atoms=[PatchAtom("OD2", "O", x=0.0, y=0.0, z=0.0, charge=-0.5)],
+    added_atoms=[PatchAtom("OD2", "O")],
     bond_to="CG", mass_shift=0.98, formula_addition="", requires_itp="",
 )
 
@@ -421,7 +422,7 @@ _GLN_DEAMIDATION = Patch(
     target_residues=["GLN"], product_name="GLU",
     charge_shift=-1,  # neutral GLN → -1 GLU
     removed_atoms=["NE2"],
-    added_atoms=[PatchAtom("OE2", "O", x=0.0, y=0.0, z=0.0, charge=-0.5)],
+    added_atoms=[PatchAtom("OE2", "O")],
     bond_to="CD", mass_shift=0.98, formula_addition="", requires_itp="",
 )
 
@@ -430,8 +431,8 @@ _NTER_FORMYL = Patch(
     target_residues=["NTER"], product_name="FOR",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("C", "C", x=0.0, y=0.0, z=-0.15, charge=0.4),
-        PatchAtom("O", "O", x=0.0, y=-0.12, z=-0.18, charge=-0.4),
+        PatchAtom("C", "C"),
+        PatchAtom("O", "O"),
     ],
     bond_to="N", mass_shift=28.01, formula_addition="CHO", requires_itp="for.itp",
 )
@@ -449,12 +450,12 @@ _LYSINE_MALONYL = Patch(
     target_residues=["LYS"], product_name="MALY",
     charge_shift=-1,  # +1 LYS → 0 (malonyl carboxylate -1)
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.25, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.08, y=0.10, z=0.0, charge=-0.2),
-        PatchAtom("C3", "C", x=0.08, y=-0.10, z=0.0, charge=0.6),
-        PatchAtom("O2", "O", x=0.18, y=-0.12, z=0.0, charge=-0.5),
-        PatchAtom("O3", "O", x=0.0, y=-0.18, z=0.0, charge=-0.5),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
+        PatchAtom("O2", "O"),
+        PatchAtom("O3", "O"),
     ],
     bond_to="NZ", mass_shift=86.05, formula_addition="C3H2O3", requires_itp="mal.itp",
 )
@@ -464,11 +465,11 @@ _LYSINE_CROTONYL = Patch(
     target_residues=["LYS"], product_name="CRY",
     charge_shift=-1,  # converts +1 NH₃⁺ to neutral amide
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.25, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.08, y=0.08, z=0.0, charge=-0.1),
-        PatchAtom("C3", "C", x=0.05, y=0.18, z=0.0, charge=-0.2),
-        PatchAtom("C4", "C", x=-0.02, y=0.26, z=0.0, charge=-0.2),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
+        PatchAtom("C4", "C"),
     ],
     bond_to="NZ", mass_shift=68.07, formula_addition="C4H4O", requires_itp="cro.itp",
 )
@@ -478,11 +479,11 @@ _LYSINE_BUTYRYL = Patch(
     target_residues=["LYS"], product_name="BLY",
     charge_shift=-1,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.25, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.08, y=0.10, z=0.0, charge=-0.1),
-        PatchAtom("C3", "C", x=0.05, y=0.18, z=0.0, charge=-0.1),
-        PatchAtom("C4", "C", x=0.10, y=0.28, z=0.0, charge=-0.2),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
+        PatchAtom("C4", "C"),
     ],
     bond_to="NZ", mass_shift=70.09, formula_addition="C4H6O", requires_itp="but.itp",
 )
@@ -492,10 +493,10 @@ _LYSINE_PROPIONYL = Patch(
     target_residues=["LYS"], product_name="PLY",
     charge_shift=-1,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.25, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.08, y=0.10, z=0.0, charge=-0.2),
-        PatchAtom("C3", "C", x=0.05, y=0.18, z=0.0, charge=-0.2),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
     ],
     bond_to="NZ", mass_shift=56.06, formula_addition="C3H4O", requires_itp="pro.itp",
 )
@@ -505,14 +506,14 @@ _LYSINE_GLUTARYL = Patch(
     target_residues=["LYS"], product_name="GRY",
     charge_shift=-1,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.25, y=0.0, z=0.0, charge=-0.5),
-        PatchAtom("C2", "C", x=0.08, y=0.08, z=0.0, charge=-0.1),
-        PatchAtom("C3", "C", x=0.05, y=0.16, z=0.0, charge=-0.1),
-        PatchAtom("C4", "C", x=0.10, y=0.24, z=0.0, charge=-0.1),
-        PatchAtom("C5", "C", x=0.05, y=0.32, z=0.0, charge=0.6),
-        PatchAtom("O2", "O", x=0.12, y=0.36, z=0.0, charge=-0.5),
-        PatchAtom("O3", "O", x=-0.05, y=0.34, z=0.0, charge=-0.5),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
+        PatchAtom("C4", "C"),
+        PatchAtom("C5", "C"),
+        PatchAtom("O2", "O"),
+        PatchAtom("O3", "O"),
     ],
     bond_to="NZ", mass_shift=114.10, formula_addition="C5H6O3", requires_itp="glr.itp",
 )
@@ -522,19 +523,19 @@ _O_GLcNAc_SER = Patch(
     target_residues=["SER"], product_name="GCS",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.14, y=0.0, z=0.0, charge=0.3),
-        PatchAtom("C2", "C", x=0.22, y=0.05, z=0.0, charge=0.1),
-        PatchAtom("C3", "C", x=0.28, y=-0.03, z=0.0, charge=0.1),
-        PatchAtom("C4", "C", x=0.25, y=-0.13, z=0.0, charge=0.1),
-        PatchAtom("C5", "C", x=0.17, y=-0.18, z=0.0, charge=0.1),
-        PatchAtom("O5", "O", x=0.12, y=-0.10, z=0.0, charge=-0.3),
-        PatchAtom("O1", "O", x=0.28, y=-0.22, z=0.0, charge=-0.4),
-        PatchAtom("O3", "O", x=0.33, y=0.05, z=0.0, charge=-0.4),
-        PatchAtom("O4", "O", x=0.30, y=-0.18, z=0.0, charge=-0.4),
-        PatchAtom("N2", "N", x=0.20, y=0.14, z=0.0, charge=-0.3),
-        PatchAtom("C6", "C", x=0.20, y=0.24, z=0.0, charge=0.4),
-        PatchAtom("O6", "O", x=0.10, y=0.26, z=0.0, charge=-0.4),
-        PatchAtom("C7", "C", x=0.30, y=0.28, z=0.0, charge=-0.2),
+        PatchAtom("C1", "C"),
+        PatchAtom("C2", "C"),
+        PatchAtom("C3", "C"),
+        PatchAtom("C4", "C"),
+        PatchAtom("C5", "C"),
+        PatchAtom("O5", "O"),
+        PatchAtom("O1", "O"),
+        PatchAtom("O3", "O"),
+        PatchAtom("O4", "O"),
+        PatchAtom("N2", "N"),
+        PatchAtom("C6", "C"),
+        PatchAtom("O6", "O"),
+        PatchAtom("C7", "C"),
     ],
     bond_to="OG", mass_shift=203.19, formula_addition="C8H13NO5", requires_itp="glcnac.itp",
 )
@@ -552,10 +553,10 @@ _TYROSINE_SULFATION = Patch(
     target_residues=["TYR"], product_name="TYS",
     charge_shift=-1,  # neutral TYR → -1 (sulfate monoester)
     added_atoms=[
-        PatchAtom("S", "S", x=0.16, y=0.0, z=0.0, charge=1.3),
-        PatchAtom("O1", "O", x=0.22, y=0.07, z=0.0, charge=-0.5),
-        PatchAtom("O2", "O", x=0.22, y=-0.07, z=0.0, charge=-0.5),
-        PatchAtom("O3", "O", x=0.10, y=0.0, z=0.0, charge=-0.5),
+        PatchAtom("S", "S"),
+        PatchAtom("O1", "O"),
+        PatchAtom("O2", "O"),
+        PatchAtom("O3", "O"),
     ],
     bond_to="OH", mass_shift=80.06, formula_addition="SO3", requires_itp="tys.itp",
 )
@@ -565,9 +566,9 @@ _SERINE_ACETYL = Patch(
     target_residues=["SER"], product_name="OAS",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.13, y=0.0, z=0.0, charge=0.5),
-        PatchAtom("O1", "O", x=0.23, y=0.0, z=0.0, charge=-0.4),
-        PatchAtom("C2", "C", x=0.08, y=0.10, z=0.0, charge=-0.2),
+        PatchAtom("C1", "C"),
+        PatchAtom("O1", "O"),
+        PatchAtom("C2", "C"),
     ],
     bond_to="OG", mass_shift=42.04, formula_addition="C2H2O", requires_itp="sac.itp",
 )
@@ -641,7 +642,7 @@ _CYSTEINE_FARNESYL = Patch(
     target_residues=["CYS"], product_name="FAR",
     charge_shift=0,
     added_atoms=[
-        PatchAtom("C1", "C", x=0.12, y=0.0, z=0.0, charge=0.0),
+        PatchAtom("C1", "C"),
     ],
     bond_to="SG", mass_shift=204.35, formula_addition="C15H25", requires_itp="far.itp",
 )
@@ -658,7 +659,7 @@ _TRYPTOPHAN_OXIDATION = Patch(
     name="WOX", description="Tryptophan oxidation — hydroxytryptophan",
     target_residues=["TRP"], product_name="WOH",
     charge_shift=0,
-    added_atoms=[PatchAtom("OH", "O", x=0.0, y=0.12, z=0.0, charge=-0.4)],
+    added_atoms=[PatchAtom("OH", "O")],
     bond_to="CH2", mass_shift=16.00, formula_addition="O", requires_itp="wox.itp",
 )
 
@@ -666,7 +667,7 @@ _GLYCINE_LIPIDATION = Patch(
     name="GPL", description="N-palmitoylation on glycine — C16:0 acyl chain",
     target_residues=["GLY"], product_name="GPL",
     charge_shift=0,
-    added_atoms=[PatchAtom("C1", "C", x=0.0, y=0.0, z=-0.15, charge=0.4)],
+    added_atoms=[PatchAtom("C1", "C")],
     bond_to="N", mass_shift=238.39, formula_addition="C16H31O", requires_itp="gpl.itp",
 )
 

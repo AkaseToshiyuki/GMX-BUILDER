@@ -20,8 +20,15 @@ GROMACS 输入包。网页端采用分步检查点流程，用户在 Viewer 中�
   离子。干膜导出仅包含坐标与拓扑。
 - **Solvator**：在不构建膜的情况下，为蛋白、标准线性 DNA/RNA、蛋白–核酸、
   蛋白–配体或核酸–配体体系建立水盒。
-- **Martini 3 Builder**：以独立流水线映射标准蛋白，并构建 Martini 3 水相、
-  平面膜或蛋白–膜粗粒化体系。
+- **Martini 3 Bilayer Builder**：映射并自动定位膜蛋白，指定每叶精确脂质数量，
+  从随附的官方 PC/PE/PG/PS/SM/甾醇集合选择对称或非对称组分，再添加水和离子；
+  周期盒尺寸由体系自动推导。
+- **Martini 3 Solvent Builder**：映射标准蛋白并构建 Martini 3 水相体系，
+  流程内部不再切换体系类型。
+
+Solvator 中的标准线性 DNA/RNA 当前仅支持 CHARMM36m 与 CHARMM TIP3P。
+原生拓扑处理会将上传的核酸坐标替换为补全氢原子的 `pdb2gmx` 输出；继续流程
+前必须在 Step 3 Viewer 中逐链复核。修饰、环状或断裂核酸会被明确阻断。
 
 每次 Check 都会生成任务独立的坐标检查点。最终构建只对最后确认的坐标分配
 拓扑并打包，不会重新构建膜、溶剂或离子。
@@ -80,8 +87,9 @@ gmxbuilder prebuilt-assets status
 gmxbuilder prebuilt-assets install
 ```
 
-`prebuilt-assets install` 会先校验归档，再向用户缓存安装缺失文件，不会覆盖
-已经存在的缓存文件。
+`prebuilt-assets install` 会校验归档 SHA-256、当前严格库 schema，并逐条确认
+归档中的构象条目可加载，再向用户缓存安装缺失文件。发布包包含发布时已通过质量
+门槛的子集；失败或未完成组合会明确保持不可用。安装不会覆盖已经存在的缓存文件。
 公开仓库及其公开 Release 资产无需 GitHub 访问令牌。
 
 ## 网页端
@@ -172,7 +180,8 @@ gmxbuilder list-water
 gmxbuilder list-lipids
 gmxbuilder list-modules
 gmxbuilder lipid-library status
-gmxbuilder coarse-grained --help
+gmxbuilder martini3-bilayer --help
+gmxbuilder martini3-solvent --help
 ```
 
 ### Martini 3 示例
@@ -180,17 +189,17 @@ gmxbuilder coarse-grained --help
 构建并交互确认一个溶剂化的非对称混合膜：
 
 ```bash
-gmxbuilder coarse-grained \
-  --mode bilayer \
+gmxbuilder martini3-bilayer \
   --upper POPC:3 --upper CHOL:1 \
   --lower POPE:1 --lower POPG:1 \
-  --box-xy 12 --box-z 14 --salt 0.15 \
+  --lipids-per-leaflet 150 --padding 2 --salt 0.15 \
   --threads 8 --mpi-ranks 1 --gpu-ids 0 \
   --output ./martini-system
 ```
 
-蛋白–膜体系增加 `--pdb protein.pdb`；水相蛋白使用 `--mode solution
---pdb protein.pdb`。首版只接受标准蛋白残基，并明确拒绝配体、PTM、糖链、
+蛋白–膜体系增加 `--pdb protein.pdb`；水相蛋白使用
+`gmxbuilder martini3-solvent --pdb protein.pdb ...`。首版只接受标准蛋白残基，
+并明确拒绝配体、PTM、糖链、
 核酸、自定义 CG 分子、曲面膜和 backmapping。当前安装的权威能力列表由
 `GET /api/coarse-grained/capabilities` 返回。
 
@@ -276,7 +285,7 @@ membrane:
 `simparams.hardware` 只配置生成的 `run_md.sh`，不会改变 MDP 物理参数。CPU
 线程数必须能被 MPI rank 数整除，启用的 GPU 编号必须唯一。程序会按体系
 类别和力场家族选择缺省协议，同时保留每个导出阶段的显式编辑能力。完整参数
-契约见[用户手册](docs/GMXBUILDER_USER_MANUAL_V1.0.1.zh-CN.md)。
+契约见[用户手册](docs/GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md)。
 
 ## HTTP API
 
@@ -419,8 +428,8 @@ GROMACS 设备访问。
 ## 文档
 
 - [文档中心](docs/README.zh-CN.md)
-- [用户手册 V1.0.1](docs/GMXBUILDER_USER_MANUAL_V1.0.1.zh-CN.md)
-  （[PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.1.zh-CN.pdf)）
+- [用户手册 V1.0.2](docs/GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md)
+  （[PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.pdf)）
 - [科学兼容性与能力边界](docs/SCIENTIFIC_COMPATIBILITY.zh-CN.md)
 
 ## 许可证与第三方数据

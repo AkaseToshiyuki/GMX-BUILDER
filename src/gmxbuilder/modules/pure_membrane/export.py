@@ -1,7 +1,6 @@
 """Export for protein-free bilayers."""
 
 from pathlib import Path
-import zipfile
 
 from gmxbuilder.core.system import System
 from gmxbuilder.modules.export.exporter import ExportModule
@@ -33,12 +32,9 @@ class PureMembraneExportModule(ExportModule):
             encoding="utf-8",
         )
         zip_path = output_dir / f"{system_name}.zip"
-        zip_path.unlink(missing_ok=True)
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(output_dir.rglob("*")):
-                if path == zip_path or path.suffix == ".zip" or not path.is_file():
-                    continue
-                archive.write(path, path.relative_to(output_dir))
+        self._write_archive(
+            output_dir, zip_path, [], include_run_script=False
+        )
         result.log = [
             line for line in result.log
             if "run_md.sh" not in line and "mdp/" not in line

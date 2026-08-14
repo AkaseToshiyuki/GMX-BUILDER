@@ -6,6 +6,7 @@ from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.modules.input.pdb_input import PDBInputModule
 from gmxbuilder.modules.input.protein_repair import (
+    assess_repairable_missing_atoms,
     find_repairable_missing_atoms,
     repair_standard_protein_heavy_atoms,
 )
@@ -48,6 +49,41 @@ def test_disconnected_partial_sidechain_requires_user_review():
 
     with pytest.raises(ModuleConfigError, match="disconnected partial side chain"):
         find_repairable_missing_atoms(structure)
+
+
+def test_assessment_separates_blockers_from_safe_candidates():
+    structure = _structure(["N", "CA", "C", "CB"])
+
+    candidates, blockers = assess_repairable_missing_atoms(structure)
+
+    assert candidates == {}
+    assert len(blockers) == 1
+    assert "missing backbone O" in blockers[0]
+
+
+def test_input_preserves_unrepairable_damage_as_explicit_warning(tmp_path):
+    pdb = tmp_path / "missing_backbone_oxygen.pdb"
+    pdb.write_text(
+        "ATOM      1  N   ALA A   3       0.000   0.000   0.000  1.00  0.00           N\n"
+        "ATOM      2  CA  ALA A   3       1.458   0.000   0.000  1.00  0.00           C\n"
+        "ATOM      3  C   ALA A   3       2.009   1.420   0.000  1.00  0.00           C\n"
+        "ATOM      4  CB  ALA A   3       1.986  -0.752   1.247  1.00  0.00           C\n"
+        "TER\nEND\n",
+        encoding="utf-8",
+    )
+    initial = System(
+        structure=Structure(
+            coordinates=np.empty((0, 3)),
+            box_vectors=np.eye(3) * 10.0,
+        )
+    )
+
+    result = PDBInputModule().run(initial, {"pdb": str(pdb)})
+
+    assert result.success
+    warnings = result.system.metadata["input_repair"]["unrepairable_warnings"]
+    assert any("missing backbone O" in warning for warning in warnings)
+    assert any("simulation topology remains blocked" in line for line in result.log)
 
 
 def test_pdbfixer_repairs_arg_without_moving_existing_atoms():

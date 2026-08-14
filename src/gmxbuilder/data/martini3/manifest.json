@@ -24,17 +24,17 @@
     "martini_v3.0.0_sterols_v1.itp": "0ea3ae6af4f37f024759e6ce04b84cf64bd46e97d71c6e48bae7fb8512a9e778"
   },
   "lipids": {
-    "POPC": {"family": "PC", "charge": 0, "apl_nm2": 0.64, "builder_params": "LTF"},
-    "DPPC": {"family": "PC", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF"},
-    "DOPC": {"family": "PC", "charge": 0, "apl_nm2": 0.67, "builder_params": "LTF"},
-    "POPE": {"family": "PE", "charge": 0, "apl_nm2": 0.59, "builder_params": "LTF"},
-    "DOPE": {"family": "PE", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF"},
-    "POPG": {"family": "PG", "charge": -1, "apl_nm2": 0.64, "builder_params": "LTF"},
-    "DOPG": {"family": "PG", "charge": -1, "apl_nm2": 0.69, "builder_params": "LTF"},
-    "POPS": {"family": "PS", "charge": -1, "apl_nm2": 0.62, "builder_params": "LTF"},
-    "DOPS": {"family": "PS", "charge": -1, "apl_nm2": 0.67, "builder_params": "LTF"},
-    "SSM": {"family": "SM", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF"},
-    "CHOL": {"family": "STEROL", "charge": 0, "apl_nm2": 0.40, "builder_params": "default"}
+    "POPC": {"family": "PC", "charge": 0, "apl_nm2": 0.64, "builder_params": "LTF", "head_beads": ["NC3", "PO4"], "midplane_beads": ["D2A", "C2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "DPPC": {"family": "PC", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF", "head_beads": ["NC3", "PO4"], "midplane_beads": ["C2A", "C2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "DOPC": {"family": "PC", "charge": 0, "apl_nm2": 0.67, "builder_params": "LTF", "head_beads": ["NC3", "PO4"], "midplane_beads": ["D2A", "D2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "POPE": {"family": "PE", "charge": 0, "apl_nm2": 0.59, "builder_params": "LTF", "head_beads": ["NH3", "PO4"], "midplane_beads": ["D2A", "C2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "DOPE": {"family": "PE", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF", "head_beads": ["NH3", "PO4"], "midplane_beads": ["D2A", "D2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "POPG": {"family": "PG", "charge": -1, "apl_nm2": 0.64, "builder_params": "LTF", "head_beads": ["GL0", "PO4"], "midplane_beads": ["D2A", "C2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "DOPG": {"family": "PG", "charge": -1, "apl_nm2": 0.69, "builder_params": "LTF", "head_beads": ["GL0", "PO4"], "midplane_beads": ["D2A", "D2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "POPS": {"family": "PS", "charge": -1, "apl_nm2": 0.62, "builder_params": "LTF", "head_beads": ["CNO", "PO4"], "midplane_beads": ["D2A", "C2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "DOPS": {"family": "PS", "charge": -1, "apl_nm2": 0.67, "builder_params": "LTF", "head_beads": ["CNO", "PO4"], "midplane_beads": ["D2A", "D2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "SSM": {"family": "SM", "charge": 0, "apl_nm2": 0.63, "builder_params": "LTF", "head_beads": ["NC3", "PO4"], "midplane_beads": ["C2A", "C2B"], "tail_beads": ["C3A", "C4A", "C3B", "C4B"]},
+    "CHOL": {"family": "STEROL", "charge": 0, "apl_nm2": 0.40, "builder_params": "default", "head_beads": ["ROH"], "midplane_beads": ["R4", "R5"], "tail_beads": ["R6", "C1", "C2"]}
   },
   "citations": [
     "https://doi.org/10.1038/s41592-021-01098-3",

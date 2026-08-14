@@ -33,6 +33,7 @@ const STEP_META = {
   simparams:  { title: 'Simulation Params' },
   cg_model: { title: 'Martini 3 Model' },
   cg_mapping: { title: 'Protein Mapping' },
+  cg_orientation: { title: 'Orientation' },
   cg_environment: { title: 'CG Environment' },
   cg_solvation: { title: 'CG Solvation' },
   cg_system: { title: 'Final CG System' },
@@ -52,7 +53,8 @@ const WORKFLOW_ROUTES = {
   'membrane-bilayer': 'BilayerBuilder',
   'pure-membrane': 'PureBilayerSystem',
   'solvator': 'Solvator',
-  'coarse-grained': 'CoarseGrainedBuilder',
+  'martini3-bilayer': 'Martini3BilayerBuilder',
+  'martini3-solvent': 'Martini3SolventBuilder',
 };
 const ROUTE_WORKFLOWS = Object.fromEntries(
   Object.entries(WORKFLOW_ROUTES).map(function(entry) { return [entry[1], entry[0]]; })
@@ -287,6 +289,10 @@ async function selectTaskType(taskId) {
     state.completedSteps = new Set();   // reset locks on new task type
     state.pdbInfo = null;               // reset PDB info
     state.taskId = null;
+    var taskIdText = document.getElementById('task-id-display');
+    var taskIdBox = document.getElementById('header-task-id');
+    if (taskIdText) taskIdText.textContent = '';
+    if (taskIdBox) taskIdBox.classList.add('hidden');
     state.customLipidBusy = false;
     _orientedPdbContent = null;
     _membraneCheckpointPdb = null;
@@ -316,8 +322,6 @@ async function selectTaskType(taskId) {
         throw new Error(createResult.error || 'Could not create task');
       }
       state.taskId = createResult.task_id;
-      var taskIdText = document.getElementById('task-id-display');
-      var taskIdBox = document.getElementById('header-task-id');
       if (taskIdText) taskIdText.textContent = state.taskId;
       if (taskIdBox) taskIdBox.classList.remove('hidden');
       setTimeout(loadTaskCustomLipids, 0);
@@ -431,10 +435,20 @@ function configureTaskSpecificControls() {
     else systemName.value = 'membrane_system';
   }
   syncCoarseGrainedInputControls(false);
+  syncCgOrientationMode();
 }
 
 function isCoarseGrainedWorkflow() {
-  return !!(state.taskType && state.taskType.id === 'coarse-grained');
+  return !!(state.taskType && [
+    'martini3-bilayer', 'martini3-solvent'
+  ].includes(state.taskType.id));
+}
+
+function coarseGrainedEnvironment() {
+  if (!state.taskType) return 'bilayer';
+  if (state.taskType.id === 'martini3-solvent') return 'solution';
+  if (state.taskType.id === 'martini3-bilayer') return 'bilayer';
+  return state.taskType.default_config?.input?.environment || 'bilayer';
 }
 
 function coarseGrainedIncludesProtein() {
@@ -442,9 +456,18 @@ function coarseGrainedIncludesProtein() {
   return document.getElementById('cg-include-protein')?.checked !== false;
 }
 
+function syncCgOrientationMode() {
+  var method = document.getElementById('cg-orientation-method')?.value || 'ppm';
+  document.querySelectorAll('.cg-orientation-manual').forEach(function(field) {
+    field.classList.toggle('hidden', method !== 'manual');
+    var input = field.querySelector('input');
+    if (input) input.disabled = method !== 'manual';
+  });
+}
+
 function syncCoarseGrainedInputControls(invalidate) {
   if (!isCoarseGrainedWorkflow()) return;
-  var environment = document.getElementById('cg-environment')?.value || 'bilayer';
+  var environment = coarseGrainedEnvironment();
   var include = document.getElementById('cg-include-protein');
   if (environment === 'solution' && include) {
     include.checked = true;
@@ -453,6 +476,18 @@ function syncCoarseGrainedInputControls(invalidate) {
     include.disabled = false;
   }
   var includeProtein = include ? include.checked : true;
+  var bilayerControls = document.getElementById('cg-bilayer-environment-controls');
+  if (bilayerControls) bilayerControls.classList.toggle('hidden', environment !== 'bilayer');
+  var environmentTitle = document.querySelector('#panel-cg_environment > h2');
+  var environmentDescription = document.getElementById('cg-environment-description');
+  if (environmentTitle) environmentTitle.textContent = environment === 'bilayer'
+    ? 'Bilayer Builder' : 'Protein Placement';
+  if (environmentDescription) environmentDescription.textContent = environment === 'bilayer'
+    ? 'Choose the exact leaflet size and independent upper/lower Martini lipid compositions.'
+    : 'Review the mapped protein pose before creating its solvent box.';
+  STEP_META.cg_environment.title = environment === 'bilayer' ? 'Bilayer Builder' : 'Protein Placement';
+  STEP_META.cg_solvation.title = 'Solvent & Box';
+  STEP_META.cg_system.title = 'Ions';
   var upload = document.getElementById('upload-zone');
   var uploadInfo = document.getElementById('upload-info');
   if (upload) upload.classList.toggle('hidden', !includeProtein);
@@ -464,20 +499,28 @@ function syncCoarseGrainedInputControls(invalidate) {
   document.querySelectorAll('.cg-bilayer-control').forEach(function(element) {
     element.classList.toggle('hidden', environment !== 'bilayer');
   });
-  ['cg-rotate-x', 'cg-rotate-y', 'cg-rotate-z', 'cg-z-offset'].forEach(function(id) {
-    var element = document.getElementById(id);
-    if (element) element.disabled = !includeProtein;
-  });
+  var orientationPanel = document.getElementById('panel-cg_orientation');
+  if (orientationPanel) orientationPanel.classList.toggle('cg-not-applicable', !includeProtein);
   var solvent = document.getElementById('cg-include-solvent');
   if (solvent) {
     if (environment === 'solution') solvent.checked = true;
     solvent.disabled = environment === 'solution';
   }
+  var paddingLabel = document.getElementById('cg-padding-label');
+  var paddingHint = document.getElementById('cg-padding-hint');
+  var padding = document.getElementById('cg-padding');
+  if (paddingLabel) paddingLabel.textContent = environment === 'bilayer'
+    ? 'Z padding above and below the bilayer (nm)'
+    : 'Padding on all sides of the protein (nm)';
+  if (paddingHint) paddingHint.textContent = environment === 'bilayer'
+    ? 'The membrane X/Y area remains fixed by the explicit leaflet size.'
+    : 'The box is derived from the mapped protein extent plus this clearance on all six faces.';
+  if (padding && !padding.dataset.userEdited) padding.value = environment === 'bilayer' ? '2.0' : '1.5';
   if (invalidate) invalidateCoarseGrainedFrom('input');
 }
 
 const _CG_STEP_ORDER = [
-  'input', 'cg_model', 'cg_mapping', 'cg_environment', 'cg_solvation', 'cg_system'
+  'input', 'cg_model', 'cg_mapping', 'cg_orientation', 'cg_environment', 'cg_solvation', 'cg_system'
 ];
 
 function invalidateCoarseGrainedFrom(stepName) {
@@ -496,16 +539,196 @@ function invalidateCoarseGrainedFrom(stepName) {
   updateStepNavHighlight();
 }
 
-function parseCoarseGrainedComposition(value, label) {
-  var entries = String(value || '').split(',').map(function(item) { return item.trim(); }).filter(Boolean);
-  if (!entries.length) throw new Error(label + ' leaflet needs at least one lipid.');
-  return entries.map(function(entry) {
-    var match = entry.match(/^([A-Za-z0-9]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)$/);
-    if (!match || Number(match[2]) <= 0) {
-      throw new Error(label + ' leaflet entries must use NAME:positive-ratio.');
-    }
-    return {name: match[1].toUpperCase(), ratio: Number(match[2])};
+let _cgLipidCatalog = [];
+let _cgMixUpper = [{name: 'POPC', ratio: 100}];
+let _cgMixLower = [{name: 'POPC', ratio: 100}];
+let _cgAsymmetric = false;
+let _cgPickerTarget = null;
+let _cgCapabilitiesPromise = null;
+
+function cgCompositionFor(leaflet) {
+  return (leaflet === 'upper' ? _cgMixUpper : _cgMixLower).map(function(item) {
+    return {name: item.name, ratio: Number(item.ratio)};
   });
+}
+
+async function loadMartiniLipidCapabilities() {
+  if (_cgLipidCatalog.length) return _cgLipidCatalog;
+  if (!_cgCapabilitiesPromise) {
+    _cgCapabilitiesPromise = fetch('/api/coarse-grained/capabilities')
+      .then(function(response) {
+        if (!response.ok) throw new Error('Could not load Martini lipid capabilities');
+        return response.json();
+      })
+      .then(function(data) {
+        _cgLipidCatalog = Array.isArray(data.lipids) ? data.lipids : [];
+        if (!_cgLipidCatalog.length) throw new Error('No validated Martini lipids are installed');
+        renderCgMix('upper');
+        renderCgMix('lower');
+        updateCgLipidCounts();
+        return _cgLipidCatalog;
+      })
+      .catch(function(error) {
+        _cgCapabilitiesPromise = null;
+        var status = document.getElementById('cg-environment-status');
+        if (status) { status.textContent = '✗ ' + error.message; status.style.color = '#dc2626'; }
+        throw error;
+      });
+  }
+  return _cgCapabilitiesPromise;
+}
+
+function normalizeCgRatios(mix) {
+  var total = mix.reduce(function(sum, item) { return sum + Number(item.ratio || 0); }, 0);
+  if (total <= 0) {
+    mix.forEach(function(item, index) { item.ratio = index === 0 ? 100 : 0; });
+    return;
+  }
+  var assigned = 0;
+  mix.forEach(function(item, index) {
+    if (index === mix.length - 1) item.ratio = 100 - assigned;
+    else {
+      item.ratio = Math.max(0, Math.round(Number(item.ratio || 0) * 100 / total));
+      assigned += item.ratio;
+    }
+  });
+}
+
+function renderCgMix(leaflet) {
+  var list = document.getElementById('cg-' + leaflet + '-lipid-list');
+  if (!list) return;
+  var mix = leaflet === 'upper' ? _cgMixUpper : _cgMixLower;
+  list.replaceChildren();
+  mix.forEach(function(entry, index) {
+    var definition = _cgLipidCatalog.find(function(item) { return item.name === entry.name; });
+    var row = document.createElement('div');
+    row.className = 'lipid-mix-row';
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'mix-lipid-trigger';
+    var name = document.createElement('span');
+    name.className = 'mix-lipid-trigger-name';
+    name.textContent = entry.name;
+    var family = document.createElement('span');
+    family.className = 'mix-lipid-trigger-cat';
+    family.textContent = definition ? definition.family + ' · APL ' + Number(definition.apl_nm2).toFixed(2) + ' nm²' : '';
+    var arrow = document.createElement('span');
+    arrow.className = 'mix-lipid-trigger-arrow';
+    arrow.innerHTML = '&#9662;';
+    trigger.append(name, family, arrow);
+    trigger.addEventListener('click', function(event) {
+      event.stopPropagation();
+      _cgPickerTarget = {leaflet: leaflet, index: index};
+      openCgLipidPicker(trigger);
+    });
+    var ratioWrap = document.createElement('div');
+    ratioWrap.className = 'mix-ratio';
+    var ratio = document.createElement('input');
+    ratio.type = 'number'; ratio.min = '0'; ratio.max = '100'; ratio.step = '1';
+    ratio.className = 'mix-ratio-input'; ratio.value = String(entry.ratio);
+    ratio.addEventListener('input', function() {
+      entry.ratio = Math.max(0, Math.min(100, Number(ratio.value) || 0));
+      invalidateCoarseGrainedFrom('cg_environment');
+      updateCgLipidCounts();
+    });
+    ratio.addEventListener('change', function() {
+      normalizeCgRatios(mix); renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
+    });
+    var pct = document.createElement('span'); pct.className = 'mix-pct'; pct.textContent = '%';
+    ratioWrap.append(ratio, pct);
+    var remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'mix-remove'; remove.textContent = '×';
+    remove.disabled = mix.length <= 1;
+    remove.addEventListener('click', function() {
+      if (mix.length <= 1) return;
+      mix.splice(index, 1); normalizeCgRatios(mix);
+      if (!_cgAsymmetric && leaflet === 'upper') _cgMixLower = cgCompositionFor('upper');
+      renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
+      invalidateCoarseGrainedFrom('cg_environment');
+    });
+    row.append(trigger, ratioWrap, remove);
+    list.appendChild(row);
+  });
+}
+
+function openCgLipidPicker(anchor) {
+  var picker = document.getElementById('cg-lipid-picker-dropdown');
+  if (!picker) return;
+  var rect = anchor.getBoundingClientRect();
+  picker.style.position = 'fixed'; picker.style.left = rect.left + 'px';
+  picker.style.top = (rect.bottom + 4) + 'px'; picker.style.width = Math.max(rect.width, 500) + 'px';
+  picker.classList.remove('hidden');
+  var search = document.getElementById('cg-lipid-picker-search');
+  if (search) search.value = '';
+  renderCgLipidPicker('');
+}
+
+function closeCgLipidPicker() {
+  document.getElementById('cg-lipid-picker-dropdown')?.classList.add('hidden');
+  _cgPickerTarget = null;
+}
+
+function renderCgLipidPicker(filter) {
+  var container = document.getElementById('cg-lipid-picker-list');
+  if (!container) return;
+  container.replaceChildren();
+  var query = String(filter || '').trim().toLowerCase();
+  var families = {};
+  _cgLipidCatalog.forEach(function(lipid) {
+    if (query && ![lipid.name, lipid.family].some(function(value) { return String(value).toLowerCase().includes(query); })) return;
+    (families[lipid.family] ||= []).push(lipid);
+  });
+  Object.keys(families).sort().forEach(function(familyName) {
+    var header = document.createElement('div'); header.className = 'lipid-cat-header'; header.textContent = familyName;
+    var grid = document.createElement('div'); grid.className = 'lipid-cat-grid';
+    families[familyName].forEach(function(lipid) {
+      var card = document.createElement('button'); card.type = 'button'; card.className = 'lipid-card';
+      var title = document.createElement('strong'); title.textContent = lipid.name;
+      var details = document.createElement('span'); details.className = 'hint';
+      details.textContent = 'Initial area ' + Number(lipid.apl_nm2).toFixed(2) + ' nm² · charge ' + (Number(lipid.charge) >= 0 ? '+' : '') + lipid.charge;
+      card.append(title, details);
+      card.addEventListener('click', function() {
+        if (!_cgPickerTarget) return;
+        var mix = _cgPickerTarget.leaflet === 'upper' ? _cgMixUpper : _cgMixLower;
+        mix[_cgPickerTarget.index].name = lipid.name;
+        if (!_cgAsymmetric && _cgPickerTarget.leaflet === 'upper') _cgMixLower = cgCompositionFor('upper');
+        closeCgLipidPicker(); renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
+        invalidateCoarseGrainedFrom('cg_environment');
+      });
+      grid.appendChild(card);
+    });
+    container.append(header, grid);
+  });
+}
+
+function updateCgLipidCounts() {
+  var count = Number(document.getElementById('cg-n-lipids-per-leaflet')?.value || 150);
+  function exactCounts(mix) {
+    var total = mix.reduce(function(sum, item) { return sum + Number(item.ratio || 0); }, 0);
+    if (total <= 0 || !Number.isInteger(count)) return mix.map(function(item) { return [item.name, 0]; });
+    var rows = mix.map(function(item, index) {
+      var exact = count * Number(item.ratio || 0) / total;
+      return {name: item.name, index: index, value: Math.floor(exact), fraction: exact - Math.floor(exact)};
+    });
+    var remaining = count - rows.reduce(function(sum, item) { return sum + item.value; }, 0);
+    rows.slice().sort(function(a, b) {
+      return b.fraction - a.fraction || a.name.localeCompare(b.name) || a.index - b.index;
+    }).slice(0, remaining).forEach(function(item) { rows[item.index].value += 1; });
+    return rows.map(function(item) { return [item.name, item.value]; });
+  }
+  function render(leaflet, mix) {
+    var target = document.getElementById('cg-' + leaflet + '-lipid-counts');
+    if (!target || !_cgLipidCatalog.length) return;
+    var totalRatio = mix.reduce(function(sum, item) { return sum + Number(item.ratio || 0); }, 0);
+    var apl = mix.reduce(function(sum, item) {
+      var lipid = _cgLipidCatalog.find(function(candidate) { return candidate.name === item.name; });
+      return sum + (lipid ? Number(lipid.apl_nm2) * Number(item.ratio || 0) : 0);
+    }, 0) / Math.max(totalRatio, 1);
+    var rows = exactCounts(mix).map(function(item) { return item[0] + ': ' + item[1]; }).join(' · ');
+    target.textContent = count + ' lipids/leaflet · initial weighted area ' + apl.toFixed(3) + ' nm² · ' + rows;
+  }
+  render('upper', _cgMixUpper);
+  render('lower', _cgAsymmetric ? _cgMixLower : _cgMixUpper);
 }
 
 function collectCoarseGrainedSimulationParams() {
@@ -602,13 +825,7 @@ function restoreCoarseGrainedConfig(taskState) {
     var element = document.getElementById(id);
     if (element && raw !== undefined) element.checked = raw !== false;
   }
-  function composition(entries) {
-    return Array.isArray(entries) ? entries.map(function(item) {
-      return String(item.name || '') + ':' + String(item.ratio == null ? 1 : item.ratio);
-    }).join(',') : '';
-  }
   var input = taskState.step_input_config || {};
-  value('cg-environment', input.environment || 'bilayer');
   checked('cg-include-protein', input.include_protein);
   var mapping = taskState.step_cg_mapping_config || {};
   value('cg-protein-model', mapping.protein_model);
@@ -618,22 +835,57 @@ function restoreCoarseGrainedConfig(taskState) {
   value('cg-elastic-force', mapping.elastic_force);
   value('cg-elastic-lower', mapping.elastic_lower);
   value('cg-elastic-upper', mapping.elastic_upper);
+  var orientation = taskState.step_cg_orientation_config || {};
+  value('cg-orientation-method', orientation.method);
+  value('cg-orientation-half-thickness', orientation.half_thickness);
+  value('cg-orient-rotate-x', orientation.rotate_x);
+  value('cg-orient-rotate-y', orientation.rotate_y);
+  value('cg-orient-rotate-z', orientation.rotate_z);
+  value('cg-orient-z-offset', orientation.z_offset);
   var environment = taskState.step_cg_environment_config || {};
-  ['box_xy', 'box_z', 'rotate_x', 'rotate_y', 'rotate_z', 'z_offset'].forEach(function(key) {
-    value('cg-' + key.replace(/_/g, '-'), environment[key]);
-  });
-  var upper = composition(environment.upper_leaflet);
-  var lower = composition(environment.lower_leaflet);
-  if (upper) value('cg-upper-lipids', upper);
-  if (lower) value('cg-lower-lipids', lower);
+  value('cg-n-lipids-per-leaflet', environment.n_lipids_per_leaflet);
+  if (Array.isArray(environment.upper_leaflet) && environment.upper_leaflet.length) {
+    _cgMixUpper = environment.upper_leaflet.map(function(item) { return {name: item.name, ratio: item.ratio}; });
+  }
+  if (Array.isArray(environment.lower_leaflet) && environment.lower_leaflet.length) {
+    _cgMixLower = environment.lower_leaflet.map(function(item) { return {name: item.name, ratio: item.ratio}; });
+  } else {
+    _cgMixLower = cgCompositionFor('upper');
+  }
+  _cgAsymmetric = environment.asymmetric === true;
+  checked('cg-asymmetric-bilayer', _cgAsymmetric);
+  document.getElementById('cg-lower-leaflet-section')?.classList.toggle('hidden', !_cgAsymmetric);
+  renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
   var solvation = taskState.step_cg_solvation_config || {};
   checked('cg-include-solvent', solvation.include_solvent);
-  value('cg-salt', solvation.salt_molarity);
+  value('cg-padding', solvation.padding_nm);
+  var finalSystem = taskState.step_cg_system_config || {};
+  value('cg-salt', finalSystem.salt_molarity == null ? solvation.salt_molarity : finalSystem.salt_molarity);
   var simulation = taskState.step_simparams_config || taskState.simparams || {};
-  value('cg-temperature', simulation.temperature);
-  value('cg-pressure', simulation.pressure);
+  value('cg-mini-steps', simulation.minimization_steps);
+  value('cg-mini-tolerance', simulation.minimization_tolerance);
+  value('cg-mini-step', simulation.minimization_step_nm);
+  value('cg-eq1-duration', simulation.eq1_duration_ns);
+  value('cg-eq1-dt', simulation.eq1_timestep_fs);
+  value('cg-eq1-temperature', simulation.eq1_temperature);
+  value('cg-eq1-tau-t', simulation.eq1_tau_t);
+  value('cg-eq2-duration', simulation.eq2_duration_ns);
+  value('cg-eq2-dt', simulation.eq2_timestep_fs);
+  value('cg-eq2-temperature', simulation.eq2_temperature);
+  value('cg-eq2-tau-t', simulation.eq2_tau_t);
+  value('cg-eq2-pressure', simulation.eq2_pressure);
+  value('cg-eq2-tau-p', simulation.eq2_tau_p);
   value('cg-production-ns', simulation.production_ns);
+  value('cg-production-dt', simulation.production_timestep_fs);
+  value('cg-production-temperature', simulation.production_temperature);
+  value('cg-production-tau-t', simulation.production_tau_t);
+  value('cg-production-pressure', simulation.production_pressure);
+  value('cg-production-tau-p', simulation.production_tau_p);
   value('cg-output-ps', simulation.output_interval_ps);
+  value('cg-energy-ps', simulation.energy_interval_ps);
+  value('cg-log-ps', simulation.log_interval_ps);
+  value('cg-comm-mode', simulation.comm_mode);
+  value('cg-comm-interval', simulation.comm_interval);
   checked('cg-eq1', simulation.equilibration_1);
   checked('cg-eq2', simulation.equilibration_2);
   checked('cg-use-gpu', simulation.use_gpu);
@@ -642,6 +894,7 @@ function restoreCoarseGrainedConfig(taskState) {
   value('cg-mpi-ranks', simulation.mpi_ranks);
   if (simulation.system_name) value('system-name', simulation.system_name);
   syncCoarseGrainedInputControls(false);
+  syncCgOrientationMode();
 }
 
 function pureMembraneIncludesSolvent() {
@@ -684,11 +937,13 @@ function syncPureMembraneSolvationOption(invalidate) {
 
 function loadTaskDefaults() {
   const defaults = state.taskType.default_config || {};
+  function setDefaultValue(id, raw) {
+    var element = document.getElementById(id);
+    if (element && raw !== undefined && raw !== null) element.value = String(raw);
+  }
   if (isCoarseGrainedWorkflow()) {
     var cgInput = defaults.input || {};
-    var cgEnvironment = document.getElementById('cg-environment');
     var cgProtein = document.getElementById('cg-include-protein');
-    if (cgEnvironment) cgEnvironment.value = cgInput.environment || 'bilayer';
     if (cgProtein) cgProtein.checked = cgInput.include_protein !== false;
     var cgMapping = defaults.cg_mapping || {};
     var cgProteinModel = document.getElementById('cg-protein-model');
@@ -697,17 +952,35 @@ function loadTaskDefaults() {
     if (cgProteinModel) cgProteinModel.value = cgMapping.protein_model || 'folded';
     if (cgSecondary) cgSecondary.value = cgMapping.secondary_structure || 'auto';
     if (cgElastic) cgElastic.checked = cgMapping.elastic !== false;
-    var cgBox = defaults.cg_environment || {};
-    var cgBoxXY = document.getElementById('cg-box-xy');
-    var cgBoxZ = document.getElementById('cg-box-z');
-    if (cgBoxXY) cgBoxXY.value = cgBox.box_xy || 12;
-    if (cgBoxZ) cgBoxZ.value = cgBox.box_z || 14;
+    var cgOrientation = defaults.cg_orientation || {};
+    setDefaultValue('cg-orientation-method', cgOrientation.method || 'ppm');
+    setDefaultValue(
+      'cg-orientation-half-thickness',
+      cgOrientation.half_thickness == null ? 1.4 : cgOrientation.half_thickness
+    );
+    setDefaultValue('cg-orient-rotate-x', cgOrientation.rotate_x == null ? 0 : cgOrientation.rotate_x);
+    setDefaultValue('cg-orient-rotate-y', cgOrientation.rotate_y == null ? 0 : cgOrientation.rotate_y);
+    setDefaultValue('cg-orient-rotate-z', cgOrientation.rotate_z == null ? 0 : cgOrientation.rotate_z);
+    setDefaultValue('cg-orient-z-offset', cgOrientation.z_offset == null ? 0 : cgOrientation.z_offset);
+    var cgEnvironmentDefaults = defaults.cg_environment || {};
+    var cgCount = document.getElementById('cg-n-lipids-per-leaflet');
+    if (cgCount) cgCount.value = cgEnvironmentDefaults.n_lipids_per_leaflet || 150;
+    _cgMixUpper = (cgEnvironmentDefaults.upper_leaflet || [{name: 'POPC', ratio: 100}]).map(function(item) { return {name: item.name, ratio: item.ratio}; });
+    _cgMixLower = (cgEnvironmentDefaults.lower_leaflet || _cgMixUpper).map(function(item) { return {name: item.name, ratio: item.ratio}; });
+    _cgAsymmetric = cgEnvironmentDefaults.asymmetric === true;
+    var cgAsymmetric = document.getElementById('cg-asymmetric-bilayer');
+    if (cgAsymmetric) cgAsymmetric.checked = _cgAsymmetric;
+    document.getElementById('cg-lower-leaflet-section')?.classList.toggle('hidden', !_cgAsymmetric);
+    renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
     var cgSolvation = defaults.cg_solvation || {};
     var cgIncludeSolvent = document.getElementById('cg-include-solvent');
+    var cgPadding = document.getElementById('cg-padding');
     var cgSalt = document.getElementById('cg-salt');
     if (cgIncludeSolvent) cgIncludeSolvent.checked = cgSolvation.include_solvent !== false;
+    if (cgPadding) cgPadding.value = coarseGrainedEnvironment() === 'bilayer' ? 2.0 : 1.5;
     if (cgSalt) cgSalt.value = cgSolvation.salt_molarity == null ? 0.15 : cgSolvation.salt_molarity;
     syncCoarseGrainedInputControls(false);
+    syncCgOrientationMode();
     return;
   }
   // Apply defaults to form fields
@@ -904,6 +1177,7 @@ async function _loadStepViewerPdb(stepName) {
 async function renderCoarseGrainedViewer(stepName) {
   var targetMap = {
     cg_mapping: 'cg-mapping-viewer',
+    cg_orientation: 'cg-orientation-viewer',
     cg_environment: 'cg-environment-viewer',
     cg_solvation: 'cg-solvation-viewer',
     cg_system: 'cg-system-viewer',
@@ -911,9 +1185,21 @@ async function renderCoarseGrainedViewer(stepName) {
   var targetId = targetMap[stepName];
   var target = targetId ? document.getElementById(targetId) : null;
   if (!target || typeof $3Dmol === 'undefined') return false;
+  // 3Dmol reads the element's client rectangle when its WebGL canvas is
+  // created.  Rendering a hidden wizard panel previously produced a viewport
+  // anchored to the document rather than this box.  Wait until the target is
+  // both visible and laid out, then render in its own stacking context.
+  if (!target.closest('.panel.active') || target.clientWidth < 2 || target.clientHeight < 2) {
+    await new Promise(function(resolve) {
+      requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+    });
+  }
+  if (!target.closest('.panel.active') || target.clientWidth < 2 || target.clientHeight < 2) {
+    return false;
+  }
   window._cgViewers = window._cgViewers || {};
   var cached = window._cgViewers[targetId];
-  if (cached && cached.taskId !== state.taskId) {
+  if (cached && (cached.taskId !== state.taskId || cached.stepName !== stepName)) {
     try { cached.viewer.clear(); } catch (e) {}
     target.replaceChildren();
     delete window._cgViewers[targetId];
@@ -945,13 +1231,13 @@ async function renderCoarseGrainedViewer(stepName) {
       target.classList.add('viewer-unavailable');
       return false;
     }
-    window._cgViewers[targetId] = {viewer: viewer, taskId: state.taskId};
+    window._cgViewers[targetId] = {viewer: viewer, taskId: state.taskId, stepName: stepName};
   }
   target.classList.remove('viewer-unavailable');
   viewer.removeAllModels();
   var model = viewer.addModel(pdb, 'pdb');
   viewer.setStyle({}, {sphere: {radius: 0.16, colorscheme: 'Jmol'}});
-  if (stepName === 'cg_mapping') {
+  if (stepName === 'cg_mapping' || stepName === 'cg_orientation') {
     viewer.setStyle({}, {sphere: {radius: 0.14, colorscheme: 'Jmol'}, stick: {radius: 0.08, colorscheme: 'Jmol'}});
   }
   viewer.setStyle(
@@ -960,6 +1246,19 @@ async function renderCoarseGrainedViewer(stepName) {
   );
   viewer.setStyle({resn: 'W'}, {sphere: {radius: 0.045, color: '#60a5fa', opacity: 0.14}});
   viewer.setStyle({resn: ['NA', 'CL']}, {sphere: {radius: 0.24, colorscheme: 'Jmol'}});
+  if (stepName === 'cg_orientation' && viewer.addShape) {
+    var half = Number(document.getElementById('cg-orientation-half-thickness')?.value || 1.4);
+    var shape = viewer.addShape({});
+    if (shape && shape.addBox) {
+      [-half, half].forEach(function(z) {
+        shape.addBox({
+          corner: {x: -8, y: -8, z: z - 0.025},
+          dimensions: {w: 16, h: 16, d: 0.05},
+          color: '#94a3b8', opacity: 0.28,
+        });
+      });
+    }
+  }
   // The mapping checkpoint box is only an internal envelope estimate.  The
   // user-defined physical PBC cell begins at CG Environment.
   if (stepName !== 'cg_mapping' && viewer.addUnitCell) {
@@ -969,6 +1268,11 @@ async function renderCoarseGrainedViewer(stepName) {
   viewer.zoomTo();
   viewer.render();
   viewer.setSlab(-10000, 10000);
+  requestAnimationFrame(function() {
+    if (!target.closest('.panel.active')) return;
+    if (viewer.resize) viewer.resize();
+    viewer.render();
+  });
   return true;
 }
 
@@ -1007,18 +1311,48 @@ async function confirmCoarseGrainedSystem() {
 }
 
 function initCoarseGrainedControls() {
-  var environment = document.getElementById('cg-environment');
   var includeProtein = document.getElementById('cg-include-protein');
-  if (environment) environment.addEventListener('change', function() {
-    syncCoarseGrainedInputControls(true);
-  });
   if (includeProtein) includeProtein.addEventListener('change', function() {
     syncCoarseGrainedInputControls(true);
   });
+  var cgAsymmetric = document.getElementById('cg-asymmetric-bilayer');
+  if (cgAsymmetric) cgAsymmetric.addEventListener('change', function() {
+    _cgAsymmetric = cgAsymmetric.checked;
+    document.getElementById('cg-lower-leaflet-section')?.classList.toggle('hidden', !_cgAsymmetric);
+    if (!_cgAsymmetric) _cgMixLower = cgCompositionFor('upper');
+    var label = document.getElementById('cg-upper-leaflet-label');
+    if (label) label.innerHTML = _cgAsymmetric
+      ? 'Upper Leaflet <span class="hint">(extracellular / outer)</span>'
+      : 'Bilayer <span class="hint">(same composition in both leaflets)</span>';
+    renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
+    invalidateCoarseGrainedFrom('cg_environment');
+  });
+  document.querySelectorAll('.cg-add-lipid-btn').forEach(function(button) {
+    button.addEventListener('click', async function() {
+      await loadMartiniLipidCapabilities();
+      var leaflet = button.dataset.leaflet;
+      var mix = leaflet === 'upper' ? _cgMixUpper : _cgMixLower;
+      var existing = new Set(mix.map(function(item) { return item.name; }));
+      var next = _cgLipidCatalog.find(function(item) { return !existing.has(item.name); });
+      if (!next) { alert('All installed Martini lipids are already selected.'); return; }
+      mix.push({name: next.name, ratio: 0});
+      normalizeCgRatios(mix);
+      if (!_cgAsymmetric && leaflet === 'upper') _cgMixLower = cgCompositionFor('upper');
+      renderCgMix('upper'); renderCgMix('lower'); updateCgLipidCounts();
+      invalidateCoarseGrainedFrom('cg_environment');
+    });
+  });
+  var cgSearch = document.getElementById('cg-lipid-picker-search');
+  if (cgSearch) cgSearch.addEventListener('input', function() { renderCgLipidPicker(cgSearch.value); });
+  document.addEventListener('click', function(event) {
+    if (!event.target.closest('#cg-lipid-picker-dropdown') && !event.target.closest('#panel-cg_environment .mix-lipid-trigger')) closeCgLipidPicker();
+  });
+  loadMartiniLipidCapabilities().catch(function() {});
 
   var checks = [
     ['cg-model-check', 'cg_model', 'cg-model-status'],
     ['cg-mapping-check', 'cg_mapping', 'cg-mapping-status'],
+    ['cg-orientation-check', 'cg_orientation', 'cg-orientation-status'],
     ['cg-environment-check', 'cg_environment', 'cg-environment-status'],
     ['cg-solvation-check', 'cg_solvation', 'cg-solvation-status'],
     ['cg-system-check', 'cg_system', 'cg-system-status'],
@@ -1046,9 +1380,10 @@ function initCoarseGrainedControls() {
   var inputIds = [
     'cg-protein-model', 'cg-secondary', 'cg-secondary-string', 'cg-elastic',
     'cg-elastic-force', 'cg-elastic-lower', 'cg-elastic-upper',
-    'cg-box-xy', 'cg-box-z', 'cg-rotate-x', 'cg-rotate-y', 'cg-rotate-z',
-    'cg-z-offset', 'cg-upper-lipids', 'cg-lower-lipids',
-    'cg-include-solvent', 'cg-salt'
+    'cg-n-lipids-per-leaflet', 'cg-orientation-method',
+    'cg-orientation-half-thickness', 'cg-orient-rotate-x', 'cg-orient-rotate-y',
+    'cg-orient-rotate-z', 'cg-orient-z-offset',
+    'cg-include-solvent', 'cg-padding', 'cg-salt'
   ];
   inputIds.forEach(function(id) {
     var element = document.getElementById(id);
@@ -1056,13 +1391,20 @@ function initCoarseGrainedControls() {
     element.addEventListener('change', function() {
       var step = id.indexOf('cg-protein') === 0 || id.indexOf('cg-secondary') === 0 ||
         id.indexOf('cg-elastic') === 0 ? 'cg_mapping' :
-        id === 'cg-include-solvent' || id === 'cg-salt' ? 'cg_solvation' :
+        id.indexOf('cg-orient') === 0 ? 'cg_orientation' :
+        id === 'cg-salt' ? 'cg_system' :
+        id === 'cg-include-solvent' || id === 'cg-padding' ? 'cg_solvation' :
         'cg_environment';
       invalidateCoarseGrainedFrom(step);
+      if (id === 'cg-orientation-method') syncCgOrientationMode();
       if (id === 'cg-include-solvent') {
+        var padding = document.getElementById('cg-padding');
         var salt = document.getElementById('cg-salt');
+        if (padding) padding.disabled = !element.checked;
         if (salt) salt.disabled = !element.checked;
       }
+      if (id === 'cg-padding') element.dataset.userEdited = 'true';
+      if (id === 'cg-n-lipids-per-leaflet') updateCgLipidCounts();
     });
   });
 }
@@ -2731,6 +3073,34 @@ let _orientedPdbContent = null;  // backend-generated Step 4 coordinates for pre
 let _orientPreviewRequestId = 0;
 let _orientPreviewTimer = null;
 
+function orientationHydrophobicHalfThickness() {
+  function leafletDhh(entries) {
+    var weighted = 0.0;
+    var total = 0.0;
+    (entries || []).forEach(function(entry) {
+      var lipid = (_lipidPickerData.lipids || []).find(function(item) {
+        return item.name === entry.name;
+      });
+      var dhh = Number(lipid && lipid.bilayer_thickness);
+      var ratio = Number(entry && entry.ratio);
+      if (Number.isFinite(dhh) && dhh > 0 && Number.isFinite(ratio) && ratio > 0) {
+        weighted += dhh * ratio;
+        total += ratio;
+      }
+    });
+    return total > 0 ? weighted / total : null;
+  }
+  var upper = leafletDhh(_mixUpper);
+  var lower = leafletDhh(_asymmetric ? _mixLower : _mixUpper);
+  var values = [upper, lower].filter(function(value) { return Number.isFinite(value); });
+  var dhh = values.length
+    ? values.reduce(function(sum, value) { return sum + value; }, 0.0) / values.length
+    : Number(_dominantLipidDHH || 3.8);
+  // DHH measures headgroup-to-headgroup separation; the PPM transfer-energy
+  // slab represents only the hydrocarbon core, approximately 80% of DHH.
+  return Math.max(0.5, Math.min(3.0, dhh * 0.4));
+}
+
 const _ALGO_DESC = {
   'ppm': 'PPM-like Wimley-White whole-residue transfer free energy minimization. A confident hydrophobic transmembrane-helix consensus defines the membrane normal; whole-protein PCA is used only as a fallback. Hydrophobic residues favour the membrane core and charged/polar residues favour the aqueous phase. Review the physical-quality report because this is not the external OPM/PPM server.',
   'hmoment': 'Computes the 3D hydrophobic-moment vector (Eisenberg consensus scale) and aligns it to the membrane normal. Best for α-helical proteins with clear amphipathic character.',
@@ -2850,6 +3220,9 @@ function renderOrientationQuality(quality) {
 
 async function requestOrientationPreview(config) {
   if (!state.taskId) return null;
+  config = Object.assign({}, config || {}, {
+    half_thickness: orientationHydrophobicHalfThickness(),
+  });
   var requestId = ++_orientPreviewRequestId;
   var response = await fetch('/api/orient-preview/' + state.taskId, {
     method: 'POST',
@@ -2910,7 +3283,9 @@ function renderInputCheckReport(repair, errorMessage, modificationReport, nuclei
         (item.chain_id || '?') + ' (' + item.n_residues + ' residues)';
     }).join('; ') +
       '. Canonical DNA/RNA requires CHARMM36m; native GROMACS topology ' +
-      'generation will validate termini, polymer bonds, hydrogens, and charge in Step 3.';
+      'generation will validate termini, polymer bonds, hydrogens, and charge in Step 3. ' +
+      'The uploaded nucleic-acid coordinates will be replaced by the hydrogen-complete ' +
+      'pdb2gmx coordinates; review the Step 3 viewer before continuing.';
     panel.appendChild(nucleicSummary);
     var unsupportedNucleic = [];
     nucleicRows.forEach(function(item) {
@@ -3177,17 +3552,8 @@ async function _doCheckStep(stepName, statusElId, btnId) {
         updateNextButtonState();
         renderSolvationViewer();
       } else if (stepName.indexOf('cg_') === 0) {
-        if (stepName === 'cg_mapping') {
-          var extent = ((result.metrics || {}).cg_mapping || {}).protein_extent_nm || [];
-          if (extent.length === 3) {
-            var recommendedXY = Math.ceil((Math.max(Number(extent[0]), Number(extent[1])) + 3.0) * 2) / 2;
-            var recommendedZ = Math.ceil((Number(extent[2]) + 3.0) * 2) / 2;
-            var boxXY = document.getElementById('cg-box-xy');
-            var boxZ = document.getElementById('cg-box-z');
-            if (boxXY && Number(boxXY.value) < recommendedXY) boxXY.value = String(recommendedXY);
-            if (boxZ && Number(boxZ.value) < recommendedZ) boxZ.value = String(recommendedZ);
-            if (statusEl) statusEl.textContent += ' — minimum safe box suggested: ' + recommendedXY.toFixed(1) + ' × ' + recommendedXY.toFixed(1) + ' × ' + recommendedZ.toFixed(1) + ' nm';
-          }
+        if (stepName === 'cg_mapping' && statusEl) {
+          statusEl.textContent += ' — downstream box dimensions are derived automatically from this mapped extent';
         }
         var cgViewerRendered = await renderCoarseGrainedViewer(stepName);
         if (cgConfirmation) {
@@ -4323,9 +4689,9 @@ function renderProtonationTables(data) {
 
   let html = '';
   if (data.method) {
-    html += `<p class="hint" style="margin-bottom:8px;">Method: <b>${data.method}</b> &nbsp;|&nbsp; pH ${data.pH} &nbsp;|&nbsp; ${data.titratable_count} titratable residues found</p>`;
+    html += `<p class="hint" style="margin-bottom:8px;">Method: <b>${escapeHtml(data.method)}</b> &nbsp;|&nbsp; pH ${escapeHtml(data.pH)} &nbsp;|&nbsp; ${escapeHtml(data.titratable_count)} titratable residues found</p>`;
     if (data.propka_warning) {
-      html += `<p class="hint" style="margin-bottom:8px;color:#d97706;">⚠ ${data.propka_warning}</p>`;
+      html += `<p class="hint" style="margin-bottom:8px;color:#d97706;">⚠ ${escapeHtml(data.propka_warning)}</p>`;
     }
     html += `<p class="hint" style="margin-bottom:8px;">Assigned titratable-residue charge: <b>${data.assigned_charge_e >= 0 ? '+' : ''}${data.assigned_charge_e} e</b>`;
     if (data.changed_count != null) {
@@ -4342,7 +4708,7 @@ function renderProtonationTables(data) {
     const chainTitr = chainRes.filter((_, i) => titratable.has(chainRes[i].index));
     if (!chainTitr.length) return;
 
-    html += `<h4 style="margin-top:12px;color:#475569;">Chain ${ch || ' '} <span class="hint">${chainTitr.length} titratable residues</span></h4>`;
+    html += `<h4 style="margin-top:12px;color:#475569;">Chain ${escapeHtml(ch || ' ')} <span class="hint">${chainTitr.length} titratable residues</span></h4>`;
     html += `<table class="proc-table"><thead><tr><th>Resid</th><th>Original</th><th>Assigned</th><th>Charge</th><th>pKa</th><th>Shift</th><th>State</th><th>Override</th></tr></thead><tbody>`;
 
     chainRes.forEach((r, localIdx) => {
@@ -4351,16 +4717,16 @@ function renderProtonationTables(data) {
       const shift = a.pKa_shift;
       const shiftStr = shift != null ? (shift >= 0 ? '+' : '') + shift.toFixed(1) : '—';
       const altOpts = (a.alternatives || []).map(alt =>
-        `<option value="${alt.name}" ${alt.name === a.assigned_name ? 'selected' : ''}>${alt.name} (${alt.charge >= 0 ? '+' : ''}${alt.charge})</option>`
+        `<option value="${escapeHtml(alt.name)}" ${alt.name === a.assigned_name ? 'selected' : ''}>${escapeHtml(alt.name)} (${alt.charge >= 0 ? '+' : ''}${escapeHtml(alt.charge)})</option>`
       ).join('');
       html += `<tr>
-        <td>${a.original} ${r.resid}</td>
-        <td><b>${a.original}</b></td>
-        <td style="color:#6366f1;font-weight:600;">${a.assigned_name}</td>
+        <td>${escapeHtml(a.original)} ${escapeHtml(r.resid)}</td>
+        <td><b>${escapeHtml(a.original)}</b></td>
+        <td style="color:#6366f1;font-weight:600;">${escapeHtml(a.assigned_name)}</td>
         <td>${a.charge >= 0 ? '+' : ''}${a.charge}</td>
-        <td>${typeof a.pKa === 'number' ? a.pKa.toFixed(1) : a.pKa || '—'}</td>
+        <td>${escapeHtml(typeof a.pKa === 'number' ? a.pKa.toFixed(1) : a.pKa || '—')}</td>
         <td style="color:${shift > 0 ? '#dc2626' : shift < 0 ? '#059669' : '#94a3b8'};">${shiftStr}</td>
-        <td style="font-size:11px;">${a.state_label}</td>
+        <td style="font-size:11px;">${escapeHtml(a.state_label)}</td>
         <td><select class="proc-override" data-idx="${r.index}">${altOpts}</select></td>
       </tr>`;
     });
@@ -4412,17 +4778,17 @@ function renderTerminiTab() {
     const firstRes = _procResidues.find(r => r.chain === ch);
     const lastRes = [..._procResidues].reverse().find(r => r.chain === ch);
     html += `<div class="termini-chain-row">
-      <b style="min-width:60px;">Chain ${ch || ' '}</b>
-      <span class="hint">N-ter: ${firstRes ? firstRes.resname + ' ' + firstRes.resid : '?'}</span>
-      <select class="proc-nter-sel" data-chain="${ch}">
+      <b style="min-width:60px;">Chain ${escapeHtml(ch || ' ')}</b>
+      <span class="hint">N-ter: ${escapeHtml(firstRes ? firstRes.resname + ' ' + firstRes.resid : '?')}</span>
+      <select class="proc-nter-sel" data-chain="${escapeHtml(ch)}">
         <option value="" ${!t.nter ? 'selected' : ''}>Standard (NH₃⁺)</option>
-        <option value="ACE" ${t.nter === 'ACE' ? 'selected' : ''} ${ace.supported ? '' : 'disabled'}>ACE${ace.supported ? ' — explicit acetyl cap' : ' — unavailable: ' + ace.reason}</option>
-        <option value="FOR" ${t.nter === 'FOR' ? 'selected' : ''} ${formyl.supported ? '' : 'disabled'}>FOR${formyl.supported ? ' — explicit formyl cap' : ' — unavailable: ' + formyl.reason}</option>
+        <option value="ACE" ${t.nter === 'ACE' ? 'selected' : ''} ${ace.supported ? '' : 'disabled'}>ACE${ace.supported ? ' — explicit acetyl cap' : ' — unavailable: ' + escapeHtml(ace.reason)}</option>
+        <option value="FOR" ${t.nter === 'FOR' ? 'selected' : ''} ${formyl.supported ? '' : 'disabled'}>FOR${formyl.supported ? ' — explicit formyl cap' : ' — unavailable: ' + escapeHtml(formyl.reason)}</option>
       </select>
-      <span class="hint">C-ter: ${lastRes ? lastRes.resname + ' ' + lastRes.resid : '?'}</span>
-      <select class="proc-cter-sel" data-chain="${ch}">
+      <span class="hint">C-ter: ${escapeHtml(lastRes ? lastRes.resname + ' ' + lastRes.resid : '?')}</span>
+      <select class="proc-cter-sel" data-chain="${escapeHtml(ch)}">
         <option value="" ${!t.cter ? 'selected' : ''}>Standard (COO⁻)</option>
-        <option value="NME" ${t.cter === 'NME' ? 'selected' : ''} ${nme.supported ? '' : 'disabled'}>NME${nme.supported ? ' — explicit methylamide cap' : ' — unavailable: ' + nme.reason}</option>
+        <option value="NME" ${t.cter === 'NME' ? 'selected' : ''} ${nme.supported ? '' : 'disabled'}>NME${nme.supported ? ' — explicit methylamide cap' : ' — unavailable: ' + escapeHtml(nme.reason)}</option>
       </select>
     </div>`;
   });
@@ -4466,7 +4832,7 @@ function renderModSequences() {
   _procChains.forEach(ch => {
     const chainRes = _procResidues.filter(r => r.chain === ch);
     if (!chainRes.length) return;
-    html += `<div class="proc-mod-chain-block"><h4 style="margin:8px 0 4px;color:#475569;">Chain ${ch || ' '} <span class="hint">${chainRes.length} residues</span></h4><div class="proc-mod-sequence">`;
+    html += `<div class="proc-mod-chain-block"><h4 style="margin:8px 0 4px;color:#475569;">Chain ${escapeHtml(ch || ' ')} <span class="hint">${chainRes.length} residues</span></h4><div class="proc-mod-sequence">`;
     chainRes.forEach(r => {
       const i = r.index;
       const residuePatches = _procPatchCatalog.filter(function(patch) {
@@ -4484,7 +4850,7 @@ function renderModSequences() {
       if (_procSelectedIdx === i) cls += ' selected';
       const capability = hasSupportedPatch ? 'simulation-ready modification available' :
         (residuePatches.length ? 'catalogue entries exist but are not simulation-ready' : 'no registered modification');
-      html += `<span class="${cls}" data-idx="${i}" data-has-patches="${residuePatches.length ? '1' : '0'}" title="#${i+1} ${r.resname} ch ${ch} resid ${r.resid}; ${capability}">${r.resname}</span>`;
+      html += `<span class="${cls}" data-idx="${i}" data-has-patches="${residuePatches.length ? '1' : '0'}" title="#${i+1} ${escapeHtml(r.resname)} ch ${escapeHtml(ch)} resid ${escapeHtml(r.resid)}; ${escapeHtml(capability)}">${escapeHtml(r.resname)}</span>`;
     });
     html += '</div></div>';
   });
@@ -4518,8 +4884,8 @@ function renderDisulfideControls() {
       !_procModifications.some(function(mod) { return mod.index === residue.index; });
   });
   const options = '<option value="">Select CYS…</option>' + cysteines.map(function(residue) {
-    return '<option value="' + residue.index + '">Chain ' + (residue.chain || '?') +
-      ' — CYS ' + residue.resid + ' (#' + (residue.index + 1) + ')</option>';
+    return '<option value="' + residue.index + '">Chain ' + escapeHtml(residue.chain || '?') +
+      ' — CYS ' + escapeHtml(residue.resid) + ' (#' + (residue.index + 1) + ')</option>';
   }).join('');
   first.innerHTML = options;
   second.innerHTML = options;
@@ -4537,8 +4903,8 @@ function renderDisulfideControls() {
   list.innerHTML = _procCrosslinks.map(function(item, index) {
     const left = _procResidues[item.first_index];
     const right = _procResidues[item.second_index];
-    return '<div class="proc-mod-item">Chain ' + (left.chain || '?') + ':CYS ' + left.resid +
-      ' — Chain ' + (right.chain || '?') + ':CYS ' + right.resid +
+    return '<div class="proc-mod-item">Chain ' + escapeHtml(left.chain || '?') + ':CYS ' + escapeHtml(left.resid) +
+      ' — Chain ' + escapeHtml(right.chain || '?') + ':CYS ' + escapeHtml(right.resid) +
       ' <span style="color:#64748b;">(disulfide)</span>' +
       '<button data-crosslink="' + index + '" class="proc-crosslink-remove" title="Remove">×</button></div>';
   }).join('') || '<p class="hint">No disulfide crosslinks selected.</p>';
@@ -4587,10 +4953,10 @@ async function openPatchPicker(idx) {
     const capabilityNotice = supportedPatches.length ? '' :
       '<p class="hint" style="color:#b45309;margin-bottom:8px;">No simulation-ready modification is available for this residue. Catalogue entries below are disabled because complete atoms and bonded parameters are not yet implemented.</p>';
     optionsEl.innerHTML = capabilityNotice + patches.map(p =>
-      `<div class="proc-patch-option" data-patch="${p.id}" data-supported="${p.supported !== false}"
+      `<div class="proc-patch-option" data-patch="${escapeHtml(p.id)}" data-supported="${p.supported !== false}"
             aria-disabled="${p.supported === false}" style="${p.supported === false ? 'opacity:.5;cursor:not-allowed;' : ''}">
-        <span class="patch-name">${p.name}</span> → ${p.product_name}
-        <span style="color:#64748b;font-size:11px;">(${p.description}; net charge shift ${p.charge_shift > 0 ? '+' : ''}${p.charge_shift}${p.supported === false ? '; unavailable: ' + p.support_reason : ''})</span>
+        <span class="patch-name">${escapeHtml(p.name)}</span> → ${escapeHtml(p.product_name)}
+        <span style="color:#64748b;font-size:11px;">(${escapeHtml(p.description)}; net charge shift ${p.charge_shift > 0 ? '+' : ''}${escapeHtml(p.charge_shift)}${p.supported === false ? '; unavailable: ' + escapeHtml(p.support_reason) : ''})</span>
       </div>`).join('');
     optionsEl.querySelectorAll('.proc-patch-option').forEach(opt => {
       opt.addEventListener('click', () => {
@@ -4614,8 +4980,8 @@ function applyModification(idx, patchId, productName, chargeShift, source) {
     listEl.innerHTML = _procModifications.map(m => {
       const rr = _procResidues[m.index];
       return `<div class="proc-mod-item">
-        Chain ${rr.chain} — <b>${rr.resname} ${rr.resid}</b> → <b>${m.product_name}</b>
-        <span style="color:#64748b;">(${m.patch_id})</span>
+        Chain ${escapeHtml(rr.chain)} — <b>${escapeHtml(rr.resname)} ${escapeHtml(rr.resid)}</b> → <b>${escapeHtml(m.product_name)}</b>
+        <span style="color:#64748b;">(${escapeHtml(m.patch_id)})</span>
         <button data-idx="${m.index}" class="proc-mod-remove" title="Remove">×</button>
       </div>`;
     }).join('') || '<p class="hint">No modifications applied yet.</p>';
@@ -6429,7 +6795,7 @@ async function handleFile(file) {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('task_type', (state.taskType && state.taskType.id) || 'membrane-bilayer');
-  if (state.taskType && state.taskType.id === 'coarse-grained' && state.taskId) {
+  if (isCoarseGrainedWorkflow() && state.taskId) {
     formData.append('task_id', state.taskId);
   }
 
@@ -6536,8 +6902,13 @@ function showUploadInfo(info) {
     const warnDiv = document.getElementById('validation-warnings');
     if (warnDiv) {
       warnDiv.classList.remove('hidden');
-      warnDiv.innerHTML = '<h4 style="color:#d97706;">&#9888; Warnings</h4><ul>' +
-        info.validation_warnings.map(w => '<li>' + w + '</li>').join('') + '</ul>';
+      warnDiv.innerHTML = '<h4 style="color:#d97706;">&#9888; Warnings</h4><ul></ul>';
+      const warnList = warnDiv.querySelector('ul');
+      info.validation_warnings.forEach(function(w) {
+        const li = document.createElement('li');
+        li.textContent = w;
+        warnList.appendChild(li);
+      });
     }
   }
 
@@ -6696,8 +7067,8 @@ function renderSmallMolecules(molecules) {
         '<span class="smallmol-name" data-smres="' + escapeHtml(resname) + '" title="Double-click to rename">' + escapeHtml(_smallMolState[resname] ? _smallMolState[resname].name : resname) + '</span>' +
       '</div>' +
       '<div class="smallmol-info">' +
-        'Formula: ' + formula + ' | Copies: ' + instances.length +
-        ' | Atoms: ' + totalAtoms + ' | Chain: ' + chains +
+        'Formula: ' + escapeHtml(formula) + ' | Copies: ' + instances.length +
+        ' | Atoms: ' + totalAtoms + ' | Chain: ' + escapeHtml(chains) +
       '</div>';
     return card;
   });
@@ -6770,10 +7141,10 @@ function renderChainSequences(sequences, chains) {
     const chainLabel = chId ? `Chain ${chId}` : 'Chain';
     header.innerHTML =
       `<label class="chain-check">` +
-        `<input type="checkbox" data-chain="${chId}" ${st.included ? 'checked' : ''}>` +
-        `<b>${chainLabel}</b>` +
+        `<input type="checkbox" data-chain="${escapeHtml(chId)}" ${st.included ? 'checked' : ''}>` +
+        `<b>${escapeHtml(chainLabel)}</b>` +
       `</label>` +
-      `<span class="chain-rename" data-chain="${chId}" title="Double-click to rename">${st.name || chId}</span>` +
+      `<span class="chain-rename" data-chain="${escapeHtml(chId)}" title="Double-click to rename">${escapeHtml(st.name || chId)}</span>` +
       `<span class="chain-len">${chain.length} residues</span>`;
     card.appendChild(header);
 
@@ -7027,7 +7398,7 @@ function buildModuleConfig(focusStep) {
   const taskModules = state.taskType ? state.taskType.visible_modules : [];
 
   if (isCoarseGrainedWorkflow()) {
-    var environment = document.getElementById('cg-environment')?.value || 'bilayer';
+    var environment = coarseGrainedEnvironment();
     var includeProtein = coarseGrainedIncludesProtein();
     var wants = function(step) { return !focusStep || focusStep === step; };
     if (wants('input')) {
@@ -7047,32 +7418,37 @@ function buildModuleConfig(focusStep) {
         elastic_upper: Number(document.getElementById('cg-elastic-upper')?.value || 0.9),
       };
     }
+    if (wants('cg_orientation') && environment === 'bilayer') {
+      var cgOrientationMethod = document.getElementById('cg-orientation-method')?.value || 'ppm';
+      config.cg_orientation = {
+        method: cgOrientationMethod,
+        half_thickness: Number(document.getElementById('cg-orientation-half-thickness')?.value || 1.4),
+      };
+      if (cgOrientationMethod === 'manual') {
+        config.cg_orientation.rotate_x = Number(document.getElementById('cg-orient-rotate-x')?.value || 0);
+        config.cg_orientation.rotate_y = Number(document.getElementById('cg-orient-rotate-y')?.value || 0);
+        config.cg_orientation.rotate_z = Number(document.getElementById('cg-orient-rotate-z')?.value || 0);
+        config.cg_orientation.z_offset = Number(document.getElementById('cg-orient-z-offset')?.value || 0);
+      }
+    }
     if (wants('cg_environment')) {
-      var upper = environment === 'bilayer'
-        ? parseCoarseGrainedComposition(document.getElementById('cg-upper-lipids')?.value, 'Upper')
-        : [];
-      var lower = environment === 'bilayer'
-        ? parseCoarseGrainedComposition(document.getElementById('cg-lower-lipids')?.value, 'Lower')
-        : [];
       config.cg_environment = {
         environment: environment,
-        box_xy: Number(document.getElementById('cg-box-xy')?.value || 12),
-        box_z: Number(document.getElementById('cg-box-z')?.value || (environment === 'bilayer' ? 14 : 12)),
-        rotate_x: Number(document.getElementById('cg-rotate-x')?.value || 0),
-        rotate_y: Number(document.getElementById('cg-rotate-y')?.value || 0),
-        rotate_z: Number(document.getElementById('cg-rotate-z')?.value || 0),
-        z_offset: Number(document.getElementById('cg-z-offset')?.value || 0),
       };
       if (environment === 'bilayer') {
-        config.cg_environment.upper_leaflet = upper;
-        config.cg_environment.lower_leaflet = lower;
-        config.cg_environment.asymmetric = JSON.stringify(upper) !== JSON.stringify(lower);
+        config.cg_environment.n_lipids_per_leaflet = Number(document.getElementById('cg-n-lipids-per-leaflet')?.value || 150);
+        config.cg_environment.upper_leaflet = cgCompositionFor('upper');
+        config.cg_environment.lower_leaflet = _cgAsymmetric ? cgCompositionFor('lower') : cgCompositionFor('upper');
+        config.cg_environment.asymmetric = _cgAsymmetric;
       }
     }
     var includeSolvent = document.getElementById('cg-include-solvent')?.checked !== false;
     var saltMolarity = Number(document.getElementById('cg-salt')?.value || 0);
     if (wants('cg_solvation')) {
-      config.cg_solvation = {include_solvent: includeSolvent, salt_molarity: saltMolarity};
+      config.cg_solvation = {
+        include_solvent: includeSolvent,
+        padding_nm: Number(document.getElementById('cg-padding')?.value || (environment === 'bilayer' ? 2 : 1.5)),
+      };
     }
     if (wants('cg_system')) {
       config.cg_system = {
@@ -7113,13 +7489,17 @@ function buildModuleConfig(focusStep) {
     if (_orientMode === 'ppm') {
       // Auto algorithms compute their pose on the backend. Sending the
       // displayed result back as an override would be a silently ignored input.
-      config.orient = { method: _orientAlgorithm || 'ppm' };
+      config.orient = {
+        method: _orientAlgorithm || 'ppm',
+        half_thickness: orientationHydrophobicHalfThickness(),
+      };
     } else {
       config.orient = {
         method: 'manual',
         z_offset: _orientZOffset,
         tilt: _orientTilt,
         phi: _orientPhi,
+        half_thickness: orientationHydrophobicHalfThickness(),
       };
     }
   }

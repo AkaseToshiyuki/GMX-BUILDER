@@ -21,6 +21,7 @@ import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from gmxbuilder import VERSION
 from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.chemistry import is_hydrogen
 from gmxbuilder.core.system import System
 from gmxbuilder.core.exceptions import ModuleConfigError, ParseError
 from gmxbuilder.io.pdb import PDBParser, PDBValidator
@@ -40,7 +42,11 @@ from gmxbuilder.modules.membrane.lipids import LipidRegistry, CATEGORY_NAMES
 from gmxbuilder.modules.solvation.water_models import WaterRegistry
 from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
 from gmxbuilder.web.task_manager import task_expiry, task_manager
-from gmxbuilder.runtime.hardware import configured_task_slots, hardware_capabilities
+from gmxbuilder.runtime.hardware import (
+    configured_task_slots,
+    find_gromacs_executable,
+    hardware_capabilities,
+)
 from gmxbuilder.web.custom_lipids import (
     CustomLipidStore,
     run_custom_lipid_build,
@@ -66,6 +72,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gmxbuilder.web")
 
+_MARTINI_TASK_TYPES = frozenset({
+    "martini3-bilayer",
+    "martini3-solvent",
+})
+
+
+def _is_martini_task_type(task_type: str | None) -> bool:
+    return task_type in _MARTINI_TASK_TYPES
+
 # ---------------------------------------------------------------------------
 # App setup
 
@@ -85,6 +100,85 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _INITIAL_SECURITY = SecurityConfig.from_environment()
 _ALLOWED_ORIGINS = _INITIAL_SECURITY.allowed_origins
 
+
+def _positive_body_limit(name: str, default: int) -> int:
+    """Read a bounded positive request-body limit from the environment."""
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r", name, raw)
+        return default
+    return value if 1 <= value <= 1024 * 1024 * 1024 else default
+
+
+class RequestBodyLimitMiddleware:
+    """Reject oversized fixed-length and chunked HTTP request bodies."""
+
+    def __init__(self, application):
+        self.application = application
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.application(scope, receive, send)
+            return
+        headers = {
+            key.lower(): value for key, value in scope.get("headers", [])
+        }
+        content_type = headers.get(b"content-type", b"").lower()
+        if content_type.startswith(b"multipart/form-data"):
+            limit = _positive_body_limit(
+                "GMXBUILDER_UPLOAD_BODY_LIMIT", 128 * 1024 * 1024
+            )
+        else:
+            limit = _positive_body_limit(
+                "GMXBUILDER_JSON_BODY_LIMIT", 2 * 1024 * 1024
+            )
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                if int(declared) > limit:
+                    await JSONResponse(
+                        {"error": f"Request body exceeds the {limit}-byte limit"},
+                        status_code=413,
+                    )(scope, receive, send)
+                    return
+            except ValueError:
+                await JSONResponse(
+                    {"error": "Invalid Content-Length header"}, status_code=400
+                )(scope, receive, send)
+                return
+
+        consumed = 0
+        response_started = False
+
+        class RequestBodyTooLarge(Exception):
+            pass
+
+        async def limited_receive():
+            nonlocal consumed
+            message = await receive()
+            if message.get("type") == "http.request":
+                consumed += len(message.get("body", b""))
+                if consumed > limit:
+                    raise RequestBodyTooLarge
+            return message
+
+        async def tracked_send(message):
+            nonlocal response_started
+            if message.get("type") == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.application(scope, limited_receive, tracked_send)
+        except RequestBodyTooLarge:
+            if not response_started:
+                await JSONResponse(
+                    {"error": f"Request body exceeds the {limit}-byte limit"},
+                    status_code=413,
+                )(scope, receive, send)
+
 @asynccontextmanager
 async def _app_lifespan(_application: FastAPI):
     await startup_background_tasks()
@@ -94,6 +188,7 @@ async def _app_lifespan(_application: FastAPI):
         await shutdown_event()
 
 app = FastAPI(title="GMXBUILDER", version=VERSION, lifespan=_app_lifespan)
+app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(_ALLOWED_ORIGINS),
@@ -146,7 +241,7 @@ async def security_middleware(request: Request, call_next):
     def secured(response):
         return apply_security_headers(response, public_mode=public_mode)
 
-    if security.errors:
+    if security.errors and not live_probe:
         return secured(JSONResponse(
             {"error": "Invalid server security configuration", "details": list(security.errors)},
             status_code=503,
@@ -305,7 +400,21 @@ _SERVER_PATH_PATTERN = re.compile(
 
 def _redact_server_paths(value: object) -> str:
     """Remove host filesystem locations from browser-visible build messages."""
-    return _SERVER_PATH_PATTERN.sub("<server-path>", str(value))
+    redacted = str(value)
+    roots = {
+        task_manager.root.expanduser().resolve(strict=False),
+        Path(tempfile.gettempdir()).expanduser().resolve(strict=False),
+    }
+    configured_cache = os.environ.get("GMXBUILDER_CACHE_DIR")
+    if configured_cache:
+        roots.add(Path(configured_cache).expanduser().resolve(strict=False))
+    for root in sorted((str(path) for path in roots), key=len, reverse=True):
+        redacted = re.sub(
+            re.escape(root) + r"(?:/[^\s,;:)\]}]+)*",
+            "<server-path>",
+            redacted,
+        )
+    return _SERVER_PATH_PATTERN.sub("<server-path>", redacted)
 
 
 def _sanitize_public_value(value: object) -> object:
@@ -407,6 +516,8 @@ _executor: ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
 _custom_lipid_executor: ThreadPoolExecutor | None = None
 _custom_lipid_executor_lock = threading.Lock()
+_interactive_executor: ThreadPoolExecutor | None = None
+_interactive_executor_lock = threading.Lock()
 _event_loop: asyncio.AbstractEventLoop | None = None
 _lifespan_tasks: list[asyncio.Task] = []
 _pka_cache: dict[str, list[dict]] = {}  # task_id → pKa predictions
@@ -419,8 +530,23 @@ _custom_lipid_jobs_lock = threading.Lock()
 _custom_gpu_condition = threading.Condition()
 _custom_gpu_in_use: set[int] = set()
 _custom_gpu_cursor = 0
-_RUNTIME_HARDWARE = hardware_capabilities()
-_CUSTOM_GPU_IDS = tuple(range(_RUNTIME_HARDWARE.configured_gpu_count))
+def _configured_custom_gpu_ids() -> tuple[int, ...]:
+    """Read the already-established deployment allocation without probing CUDA."""
+    configured = os.environ.get("GMXBUILDER_GPU_IDS", "").strip()
+    if not configured:
+        return ()
+    try:
+        identifiers = tuple(int(value.strip()) for value in configured.split(","))
+    except ValueError:
+        logger.error("Ignoring invalid GMXBUILDER_GPU_IDS=%r", configured)
+        return ()
+    if any(value < 0 for value in identifiers) or len(set(identifiers)) != len(identifiers):
+        logger.error("Ignoring invalid GMXBUILDER_GPU_IDS=%r", configured)
+        return ()
+    return identifiers
+
+
+_CUSTOM_GPU_IDS = _configured_custom_gpu_ids()
 _CUSTOM_GPU_CONCURRENCY = min(
     2,
     max(1, int(os.environ.get("GMXBUILDER_CUSTOM_LIPID_CONCURRENCY", "2"))),
@@ -441,6 +567,7 @@ async def startup_background_tasks():
     global _queue_event, _event_loop
     _get_executor()
     _get_custom_lipid_executor()
+    _get_interactive_executor()
     _event_loop = asyncio.get_running_loop()
     _queue_event = asyncio.Event()
     # Finalization requests are task-owned and restart-safe.  A service
@@ -536,7 +663,7 @@ async def startup_background_tasks():
 
 async def shutdown_event():
     """Graceful shutdown: wait for in-flight builds to complete."""
-    global _executor, _custom_lipid_executor, _event_loop
+    global _executor, _custom_lipid_executor, _interactive_executor, _event_loop
     logger.info("Shutting down — waiting for in-flight builds...")
     for task in _lifespan_tasks:
         task.cancel()
@@ -553,6 +680,11 @@ async def shutdown_event():
         _custom_lipid_executor = None
     if custom_executor is not None:
         custom_executor.shutdown(wait=True, cancel_futures=False)
+    with _interactive_executor_lock:
+        interactive_executor = _interactive_executor
+        _interactive_executor = None
+    if interactive_executor is not None:
+        interactive_executor.shutdown(wait=True, cancel_futures=False)
     _event_loop = None
     logger.info("Shutdown complete")
 
@@ -582,6 +714,28 @@ def _get_custom_lipid_executor() -> ThreadPoolExecutor:
                 thread_name_prefix="gmxbuilder-custom-lipid",
             )
         return _custom_lipid_executor
+
+
+def _get_interactive_executor() -> ThreadPoolExecutor:
+    """Small bounded pool for previews and scientific helper calculations."""
+    global _interactive_executor
+    with _interactive_executor_lock:
+        if (
+            _interactive_executor is None
+            or getattr(_interactive_executor, "_shutdown", False)
+        ):
+            _interactive_executor = ThreadPoolExecutor(
+                max_workers=min(2, _MAX_CONCURRENT_BUILDS),
+                thread_name_prefix="gmxbuilder-interactive",
+            )
+        return _interactive_executor
+
+
+async def _run_interactive(function, /, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _get_interactive_executor(), partial(function, *args, **kwargs)
+    )
 
 
 def _signal_queue() -> None:
@@ -720,6 +874,39 @@ async def api_create_task(request: Request):
 # ---------------------------------------------------------------------------
 # API: PPM orientation
 
+def _legacy_orientation_payload(
+    pdb_path: str, algorithm: str, half_thickness: float | None,
+) -> dict:
+    """Compute the legacy orientation response off the event-loop thread."""
+    parser = PDBParser()
+    structure = parser.parse(pdb_path)
+    from gmxbuilder.modules.membrane.orient import (
+        compute_orientation,
+        orient_protein,
+    )
+
+    z_offset, _, tilt_rad = compute_orientation(
+        structure, algorithm=algorithm, half_thickness=half_thickness
+    )
+    from gmxbuilder.io.pdb import PDBWriter
+
+    oriented = parser.parse(pdb_path)
+    orient_protein(
+        oriented,
+        method=algorithm,
+        half_thickness=half_thickness,
+    )
+    with tempfile.TemporaryDirectory(prefix="gmxbuilder-orient-legacy-") as tmp_dir:
+        oriented_path = Path(tmp_dir) / "oriented.pdb"
+        PDBWriter.write(oriented, oriented_path)
+        oriented_pdb = oriented_path.read_text(encoding="utf-8")
+    return {
+        "algorithm": algorithm,
+        "z_offset": round(z_offset, 2),
+        "tilt_degrees": round(np.degrees(tilt_rad), 1),
+        "oriented_pdb": oriented_pdb,
+    }
+
 @app.post("/api/orient-ppm")
 async def api_orient_ppm(request: Request):
     """Compute orientation for a previously uploaded PDB."""
@@ -757,49 +944,9 @@ async def api_orient_ppm(request: Request):
         )
 
     try:
-        parser = PDBParser()
-        structure = parser.parse(tmp_path)
-
-        from gmxbuilder.modules.membrane.orient import (
-            compute_orientation,
-            orient_protein,
+        return await _run_interactive(
+            _legacy_orientation_payload, tmp_path, algorithm, half_thickness
         )
-
-        z_offset, _, tilt_rad = compute_orientation(
-            structure, algorithm=algorithm, half_thickness=half_thickness)
-
-        # ---- Apply full PPM orientation to a copy for 3D preview ----
-        oriented_pdb = None
-        tmp_name = None
-        try:
-            from gmxbuilder.io.pdb import PDBWriter
-            oriented = parser.parse(tmp_path)
-            orient_protein(
-                oriented,
-                method=algorithm,
-                half_thickness=half_thickness,
-            )
-            # Write oriented structure to temp PDB and read back
-            fd, tmp_name = tempfile.mkstemp(suffix=".pdb")
-            os.close(fd)
-            PDBWriter.write(oriented, tmp_name)
-            oriented_pdb = Path(tmp_name).read_text()
-        except Exception:
-            logger.exception("Failed to generate oriented PDB for preview")
-            oriented_pdb = None  # non-critical — frontend uses raw PDB as fallback
-        finally:
-            if tmp_name is not None:
-                try:
-                    os.unlink(tmp_name)
-                except OSError:
-                    pass
-
-        return {
-            "algorithm": algorithm,
-            "z_offset": round(z_offset, 2),
-            "tilt_degrees": round(np.degrees(tilt_rad), 1),
-            "oriented_pdb": oriented_pdb,
-        }
     except Exception:
         logger.exception("Unhandled error in orient-ppm")
         return JSONResponse({"error": "Internal server error"}, status_code=500)
@@ -866,7 +1013,7 @@ async def api_orient_preview(task_id: str, request: Request):
         # Preview is read-only and short-lived. Keep it off the persistent
         # build executor so browser slider traffic cannot occupy build slots,
         # and so application/TestClient restarts cannot reuse a shut-down pool.
-        payload = await asyncio.to_thread(
+        payload = await _run_interactive(
             _generate_orientation_preview, task_id, config
         )
     except FileNotFoundError as exc:
@@ -1159,7 +1306,7 @@ async def api_task_resume(task_id: str):
     task_type = state.get("task_type") or {}
     task_type_id = task_type.get("id") or state.get("task_type_id") or "membrane-bilayer"
     protein_free_cg = (
-        task_type_id == "coarse-grained"
+        _is_martini_task_type(task_type_id)
         and (state.get("step_input_config") or {}).get("include_protein") is False
     )
 
@@ -1252,7 +1399,8 @@ async def api_task_resume(task_id: str):
         "membrane-bilayer": "BilayerBuilder",
         "pure-membrane": "PureBilayerSystem",
         "solvator": "Solvator",
-        "coarse-grained": "CoarseGrainedBuilder",
+        "martini3-bilayer": "Martini3BilayerBuilder",
+        "martini3-solvent": "Martini3SolventBuilder",
     }.get(task_type_id, "BilayerBuilder")
     state["resume_step"] = resume_step
     state["resume_step_number"] = resume_index + 1
@@ -1381,13 +1529,17 @@ async def api_build_lipid_library(request: Request):
             return JSONResponse(
                 {"error": "npt_ps must be between 500 and 5000 ps"}, status_code=400
             )
-        await asyncio.to_thread(
-            LipidEquilibrationBuilder().build,
-            lipid_name,
-            force_field,
-            lipid_ff,
-            npt_ps=npt_ps,
-            force=bool(data.get("force", False)),
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            _get_custom_lipid_executor(),
+            partial(
+                LipidEquilibrationBuilder().build,
+                lipid_name,
+                force_field,
+                lipid_ff,
+                npt_ps=npt_ps,
+                force=bool(data.get("force", False)),
+            ),
         )
         return {
             "status": "ok",
@@ -1546,8 +1698,11 @@ async def api_submit_task_custom_lipid(task_id: str, request: Request):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
         return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-    hardware = hardware_capabilities()
-    if not hardware.gmx_installed:
+    # Submission only needs a usable executable.  Full hardware discovery also
+    # validates optional operator GPU exposure and must not turn a CPU-capable
+    # custom-lipid submission into a 500 response when that optional probe is
+    # unavailable or stale.
+    if find_gromacs_executable() is None:
         return JSONResponse(
             {
                 "error": (
@@ -1673,8 +1828,8 @@ def _schedule_propka_precompute(tmp_path: str) -> None:
             preds = predict_pka_from_pdb(tmp_path)
             with _pka_cache_lock:
                 _pka_cache[tmp_path] = preds
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("PROPKA background calculation failed: %s", exc)
         finally:
             with _pka_cache_lock:
                 _pka_running.discard(tmp_path)
@@ -1685,8 +1840,8 @@ def _schedule_propka_precompute(tmp_path: str) -> None:
 async def _get_propka_results(tmp_path: str) -> list[dict]:
     """Return cached PROPKA results, or compute asynchronously if not cached.
 
-    Uses asyncio.to_thread to avoid blocking the event loop during
-    the (potentially slow, 3-10 s) PROPKA calculation.
+    Uses the bounded interactive executor so repeated polling cannot bypass
+    the configured process resource budget.
     """
     with _pka_cache_lock:
         if tmp_path in _pka_cache:
@@ -1695,12 +1850,13 @@ async def _get_propka_results(tmp_path: str) -> list[dict]:
     # Not cached — run in thread pool to keep event loop free
     try:
         from gmxbuilder.modules.modifications.protonation import predict_pka_from_pdb
-        preds = await asyncio.to_thread(predict_pka_from_pdb, tmp_path)
+        preds = await _run_interactive(predict_pka_from_pdb, tmp_path)
         with _pka_cache_lock:
             _pka_cache[tmp_path] = preds
             _pka_running.discard(tmp_path)
         return preds
-    except Exception:
+    except Exception as exc:
+        logger.warning("PROPKA calculation failed; using model pKa values: %s", exc)
         with _pka_cache_lock:
             _pka_running.discard(tmp_path)
         return []
@@ -2229,7 +2385,7 @@ async def api_ligand_charge_suggestions(task_id: str, request: Request):
                 }
             return suggestions
 
-        suggestions = await asyncio.to_thread(compute)
+        suggestions = await _run_interactive(compute)
         return {"status": "ok", "pH": target_pH, "suggestions": suggestions}
     except (OSError, RuntimeError, ValueError, KeyError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -2353,18 +2509,7 @@ _NONSTANDARD_AA_MAP = {
 _WATER_RESNAMES = {"HOH", "SOL", "WAT", "TIP", "TIP3", "SPC", "SPCE", "DOD"}
 
 # Hydrogen atom names (start with H or are pure H)
-def _is_hydrogen(atom_name: str, element: str) -> bool:
-    name = atom_name.strip()
-    if not name:
-        return False
-    if element.strip().upper() == "H":
-        return True
-    # Common hydrogen naming: H, HA, HB, HG*, HD*, HE*, HZ*, HH*, 1H, 2H, etc.
-    if len(name) >= 1 and name[0] == "H" and len(name) <= 4:
-        # H, HA, HB1, HG21 etc. — but not HE (helium) or HG (mercury)
-        if name.upper() not in ("HE", "HG", "HF", "HO", "HS"):
-            return True
-    return False
+_is_hydrogen = is_hydrogen
 
 
 def _filter_pdb_for_display(pdb_text: str) -> str:
@@ -2669,7 +2814,7 @@ async def api_upload_pdb(
         or not task_type_detail.get("enabled")
         or (
             not task_type_detail.get("requires_input", True)
-            and task_type != "coarse-grained"
+            and not _is_martini_task_type(task_type)
         )
     ):
         return JSONResponse(
@@ -2690,7 +2835,7 @@ async def api_upload_pdb(
             ((existing_state or {}).get("task_type") or {}).get("id")
             or (existing_state or {}).get("task_type_id")
         )
-        if task_type != "coarse-grained" or existing_type != task_type:
+        if not _is_martini_task_type(task_type) or existing_type != task_type:
             return JSONResponse(
                 {"error": "Existing task does not accept this structure upload"},
                 status_code=409,
@@ -2771,7 +2916,7 @@ async def api_upload_pdb(
         small_molecules = PDBValidator.detect_small_molecules(tmp_path)
 
         # ---- Step 4: Precompute PROPKA in background ----
-        if task_type != "coarse-grained":
+        if not _is_martini_task_type(task_type):
             _schedule_propka_precompute(str(tmp_path))
 
         # Update task state
@@ -3068,7 +3213,8 @@ async def api_build(request: Request):
             status_code=409,
         )
     if persisted_task_type not in {
-        "membrane-bilayer", "pure-membrane", "solvator", "coarse-grained"
+        "membrane-bilayer", "pure-membrane", "solvator",
+        "martini3-bilayer", "martini3-solvent",
     }:
         return JSONResponse(
             {"error": f"Workflow {persisted_task_type!r} is not available for finalization"},
@@ -3084,7 +3230,7 @@ async def api_build(request: Request):
     simparams = modules.get("simparams", {})
     runner = _get_step_runner(task_id, persisted_task_type)
     try:
-        if persisted_task_type == "coarse-grained":
+        if _is_martini_task_type(persisted_task_type):
             from gmxbuilder.modules.coarse_grained.protocol import normalize_protocol
 
             checked = runner.load_system("cg_system")
@@ -3140,7 +3286,7 @@ async def api_build(request: Request):
         )
     modules["simparams"] = simparams
 
-    source_step = "cg_system" if persisted_task_type == "coarse-grained" else "ions"
+    source_step = "cg_system" if _is_martini_task_type(persisted_task_type) else "ions"
     if persisted_task_type == "pure-membrane":
         solvation_config = modules.get("solvation")
         include_solvent = (
@@ -3360,7 +3506,7 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
         export_config = dict(modules_config.get("export") or {})
         export_config["system_name"] = (
             simparams.get("system_name", "martini3_system")
-            if task_type_id == "coarse-grained"
+            if _is_martini_task_type(task_type_id)
             else data.get("system_name", "system")
         )
 
@@ -3373,11 +3519,11 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
                 "Coordinate-building modules will not be re-run.",
             ]
 
-        if task_type_id != "coarse-grained":
+        if not _is_martini_task_type(task_type_id):
             _require_task_custom_lipids_ready(task_id)
         lipid_scope = (
             nullcontext()
-            if task_type_id == "coarse-grained"
+            if _is_martini_task_type(task_type_id)
             else task_custom_lipid_scope(task_manager.get_task_dir(task_id))
         )
         with task_manager.active_task(task_id), lipid_scope:
@@ -3560,7 +3706,7 @@ async def api_steps_status(task_id: str):
         has_checkpoint = runner.has_checkpoint(s)
         preview_available = has_checkpoint
         confirmed = None
-        if pipeline_type == "coarse-grained" and s == "cg_system" and has_checkpoint:
+        if _is_martini_task_type(pipeline_type) and s == "cg_system" and has_checkpoint:
             checked_system = runner.load_system(s)
             confirmed = bool(
                 checked_system is not None
@@ -3701,7 +3847,7 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
     # (chain selections applied by frontend Check button) > cleaned > uploaded
     pdb_path = None
     protein_free_cg = (
-        pipeline_type == "coarse-grained"
+        _is_martini_task_type(pipeline_type)
         and config.get("include_protein") is False
     )
     if step_name == "input" and not protein_free_cg:
@@ -3777,7 +3923,7 @@ async def api_confirm_cg_system(task_id: str):
     )
     if task_state is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-    if task_type != "coarse-grained":
+    if not _is_martini_task_type(task_type):
         return JSONResponse({"error": "This task is not a Martini 3 workflow"}, status_code=409)
     runner = _get_step_runner(task_id, task_type)
     system = runner.load_system("cg_system")
@@ -3814,12 +3960,19 @@ async def api_step_viewer_pdb(task_id: str, step_name: str):
     if task_state:
         pipeline_type = (task_state.get("task_type") or {}).get("id") or "membrane-bilayer"
 
+    try:
+        allowed_steps = get_pipeline_steps(pipeline_type)
+    except ValueError:
+        return JSONResponse({"error": "Unknown persisted pipeline"}, status_code=400)
+    if step_name not in allowed_steps:
+        return JSONResponse({"error": "Unknown pipeline step"}, status_code=400)
+
     runner = _get_step_runner(task_id, pipeline_type)
     pdb_path = runner.step_dir(step_name) / "viewer.pdb"
     # Martinize2 writes authoritative CONECT records for mapped beads.  Keep
     # those bonds in the mapping preview instead of the generic checkpoint PDB,
     # which intentionally stores coordinates only.
-    if pipeline_type == "coarse-grained" and step_name == "cg_mapping":
+    if _is_martini_task_type(pipeline_type) and step_name == "cg_mapping":
         mapped_path = runner.step_dir(step_name) / "martinize" / "cg_protein.pdb"
         step_root = runner.step_dir(step_name).resolve()
         resolved = mapped_path.resolve()

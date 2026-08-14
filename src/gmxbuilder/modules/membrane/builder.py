@@ -14,6 +14,7 @@ from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.geometry.grid import hexagonal_grid
+from gmxbuilder.geometry.periodic import wrap_periodic_coordinates
 from gmxbuilder.geometry.rdkit_lipid import build_rdkit_lipid_geometry
 from gmxbuilder.geometry.relax import (
     relax_interleaflet_clashes_xy,
@@ -30,6 +31,7 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
     LipidOrientationError,
     infer_lipid_orientation,
     orient_lipid_to_outward_normal,
+    rotate_to_opposite_leaflet,
     outward_orientation,
 )
 from gmxbuilder.modules.membrane.lipids import LipidRegistry
@@ -50,16 +52,28 @@ def _reconcile_lipid_selection(system: System, active_lipids: list[str]) -> str 
     original_lipid_ff = lipid_ff
     resolved_reason = ""
     if protein_ff.startswith("amber"):
-        from gmxbuilder.modules.forcefield.lipid_policy import amber_lipid_backend
+        from gmxbuilder.modules.forcefield.lipid_policy import (
+            amber_lipid_backend,
+            amber_lipid_backend_candidates,
+        )
 
         resolved_ff, resolved_reason = amber_lipid_backend(active)
         if resolved_ff is None:
             raise ModuleConfigError(resolved_reason)
-        if resolved_ff != lipid_ff:
+        compatible_backends = amber_lipid_backend_candidates(active)
+        # Preserve an explicit, coherent backend selected in Step 2 or by the
+        # offline library builder.  Lipid21 remains the default preference,
+        # but it must not silently replace a valid whole-membrane GAFF2 choice.
+        if lipid_ff not in compatible_backends:
             system.metadata["lipid_ff"] = resolved_ff
             system.metadata["gaff_lipids"] = active if resolved_ff == "gaff2" else []
             system.metadata["lipid21_lipids"] = active if resolved_ff == "lipid21" else []
             lipid_ff = resolved_ff
+        elif lipid_ff != resolved_ff:
+            resolved_reason = (
+                f"explicit coherent {lipid_ff} backend retained; "
+                f"preferred automatic backend would be {resolved_ff}"
+            )
     backend_change = (
         f"Amber lipid backend updated for this composition: "
         f"{original_lipid_ff or 'unset'} -> {lipid_ff}. {resolved_reason}"
@@ -656,7 +670,6 @@ class MembraneBuilder(BaseModule):
             lower_system.structure.coordinates,
             upper_system.metadata.get("lipid_sizes", []),
             lower_system.metadata.get("lipid_sizes", []),
-            rng=rng,
             box_xy=box_xy,
         )
         _close_leaflets(
@@ -761,7 +774,6 @@ class MembraneBuilder(BaseModule):
             lower_system.structure.coordinates,
             upper_system.metadata.get("lipid_sizes", []),
             lower_system.metadata.get("lipid_sizes", []),
-            rng=rng,
             box_xy=box_xy,
         )
         _close_leaflets(
@@ -814,14 +826,12 @@ class MembraneBuilder(BaseModule):
         if has_protein:
             # OrientModule already established the approved protein pose.
             already_oriented = system.metadata.get("_oriented", False)
-            embed_method = config.get("embed_method", None)
-            if embed_method and not already_oriented:
+            embed_method = config.get("embed_method") or "com"
+            if not already_oriented:
                 embed_protein(system, dh, method=embed_method)
                 log.append(f"Protein embedded in bilayer (method={embed_method})")
             elif already_oriented:
                 log.append("Protein pose preserved from OrientModule")
-            else:
-                log.append("Protein position from PPM preserved (no COM override)")
 
         # ---- 11. Merge membrane into system ----
         membrane_system = upper_system.merge(lower_system)
@@ -882,11 +892,11 @@ class MembraneBuilder(BaseModule):
             float(np.max(prot_max_xy - prot_min_xy)) if has_protein else 0.0
         )
         if protein_extent_xy > box_xy:
-            requested_box_xy = box_xy
-            box_xy = protein_extent_xy
-            log.append(
-                f"Box XY expanded: {requested_box_xy:.2f} → {box_xy:.2f} nm "
-                "because protein extent exceeds the APL target"
+            raise ModuleConfigError(
+                f"Protein XY extent ({protein_extent_xy:.2f} nm) exceeds the "
+                f"APL-sized membrane box ({box_xy:.2f} nm). Refusing to enlarge "
+                "the box after lipid placement because that would dilute the "
+                "bilayer; increase lipids per leaflet or XY padding."
             )
         else:
             log.append(
@@ -1230,8 +1240,9 @@ class MembraneBuilder(BaseModule):
             headgroup_anchor_local_indices.append(anchor_index)
 
             if z < 0:
-                # Lower leaflet: flip Z so head faces −Z (water below)
-                coords[:, 2] *= -1.0
+                # Lower leaflet: use a proper 180-degree rotation, never a
+                # mirror reflection that would invert lipid stereochemistry.
+                coords = rotate_to_opposite_leaflet(coords)
             base_angle = float(rng.uniform(0.0, 2.0 * np.pi))
             best_result = None
             best_clearance = -np.inf
@@ -1246,7 +1257,9 @@ class MembraneBuilder(BaseModule):
                     break
                 candidate_search = candidate[0].copy()
                 if box_xy is not None:
-                    candidate_search[:, :2] = np.mod(candidate_search[:, :2], box_xy)
+                    candidate_search[:, :2] = wrap_periodic_coordinates(
+                        candidate_search[:, :2], box_xy,
+                    )
                 clearance = float(placed_tree.query(candidate_search, k=1)[0].min())
                 if clearance > best_clearance:
                     best_clearance = clearance
@@ -1256,7 +1269,9 @@ class MembraneBuilder(BaseModule):
             placed_search = placed_coords.copy()
             tree_options = {}
             if box_xy is not None:
-                placed_search[:, :2] = np.mod(placed_search[:, :2], box_xy)
+                placed_search[:, :2] = wrap_periodic_coordinates(
+                    placed_search[:, :2], box_xy,
+                )
                 tree_options = {"boxsize": np.asarray([box_xy, box_xy, 0.0])}
             placed_tree = cKDTree(placed_search, **tree_options)
 
@@ -1504,8 +1519,12 @@ def _close_leaflets(
         z_box = max(
             float(upper_search[:, 2].max()), float(lower_search[:, 2].max())
         ) - z_origin + 1.0
-        upper_search[:, :2] = np.mod(upper_search[:, :2], box_xy)
-        lower_search[:, :2] = np.mod(lower_search[:, :2], box_xy)
+        upper_search[:, :2] = wrap_periodic_coordinates(
+            upper_search[:, :2], box_xy,
+        )
+        lower_search[:, :2] = wrap_periodic_coordinates(
+            lower_search[:, :2], box_xy,
+        )
         upper_search[:, 2] -= z_origin
         lower_search[:, 2] -= z_origin
         tree_options = {"boxsize": np.asarray([box_xy, box_xy, z_box])}
@@ -1784,7 +1803,9 @@ def _validate_membrane_quality(
         n_xy_samples = min(100, max(25, int(box_xy / 0.4) ** 2))
         rng_check = np.random.default_rng(42)
         sample_points = rng_check.uniform(0.0, box_xy, (n_xy_samples, 2))
-        periodic_lipid_xy = np.mod(lipid_coords[:, :2] + box_xy / 2.0, box_xy)
+        periodic_lipid_xy = wrap_periodic_coordinates(
+            lipid_coords[:, :2] + box_xy / 2.0, box_xy,
+        )
         lipid_tree = cKDTree(periodic_lipid_xy, boxsize=box_xy)
         gap_count = 0
         for sx, sy in sample_points:
@@ -1813,6 +1834,18 @@ def _validate_membrane_quality(
         if len(prot_coords) == 0:
             log.append("⚠ Protein coordinates empty — internal error.")
         else:
+            protein_z_min = float(prot_coords[:, 2].min())
+            protein_z_max = float(prot_coords[:, 2].max())
+            lipid_z_min = float(lipid_coords[:, 2].min())
+            lipid_z_max = float(lipid_coords[:, 2].max())
+            if protein_z_max < lipid_z_min or protein_z_min > lipid_z_max:
+                    raise ModuleConfigError(
+                        "Protein and bilayer Z envelopes do not intersect after membrane "
+                        "construction. Re-run protein orientation or manually place the "
+                        "protein within the membrane preview before continuing. "
+                        f"Protein Z={protein_z_min:.3f}..{protein_z_max:.3f} nm; "
+                        f"bilayer Z={lipid_z_min:.3f}..{lipid_z_max:.3f} nm."
+                    )
             lipid_tree_3d = cKDTree(lipid_coords)
             prot_dists, _ = lipid_tree_3d.query(
                 prot_coords, k=1, workers=configured_task_threads()

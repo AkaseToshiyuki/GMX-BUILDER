@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import math
 import os
 from contextlib import contextmanager
@@ -36,6 +37,7 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
     MIN_INWARD_PROJECTION_NM,
     infer_lipid_orientation,
     orient_lipid_to_outward_normal,
+    rotate_to_opposite_leaflet,
     outward_orientation,
 )
 
@@ -43,6 +45,59 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
 _gpu_device: ContextVar[int | None] = ContextVar(
     "gmxbuilder_lipid_gpu_device", default=None
 )
+
+# Side-chain hydroxylated sterols are not conventional single-headed
+# amphiphiles.  Atomistic studies find broad tilt/interfacial populations for
+# these oxysterols, while the surrounding phospholipid bilayer remains
+# normally oriented.  Their extracted conformers are still rigidly
+# canonicalized before publication; only the production-trajectory gate uses
+# the host bilayer rather than requiring every target sterol to point along Z.
+_SIDE_CHAIN_OXYSTEROLS = frozenset({
+    "20AHC", "22RHC", "24SHC", "25OHC", "27OHC",
+})
+
+# A production trajectory is an ensemble, not a static packing test.  Requiring
+# the single worst molecule in a 128-lipid bilayer to exceed both thresholds
+# makes the result depend on system size and rejects an otherwise ordered
+# bilayer after one transiently tilted molecule.  The final starting
+# conformers are still individually canonicalized and rechecked by
+# EquilibratedLipidLibrary.load_one().
+MIN_ORIENTED_FRACTION = 0.98
+
+
+def _orientation_gate(
+    lipid_name: str,
+    projections: np.ndarray,
+    cosines: np.ndarray,
+    host_projections: np.ndarray,
+    host_cosines: np.ndarray,
+    *,
+    upper_count: int,
+    lower_count: int,
+) -> tuple[bool, str, np.ndarray, np.ndarray]:
+    """Select the scientifically appropriate production orientation gate."""
+    if str(lipid_name).upper() in _SIDE_CHAIN_OXYSTEROLS:
+        gate_projections = host_projections
+        gate_cosines = host_cosines
+        profile = "host-bilayer-plus-canonicalized-side-chain-oxysterol"
+    else:
+        gate_projections = projections
+        gate_cosines = cosines
+        profile = "all-lipids-single-headgroup"
+    valid = (
+        np.isfinite(gate_projections)
+        & np.isfinite(gate_cosines)
+        & (gate_projections >= MIN_INWARD_PROJECTION_NM)
+        & (gate_cosines >= MIN_INWARD_COSINE)
+    )
+    correct_fraction = float(valid.mean()) if len(valid) else 0.0
+    passed = bool(
+        len(gate_projections)
+        and correct_fraction >= MIN_ORIENTED_FRACTION
+        and upper_count >= MIN_CONFORMERS
+        and lower_count >= MIN_CONFORMERS
+    )
+    return passed, profile, gate_projections, gate_cosines
 
 
 @contextmanager
@@ -468,6 +523,35 @@ class LipidEquilibrationBuilder:
         lipid_name: str,
         force_field: str,
         lipid_ff: str | None = None,
+        **kwargs,
+    ) -> Path:
+        """Serialize builders for the same library entry across processes."""
+        safe_name = self.library._safe_component(
+            str(lipid_name).strip().upper(), "lipid name"
+        )
+        safe_force_field = self.library._safe_component(
+            str(force_field).strip().lower(), "force field"
+        )
+        lock_root = self.library.roots[0].expanduser().resolve() / ".locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        # Deliberately omit lipid_ff from the lock key: an automatic Amber
+        # backend selection and an explicit GAFF2/Lipid21 request for the same
+        # lipid must not publish concurrently to related cache paths.
+        lock_path = lock_root / f"{safe_force_field}-{safe_name}.lock"
+        with lock_path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return self._build_once(
+                    lipid_name, force_field, lipid_ff, **kwargs
+                )
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _build_once(
+        self,
+        lipid_name: str,
+        force_field: str,
+        lipid_ff: str | None = None,
         *,
         temperature: float = 310.0,
         npt_ps: float = 1000.0,
@@ -684,7 +768,7 @@ class LipidEquilibrationBuilder:
                 anchor_positions.append(anchor.copy())
                 coords -= anchor
                 if not upper_leaflet:
-                    coords[:, 2] *= -1.0
+                    coords = rotate_to_opposite_leaflet(coords)
                 # Store every accepted conformation in the canonical upper-
                 # leaflet frame.  This rigid rotation preserves the NPT
                 # internal geometry while making the on-disk contract explicit.
@@ -699,10 +783,10 @@ class LipidEquilibrationBuilder:
                 raise RuntimeError("Extracted lipid atom order is inconsistent")
             # Deterministic, even sampling from both leaflets.
             selected = np.linspace(0, len(prepared) - 1, 50, dtype=int)
-            staging = output_dir.with_name(output_dir.name + ".building")
-            if staging.exists():
-                shutil.rmtree(staging)
-            staging.mkdir(parents=True)
+            staging = Path(tempfile.mkdtemp(
+                prefix=f".{output_dir.name}.building-",
+                dir=output_dir.parent,
+            ))
             for number, index in enumerate(selected):
                 coords, names = prepared[int(index)]
                 np.savez_compressed(
@@ -741,6 +825,8 @@ class LipidEquilibrationBuilder:
             # used for sterols that cannot form a stable pure bilayer.
             validation_projections: list[float] = []
             validation_cosines: list[float] = []
+            host_projections: list[float] = []
+            host_cosines: list[float] = []
             upper_tail_z: list[np.ndarray] = []
             lower_tail_z: list[np.ndarray] = []
             for indices, validation_upper in validation_records:
@@ -756,6 +842,13 @@ class LipidEquilibrationBuilder:
                 )
                 validation_projections.append(validation_projection)
                 validation_cosines.append(validation_cosine)
+                validation_resname = simulation_resnames.get(
+                    str(structure.resnames[indices[0]]).strip().upper(),
+                    str(structure.resnames[indices[0]]).strip().upper(),
+                )
+                if validation_resname != name:
+                    host_projections.append(validation_projection)
+                    host_cosines.append(validation_cosine)
                 validation_anchor, _ = _outer_headgroup_anchor(
                     validation_coords,
                     validation_names,
@@ -772,12 +865,26 @@ class LipidEquilibrationBuilder:
                 )
             projections = np.asarray(validation_projections, dtype=float)
             cosines = np.asarray(validation_cosines, dtype=float)
-            orientation_passed = bool(
-                len(projections)
-                and np.all(projections >= MIN_INWARD_PROJECTION_NM)
-                and np.all(cosines >= MIN_INWARD_COSINE)
-                and upper_count >= MIN_CONFORMERS
-                and lower_count >= MIN_CONFORMERS
+            orientation_passed, orientation_profile, gate_projections, gate_cosines = (
+                _orientation_gate(
+                    name,
+                    projections,
+                    cosines,
+                    np.asarray(host_projections, dtype=float),
+                    np.asarray(host_cosines, dtype=float),
+                    upper_count=upper_count,
+                    lower_count=lower_count,
+                )
+            )
+            gate_orientation_valid = (
+                np.isfinite(gate_projections)
+                & np.isfinite(gate_cosines)
+                & (gate_projections >= MIN_INWARD_PROJECTION_NM)
+                & (gate_cosines >= MIN_INWARD_COSINE)
+            )
+            oriented_fraction = (
+                float(gate_orientation_valid.mean())
+                if len(gate_orientation_valid) else 0.0
             )
             if upper_tail_z and lower_tail_z:
                 upper_inner = float(np.percentile(np.concatenate(upper_tail_z), 1.0))
@@ -800,7 +907,11 @@ class LipidEquilibrationBuilder:
             )
             metadata = {
                 "schema_version": SCHEMA_VERSION,
-                "status": "ready",
+                "coordinate_handedness": "preserved",
+                "leaflet_transform": "proper_rotation",
+                "status": (
+                    "ready" if test_mode or production_quality else "failed"
+                ),
                 "method": ACCEPTED_METHOD,
                 "lipid_name": name,
                 "canonical_smiles": lipid.smiles,
@@ -826,7 +937,7 @@ class LipidEquilibrationBuilder:
                 "quality": {
                     "passed": bool(production_quality),
                     "reason": (
-                        "APL, DHH, lipid orientation and hydrophobic-core seal passed production NPT gates"
+                        "APL, DHH, ensemble lipid orientation and hydrophobic-core seal passed production NPT gates"
                         if production_quality else
                         "test mode or a production APL/DHH/orientation/core-seal gate failed"
                     ),
@@ -838,13 +949,25 @@ class LipidEquilibrationBuilder:
                     "dhh_ratio": dhh_ratio,
                     "orientation": {
                         "passed": orientation_passed,
+                        "profile": orientation_profile,
                         "n_lipids_checked": int(len(projections)),
+                        "n_gate_lipids": int(len(gate_projections)),
+                        "correct_fraction": oriented_fraction,
+                        "minimum_correct_fraction": MIN_ORIENTED_FRACTION,
+                        "outlier_count": int((~gate_orientation_valid).sum()),
                         "upper_lipids": upper_count,
                         "lower_lipids": lower_count,
                         "minimum_inward_projection_nm": (
-                            float(projections.min()) if len(projections) else None
+                            float(gate_projections.min())
+                            if len(gate_projections) else None
                         ),
                         "minimum_inward_cosine": (
+                            float(gate_cosines.min()) if len(gate_cosines) else None
+                        ),
+                        "observed_target_minimum_projection_nm": (
+                            float(projections.min()) if len(projections) else None
+                        ),
+                        "observed_target_minimum_cosine": (
                             float(cosines.min()) if len(cosines) else None
                         ),
                     },
@@ -857,18 +980,24 @@ class LipidEquilibrationBuilder:
                 "elapsed_s": round(time.time() - build_started, 2),
             }
             (staging / "metadata.json").write_text(json.dumps(metadata, indent=2))
-            if output_dir.exists():
-                shutil.rmtree(output_dir)
-            staging.replace(output_dir)
+            publish_dir = (
+                output_dir
+                if test_mode or production_quality
+                else output_dir.with_name(output_dir.name + ".failed")
+            )
+            if publish_dir.exists():
+                shutil.rmtree(publish_dir)
+            staging.replace(publish_dir)
             if not test_mode and not production_quality:
                 raise RuntimeError(
                     f"Production quality gates failed for {name}: "
                     f"APL ratio {apl_ratio:.3f}, DHH ratio {dhh_ratio:.3f}, "
+                    f"correctly oriented fraction {oriented_fraction:.3f}, "
                     f"minimum inward projection "
-                    f"{float(projections.min()) if len(projections) else float('nan'):.3f} nm, "
+                    f"{float(gate_projections.min()) if len(gate_projections) else float('nan'):.3f} nm, "
                     f"minimum inward cosine "
-                    f"{float(cosines.min()) if len(cosines) else float('nan'):.3f}, "
+                    f"{float(gate_cosines.min()) if len(gate_cosines) else float('nan'):.3f}, "
                     f"tail-core gap {tail_core_gap:.3f} nm. Diagnostics were retained in "
-                    f"{output_dir / 'metadata.json'}"
+                    f"{publish_dir / 'metadata.json'}"
                 )
         return output_dir

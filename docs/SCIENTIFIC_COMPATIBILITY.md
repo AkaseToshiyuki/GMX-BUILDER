@@ -23,7 +23,7 @@ GET /api/options
 GET /api/patches?force_field=<name>
 GET /api/crosslink-capabilities?force_field=<name>
 GET /api/terminal-capabilities?force_field=<name>
-GET /api/lipid-library-status
+GET /api/lipid-library-status?lipid_name=<name>&force_field=<name>&lipid_ff=<backend>
 GET /api/coarse-grained/capabilities
 ```
 
@@ -62,10 +62,16 @@ A strict library entry is usable only when all of the following are true:
 - conformer counts and metadata are complete; and
 - APL, DHH, orientation, and hydrophobic-core quality gates pass.
 
-`data/lipid_conformations` is geometry bootstrap data, not an equilibrated
-library. A topology whose conformer fails the quality gates remains unavailable;
+Geometry-only bootstrap conformers are not shipped or advertised as an
+equilibrated library. A topology whose conformer fails the quality gates remains unavailable;
 GMXBUILDER does not substitute an approximate chain length or similarly named
 molecule.
+
+The release archive is a validated subset, not a promise that every compatible
+registry entry passed equilibration. Its checksum, strict-library schema, and
+each included library entry are verified before installation. Combinations
+that failed or have not completed the production quality gates are excluded
+and remain unavailable in the interface.
 
 Verify and install release assets with:
 
@@ -107,6 +113,9 @@ CHARMM36m and CHARMM TIP3P. GMXBUILDER treats each chain as a polymer and uses
 the bundled GROMACS/CHARMM36 databases to construct 5′/3′ hydroxyl termini,
 hydrogens, O3′–P links, bonded terms, and an integral chain charge. Protein–DNA,
 protein–RNA, and compatible non-covalent CHARMM ligand complexes are supported.
+This native preparation replaces the uploaded nucleic-acid coordinates with
+the hydrogen-complete `pdb2gmx` coordinates; the Step 3 viewer is the required
+coordinate review point.
 
 Backbone discontinuities, circular chains, covalent DNA/RNA hybrids, and
 modified or noncanonical nucleotides are rejected. Amber nucleic-acid models,
@@ -144,14 +153,21 @@ explicitly unavailable.
 Martini 3 is an independent resolution and parameter system. It is not mixed
 with the Amber, CHARMM, or OPLS atomistic systems above. The current workflow
 uses pinned Martini 3.0.0 assets, Martinize2/Vermouth 0.15.0, and COBY 1.0.14.
-It supports standard proteins in water, flat pure/mixed/asymmetric membranes,
-and standard protein–membrane systems with regular W water and NA/CL ions.
+It exposes separate Martini 3 Solvent and Bilayer builders. The solvent builder
+supports standard proteins in water. The bilayer builder supports flat pure,
+mixed, symmetric/asymmetric membranes with an exact requested integer count per
+leaflet, plus optional standard proteins. A dedicated orientation step uses the
+same PPM-like energy/segment review model as the atomistic membrane workflow,
+while allowing an exact manual transform. The periodic box is derived from the
+confirmed molecular envelope, padding, and requested membrane size; users do
+not enter a box Z that can truncate the positioned protein. Both builders use
+regular W water and NA/CL ions.
 
 Ligands, PTMs, glycans, nucleic acids, arbitrary custom CG molecules,
 mixed-resolution models, complex curved surfaces, Gō/OLIVES, and backmapping
 are unavailable and are rejected during input review. Query
 `GET /api/coarse-grained/capabilities` for the authoritative installed list and
-see the [User Manual](GMXBUILDER_USER_MANUAL_V1.0.1.md) for operation.
+see the [User Manual](GMXBUILDER_USER_MANUAL_V1.0.2.md) for operation.
 
 ## 8. Build quality and responsibility
 

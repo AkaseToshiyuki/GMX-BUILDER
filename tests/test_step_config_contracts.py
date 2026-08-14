@@ -53,6 +53,12 @@ def test_auto_orientation_rejects_manual_overrides():
         OrientModule().validate_config({"method": "ppm", "z_offset": 1.0})
 
 
+@pytest.mark.parametrize("value", [0.49, 3.01, float("nan"), "wide"])
+def test_orientation_rejects_invalid_hydrophobic_half_thickness(value):
+    with pytest.raises(ModuleConfigError, match="half_thickness"):
+        OrientModule().validate_config({"method": "ppm", "half_thickness": value})
+
+
 @pytest.mark.parametrize("key,value", [
     ("tilt", float("nan")),
     ("z_offset", "not-a-number"),
@@ -193,3 +199,18 @@ def test_membrane_revalidates_changed_supported_charmm_mixture(empty_system):
     _reconcile_lipid_selection(empty_system, ["POPC", "CHOL"])
 
     assert empty_system.metadata["selected_lipid_names"] == ["CHOL", "POPC"]
+
+
+def test_membrane_preserves_explicit_coherent_amber_gaff2_backend(empty_system):
+    empty_system.metadata.update({
+        "force_field": "amber14sb",
+        "lipid_ff": "gaff2",
+        "selected_lipid_names": ["POPC"],
+        "gaff_lipids": ["POPC"],
+    })
+
+    message = _reconcile_lipid_selection(empty_system, ["POPC"])
+
+    assert message is None
+    assert empty_system.metadata["lipid_ff"] == "gaff2"
+    assert empty_system.metadata["gaff_lipids"] == ["POPC"]

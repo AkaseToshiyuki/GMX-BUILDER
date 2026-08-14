@@ -193,8 +193,16 @@ body {
   border-radius: var(--radius);
   background: #fff;
   contain: layout paint;
+  isolation: isolate;
 }
-.viewer-box canvas { position: absolute !important; inset: 0; max-width: 100%; }
+.viewer-box canvas {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100%;
+  display: block;
+}
 .cg-check-row { margin-top: 18px; }
 .cg-check-button { display: block; width: 100%; }
 .cg-check-row .hint { display: block; min-height: 18px; margin-top: 6px; }
@@ -418,6 +426,9 @@ body {
   border-radius: 6px;
   cursor: pointer;
   transition: border-color .12s, background .12s;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
 }
 .lipid-card:hover { border-color: var(--primary); background: #eff6ff; }
 .lipid-card.selected { border-color: var(--primary); background: #dbeafe; box-shadow: 0 0 0 2px rgba(37,99,235,.18); }

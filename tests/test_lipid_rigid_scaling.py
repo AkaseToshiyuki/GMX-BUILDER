@@ -66,7 +66,7 @@ def test_cross_leaflet_relaxation_preserves_z_coordinates():
     lower_z = lower[:, 2].copy()
 
     relax_interleaflet_clashes_xy(
-        upper, lower, [2], [2], rng=np.random.default_rng(7)
+        upper, lower, [2], [2]
     )
 
     assert np.array_equal(upper[:, 2], upper_z)
@@ -89,7 +89,7 @@ def test_cross_leaflet_relaxation_preserves_each_leaflet_lattice():
     relax_interleaflet_clashes_xy(
         upper, lower, [1, 1], [1, 1], cutoff=0.20,
         displacement=0.05, n_iterations=20,
-        rng=np.random.default_rng(12), box_xy=4.0,
+        box_xy=4.0,
     )
 
     assert np.array_equal(upper, upper_before)
@@ -113,13 +113,23 @@ def test_same_leaflet_relaxation_detects_periodic_face_clashes():
     assert np.linalg.norm(delta) >= 0.119
 
 
+def test_same_leaflet_relaxation_rejects_invalid_partitions():
+    coordinates = np.zeros((3, 3), dtype=float)
+    with pytest.raises(ValueError, match="partition"):
+        relax_lipid_clashes(
+            coordinates,
+            ["C1", "C1", "C1"],
+            lipid_sizes=[1, 1],
+        )
+
+
 def test_cross_leaflet_relaxation_detects_periodic_face_clashes():
     upper = np.array([[0.01, 1.0, 0.05]])
     lower = np.array([[5.99, 1.0, -0.05]])
 
     relax_interleaflet_clashes_xy(
         upper, lower, [1], [1], cutoff=0.20, displacement=0.05,
-        n_iterations=10, rng=np.random.default_rng(6), box_xy=6.0,
+        n_iterations=10, box_xy=6.0,
     )
 
     delta = upper[0] - lower[0]

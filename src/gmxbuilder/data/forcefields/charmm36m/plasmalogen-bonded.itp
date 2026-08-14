@@ -1,0 +1,28 @@
+; CHARMM36 plasmalogen vinyl-ether additions from West et al., J. Phys.
+; Chem. B 2020, DOI 10.1021/acs.jpcb.9b08850. Converted from the published
+; toppar_all36_lipid_ether_AL.str parameters to GROMACS units.
+
+[ bondtypes ]
+;      i      j  func          b0          kb
+    CEL1  OG301     1   0.1360000   322168.00
+
+[ angletypes ]
+;      i      j      k  func      th0         cth       ub0      cub
+    CEL1   CEL1  OG301     5   124.50   468.60800   0.00000     0.00
+    CEL1  OG301   CTL2     5   109.00   443.50400   0.00000     0.00
+   OG301   CEL1   HEL1     5   115.50   251.04000   0.00000     0.00
+
+[ dihedraltypes ]
+;      i      j      k      l  func       phi0       kphi  mult
+    CEL1  OG301   CTL2   CTL1     9      0.000   3.305360     1
+    CEL1  OG301   CTL2   CTL1     9      0.000   2.008320     2
+    CEL1  OG301   CTL2   CTL1     9    180.000   0.125520     5
+    CTL2   CEL1   CEL1  OG301     9    180.000  12.552000     2
+    CTL2   CEL1   CEL1   HEL1     9    180.000  25.104000     2
+    HEL1   CEL1   CEL1  OG301     9    180.000  33.472000     2
+    CEL1   CEL1  OG301   CTL2     9    180.000   2.510400     1
+    CEL1   CEL1  OG301   CTL2     9    180.000   9.623200     2
+    CEL1   CEL1  OG301   CTL2     9    180.000   4.184000     3
+    HEL1   CEL1  OG301   CTL2     9    180.000   0.000000     2
+    HAL2   CTL2  OG301   CEL1     9      0.000   1.188256     3
+    CEL1   CEL1  OG301   HEL1     2      0.000 192.464000

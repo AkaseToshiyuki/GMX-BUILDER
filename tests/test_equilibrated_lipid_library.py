@@ -21,10 +21,73 @@ from gmxbuilder.modules.membrane.lipids import (
     parse_custom_lipid,
 )
 from gmxbuilder.modules.membrane.lipid_equilibration import (
+    MIN_ORIENTED_FRACTION,
     LipidEquilibrationBuilder,
+    _orientation_gate,
     _outer_headgroup_anchor,
     _simulation_lipid_resname_map,
 )
+
+
+def test_side_chain_oxysterol_gate_uses_oriented_host_bilayer():
+    all_projection = np.asarray([0.7, 0.8, -0.02])
+    all_cosine = np.asarray([0.9, 0.8, -0.03])
+    host_projection = np.asarray([0.7, 0.8])
+    host_cosine = np.asarray([0.9, 0.8])
+
+    passed, profile, gate_projection, _ = _orientation_gate(
+        "24SHC", all_projection, all_cosine, host_projection, host_cosine,
+        upper_count=26, lower_count=26,
+    )
+    assert passed
+    assert profile.startswith("host-bilayer")
+    assert np.array_equal(gate_projection, host_projection)
+
+    standard_passed, _, _, _ = _orientation_gate(
+        "CHOL", all_projection, all_cosine, host_projection, host_cosine,
+        upper_count=26, lower_count=26,
+    )
+    assert not standard_passed
+
+
+def test_side_chain_oxysterol_gate_rejects_disordered_host():
+    passed, _, _, _ = _orientation_gate(
+        "25OHC",
+        np.asarray([0.7, -0.02]), np.asarray([0.8, -0.03]),
+        np.asarray([0.7, -0.02]), np.asarray([0.8, -0.03]),
+        upper_count=26, lower_count=26,
+    )
+    assert not passed
+
+
+def test_production_orientation_gate_uses_ensemble_fraction_not_single_outlier():
+    projections = np.full(100, 0.7)
+    cosines = np.full(100, 0.8)
+    projections[0] = -0.1
+    cosines[0] = -0.2
+
+    passed, profile, _, _ = _orientation_gate(
+        "CHOL", projections, cosines, np.empty(0), np.empty(0),
+        upper_count=50, lower_count=50,
+    )
+
+    assert passed
+    assert profile == "all-lipids-single-headgroup"
+    assert MIN_ORIENTED_FRACTION == 0.98
+
+
+def test_production_orientation_gate_rejects_more_than_two_percent_outliers():
+    projections = np.full(100, 0.7)
+    cosines = np.full(100, 0.8)
+    projections[:3] = -0.1
+    cosines[:3] = -0.2
+
+    passed, _, _, _ = _orientation_gate(
+        "CHOL", projections, cosines, np.empty(0), np.empty(0),
+        upper_count=50, lower_count=50,
+    )
+
+    assert not passed
 
 
 def _write_entry(root, *, method=ACCEPTED_METHOD, quality=True, family="charmm36m-lipid"):
@@ -46,6 +109,8 @@ def _write_entry(root, *, method=ACCEPTED_METHOD, quality=True, family="charmm36
         )
     (directory / "metadata.json").write_text(json.dumps({
         "schema_version": SCHEMA_VERSION,
+        "coordinate_handedness": "preserved",
+        "leaflet_transform": "proper_rotation",
         "status": "ready",
         "method": method,
         "parameter_family": family,
