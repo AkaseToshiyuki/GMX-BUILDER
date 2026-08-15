@@ -67,15 +67,15 @@ def _coordinate_lipid_sequence(system) -> list[str]:
 )
 def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
     gmx = _find_gmx()
-    protein = StructureProcessor().run(
-        _two_residue_system("charmm36m"), {"skip_protonation": True}
-    ).system
+    protein = (
+        StructureProcessor()
+        .run(_two_residue_system("charmm36m"), {"skip_protonation": True})
+        .system
+    )
     # `_oriented` is a scientific contract: membrane-normal placement has
     # already centered the transmembrane span around Z=0.  Keep this generated
     # smoke fixture consistent with the real OrientModule output.
-    protein.structure.coordinates[:, 2] -= (
-        protein.structure.coordinates[:, 2].mean()
-    )
+    protein.structure.coordinates[:, 2] -= protein.structure.coordinates[:, 2].mean()
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,
@@ -105,11 +105,25 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
     MDPWriter().generate_all(tmp_path / "mdp", {"em_nsteps": 1})
     restrained_grompp = subprocess.run(
         [
-            gmx, "grompp", "-f", "mdp/mini.mdp", "-c", "input.gro",
-            "-r", "input.gro", "-p", "topol.top", "-o", "restrained.tpr",
-            "-maxwarn", "1",
+            gmx,
+            "grompp",
+            "-f",
+            "mdp/mini.mdp",
+            "-c",
+            "input.gro",
+            "-r",
+            "input.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "restrained.tpr",
+            "-maxwarn",
+            "1",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=120,
     )
     assert restrained_grompp.returncode == 0, (
         restrained_grompp.stdout + "\n" + restrained_grompp.stderr
@@ -119,8 +133,18 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
 
     grompp = subprocess.run(
         [
-            gmx, "grompp", "-f", str(mdp_path), "-c", str(gro_path),
-            "-p", str(top_path), "-o", "smoke.tpr", "-po", "processed.mdp",
+            gmx,
+            "grompp",
+            "-f",
+            str(mdp_path),
+            "-c",
+            str(gro_path),
+            "-p",
+            str(top_path),
+            "-o",
+            "smoke.tpr",
+            "-po",
+            "processed.mdp",
         ],
         cwd=tmp_path,
         text=True,
@@ -145,9 +169,11 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
 def test_modular_charmm_lipid_mixture_passes_grompp(tmp_path):
     """Curated head/tail compositions must link to real CHARMM parameters."""
     gmx = _find_gmx()
-    protein = StructureProcessor().run(
-        _two_residue_system("charmm36m"), {"skip_protonation": True}
-    ).system
+    protein = (
+        StructureProcessor()
+        .run(_two_residue_system("charmm36m"), {"skip_protonation": True})
+        .system
+    )
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,
@@ -183,16 +209,30 @@ def test_modular_charmm_lipid_mixture_passes_grompp(tmp_path):
     )
     GROWriter.write(checked.structure, tmp_path / "input.gro")
     TopologyWriter("charmm36m").write_top(
-        checked.structure, tmp_path / "topol.top",
+        checked.structure,
+        tmp_path / "topol.top",
         system_name="GMXBUILDER modular CHARMM lipid smoke",
     )
     _write_smoke_mdp(tmp_path / "smoke.mdp")
     grompp = subprocess.run(
         [
-            gmx, "grompp", "-f", "smoke.mdp", "-c", "input.gro",
-            "-p", "topol.top", "-o", "smoke.tpr", "-maxwarn", "1",
+            gmx,
+            "grompp",
+            "-f",
+            "smoke.mdp",
+            "-c",
+            "input.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "smoke.tpr",
+            "-maxwarn",
+            "1",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=120,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
 
@@ -200,9 +240,9 @@ def test_modular_charmm_lipid_mixture_passes_grompp(tmp_path):
 def test_plasmalogen_bilayer_passes_old_charmm_grompp(tmp_path):
     """The West vinyl-ether additions must also work with CHARMM36 protein terms."""
     gmx = _find_gmx()
-    protein = StructureProcessor().run(
-        _two_residue_system("charmm36"), {"skip_protonation": True}
-    ).system
+    protein = (
+        StructureProcessor().run(_two_residue_system("charmm36"), {"skip_protonation": True}).system
+    )
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,
@@ -218,16 +258,30 @@ def test_plasmalogen_bilayer_passes_old_charmm_grompp(tmp_path):
     assert result.success, "\n".join(result.log)
     GROWriter.write(result.system.structure, tmp_path / "input.gro")
     TopologyWriter("charmm36").write_top(
-        result.system.structure, tmp_path / "topol.top",
+        result.system.structure,
+        tmp_path / "topol.top",
         system_name="GMXBUILDER CHARMM36 plasmalogen smoke",
     )
     _write_smoke_mdp(tmp_path / "smoke.mdp")
     grompp = subprocess.run(
         [
-            gmx, "grompp", "-f", "smoke.mdp", "-c", "input.gro",
-            "-p", "topol.top", "-o", "smoke.tpr", "-maxwarn", "1",
+            gmx,
+            "grompp",
+            "-f",
+            "smoke.mdp",
+            "-c",
+            "input.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "smoke.tpr",
+            "-maxwarn",
+            "1",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=120,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
 
@@ -235,9 +289,9 @@ def test_plasmalogen_bilayer_passes_old_charmm_grompp(tmp_path):
 def test_current_lipid_stream_passes_classic_charmm_grompp(tmp_path):
     """Newer CHARMM36 lipids must remain usable with classic protein terms."""
     gmx = _find_gmx()
-    protein = StructureProcessor().run(
-        _two_residue_system("charmm36"), {"skip_protonation": True}
-    ).system
+    protein = (
+        StructureProcessor().run(_two_residue_system("charmm36"), {"skip_protonation": True}).system
+    )
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,
@@ -268,16 +322,30 @@ def test_current_lipid_stream_passes_classic_charmm_grompp(tmp_path):
     assert result.success, "\n".join(result.log)
     GROWriter.write(result.system.structure, tmp_path / "input.gro")
     TopologyWriter("charmm36").write_top(
-        result.system.structure, tmp_path / "topol.top",
+        result.system.structure,
+        tmp_path / "topol.top",
         system_name="GMXBUILDER modern lipids with classic CHARMM",
     )
     _write_smoke_mdp(tmp_path / "smoke.mdp")
     grompp = subprocess.run(
         [
-            gmx, "grompp", "-f", "smoke.mdp", "-c", "input.gro",
-            "-p", "topol.top", "-o", "smoke.tpr", "-maxwarn", "1",
+            gmx,
+            "grompp",
+            "-f",
+            "smoke.mdp",
+            "-c",
+            "input.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "smoke.tpr",
+            "-maxwarn",
+            "1",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=120,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
 
@@ -285,12 +353,12 @@ def test_current_lipid_stream_passes_classic_charmm_grompp(tmp_path):
 def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path):
     """Generated glycolipids/plant sterols must resolve in both releases."""
     gmx = _find_gmx()
-    protein = StructureProcessor().run(
-        _two_residue_system("charmm36m"), {"skip_protonation": True}
-    ).system
-    protein.structure.coordinates[:, 2] -= (
-        protein.structure.coordinates[:, 2].mean()
+    protein = (
+        StructureProcessor()
+        .run(_two_residue_system("charmm36m"), {"skip_protonation": True})
+        .system
     )
+    protein.structure.coordinates[:, 2] -= protein.structure.coordinates[:, 2].mean()
     protein.metadata["_oriented"] = True
     result = MembraneBuilder().run(
         protein,
@@ -317,24 +385,49 @@ def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path):
         ff_dir.mkdir()
         GROWriter.write(result.system.structure, ff_dir / "input.gro")
         TopologyWriter(force_field).write_top(
-            result.system.structure, ff_dir / "topol.top",
+            result.system.structure,
+            ff_dir / "topol.top",
             system_name=f"GMXBUILDER {force_field} generated-lipid smoke",
         )
         _write_smoke_mdp(ff_dir / "smoke.mdp")
         grompp = subprocess.run(
             [
-                gmx, "grompp", "-f", "smoke.mdp", "-c", "input.gro",
-                "-p", "topol.top", "-o", "smoke.tpr", "-maxwarn", "1",
+                gmx,
+                "grompp",
+                "-f",
+                "smoke.mdp",
+                "-c",
+                "input.gro",
+                "-p",
+                "topol.top",
+                "-o",
+                "smoke.tpr",
+                "-maxwarn",
+                "1",
             ],
-            cwd=ff_dir, text=True, capture_output=True, timeout=120,
+            cwd=ff_dir,
+            text=True,
+            capture_output=True,
+            timeout=120,
         )
         assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
         mdrun = subprocess.run(
             [
-                gmx, "mdrun", "-s", "smoke.tpr", "-deffnm", "smoke-em",
-                "-ntmpi", "1", "-ntomp", "2",
+                gmx,
+                "mdrun",
+                "-s",
+                "smoke.tpr",
+                "-deffnm",
+                "smoke-em",
+                "-ntmpi",
+                "1",
+                "-ntomp",
+                "2",
             ],
-            cwd=ff_dir, text=True, capture_output=True, timeout=120,
+            cwd=ff_dir,
+            text=True,
+            capture_output=True,
+            timeout=120,
         )
         assert mdrun.returncode == 0, mdrun.stdout + "\n" + mdrun.stderr
 
@@ -343,9 +436,11 @@ def test_mixed_gaff2_membrane_passes_grompp_and_mdrun(tmp_path, monkeypatch):
     """A mixed RTP/non-RTP selection is one coherent Amber/GAFF2 system."""
     monkeypatch.setenv("GMXBUILDER_GAFF_CHARGE_METHOD", "gas")
     gmx = _find_gmx()
-    protein = StructureProcessor().run(
-        _two_residue_system("amber99sb-ildn"), {"skip_protonation": True}
-    ).system
+    protein = (
+        StructureProcessor()
+        .run(_two_residue_system("amber99sb-ildn"), {"skip_protonation": True})
+        .system
+    )
     protein.metadata["_oriented"] = True
     protein.metadata["force_field"] = "amber99sb-ildn"
     result = MembraneBuilder().run(
@@ -370,14 +465,32 @@ def test_mixed_gaff2_membrane_passes_grompp_and_mdrun(tmp_path, monkeypatch):
     )
     _write_smoke_mdp(mdp_path)
     grompp = subprocess.run(
-        [gmx, "grompp", "-f", str(mdp_path), "-c", str(gro_path),
-         "-p", str(top_path), "-o", "smoke.tpr", "-po", "processed.mdp"],
-        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+        [
+            gmx,
+            "grompp",
+            "-f",
+            str(mdp_path),
+            "-c",
+            str(gro_path),
+            "-p",
+            str(top_path),
+            "-o",
+            "smoke.tpr",
+            "-po",
+            "processed.mdp",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=120,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
     mdrun = subprocess.run(
         [gmx, "mdrun", "-s", "smoke.tpr", "-deffnm", "smoke-em", "-ntmpi", "1"],
-        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=120,
     )
     output = mdrun.stdout + "\n" + mdrun.stderr
     assert mdrun.returncode == 0, output

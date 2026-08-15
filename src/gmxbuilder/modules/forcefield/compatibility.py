@@ -51,7 +51,8 @@ def rtp_heavy_atom_match(system: System, force_field: str, name: str) -> tuple[b
     for indices in instances:
         observed = {
             str(system.structure.atom_names[index]).strip()
-            for index in indices if not _is_hydrogen(system, index)
+            for index in indices
+            if not _is_hydrogen(system, index)
         }
         if observed != expected:
             missing = sorted(expected - observed)
@@ -81,11 +82,13 @@ def compatibility_report(
 
     nucleic_enabled, nucleic_reason = nucleic_force_field_capability(protein_ff)
     if nucleic_components and nucleic_enabled:
-        unsupported = sorted({
-            str(residue)
-            for component in nucleic_components
-            for residue in component.metadata.get("unsupported_residues", [])
-        })
+        unsupported = sorted(
+            {
+                str(residue)
+                for component in nucleic_components
+                for residue in component.metadata.get("unsupported_residues", [])
+            }
+        )
         polymer_types_by_chain: dict[str, set[str]] = {}
         for component in nucleic_components:
             chain = str(component.metadata.get("chain_id", ""))
@@ -93,8 +96,7 @@ def compatibility_report(
                 str(component.metadata.get("polymer_type", ""))
             )
         hybrids = sorted(
-            chain or "?" for chain, kinds in polymer_types_by_chain.items()
-            if len(kinds) > 1
+            chain or "?" for chain, kinds in polymer_types_by_chain.items() if len(kinds) > 1
         )
         backbone_issues = [
             issue
@@ -109,10 +111,7 @@ def compatibility_report(
             )
         elif hybrids:
             nucleic_enabled = False
-            nucleic_reason = (
-                "covalent DNA/RNA hybrid chains are unavailable: "
-                + ", ".join(hybrids)
-            )
+            nucleic_reason = "covalent DNA/RNA hybrid chains are unavailable: " + ", ".join(hybrids)
         elif backbone_issues:
             nucleic_enabled = False
             nucleic_reason = "backbone continuity failed: " + "; ".join(backbone_issues)
@@ -140,13 +139,11 @@ def compatibility_report(
     if not lipids:
         lipid_options = [{"value": "none", "label": "No membrane lipids", "enabled": True}]
     elif family == "charmm":
-        topology_missing = [
-            name for name in lipids if not lipid_has_rtp(name, protein_ff)
-        ]
+        topology_missing = [name for name in lipids if not lipid_has_rtp(name, protein_ff)]
         quality_blocked = [
-            name for name in lipids
-            if name not in topology_missing
-            and not charmm_lipid_capability(name, protein_ff)[0]
+            name
+            for name in lipids
+            if name not in topology_missing and not charmm_lipid_capability(name, protein_ff)[0]
         ]
         quality_reasons = [
             charmm_lipid_capability(name, protein_ff)[1]
@@ -158,54 +155,56 @@ def compatibility_report(
         if topology_missing:
             reason_parts.append(missing_lipid_reason(topology_missing, protein_ff))
         reason_parts.extend(quality_reasons)
-        lipid_options = [{
-            "value": protein_ff,
-            "label": f"CHARMM36 lipids bundled with {protein_ff}",
-            "enabled": not missing,
-            "reason": (
-                ""
-                if not missing
-                else "; ".join(reason_parts)
-            ),
-        }]
+        lipid_options = [
+            {
+                "value": protein_ff,
+                "label": f"CHARMM36 lipids bundled with {protein_ff}",
+                "enabled": not missing,
+                "reason": ("" if not missing else "; ".join(reason_parts)),
+            }
+        ]
     elif family == "amber":
         backend, backend_reason = amber_lipid_backend(lipids)
         labels = {
             "lipid21": "Amber Lipid21 v1.0 (exact)",
             "gaff2": "GAFF2 fallback (Amber-compatible)",
         }
-        lipid_options = [{
-            "value": backend or "unavailable",
-            "label": labels.get(backend, "No validated Amber lipid backend"),
-            "enabled": backend is not None,
-            "reason": backend_reason,
-        }]
+        lipid_options = [
+            {
+                "value": backend or "unavailable",
+                "label": labels.get(backend, "No validated Amber lipid backend"),
+                "enabled": backend is not None,
+                "reason": backend_reason,
+            }
+        ]
         # Lipid21 remains the preferred exact backend, but GAFF2 must stay an
         # explicit coherent whole-membrane option when every selected lipid
         # supports it.  Task-scoped custom lipids can only join a GAFF2
         # membrane, so hiding this valid alternative makes their workflow
         # impossible to complete.
-        gaff_supported = (
-            gaff_available()
-            and all(gaff_lipid_capability(name)[0] for name in lipids)
-        )
+        gaff_supported = gaff_available() and all(gaff_lipid_capability(name)[0] for name in lipids)
         if backend == "lipid21" and gaff_supported:
-            lipid_options.append({
-                "value": "gaff2",
-                "label": labels["gaff2"],
-                "enabled": True,
-                "reason": (
-                    "all selected lipids support one coherent GAFF2 membrane; "
-                    "select this backend before adding a custom lipid"
-                ),
-            })
+            lipid_options.append(
+                {
+                    "value": "gaff2",
+                    "label": labels["gaff2"],
+                    "enabled": True,
+                    "reason": (
+                        "all selected lipids support one coherent GAFF2 membrane; "
+                        "select this backend before adding a custom lipid"
+                    ),
+                }
+            )
     else:
         missing = [name for name in lipids if not lipid_has_rtp(name, protein_ff)]
-        lipid_options = [{
-            "value": "oplsaa", "label": "OPLS-AA compatible lipid parameters",
-            "enabled": not missing,
-            "reason": "" if not missing else missing_lipid_reason(missing, protein_ff),
-        }]
+        lipid_options = [
+            {
+                "value": "oplsaa",
+                "label": "OPLS-AA compatible lipid parameters",
+                "enabled": not missing,
+                "reason": "" if not missing else missing_lipid_reason(missing, protein_ff),
+            }
+        ]
 
     ligand_details = []
     rtp_all = True
@@ -219,28 +218,40 @@ def compatibility_report(
     elif family == "charmm":
         ligand_options = [
             {
-                "value": "rtp", "label": f"{protein_ff} RTP template",
+                "value": "rtp",
+                "label": f"{protein_ff} RTP template",
                 "enabled": rtp_all,
-                "reason": "" if rtp_all else "one or more molecules do not exactly match a CHARMM template",
+                "reason": ""
+                if rtp_all
+                else "one or more molecules do not exactly match a CHARMM template",
             },
             {
-                "value": "cgenff", "label": "CGenFF / ParamChem import",
+                "value": "cgenff",
+                "label": "CGenFF / ParamChem import",
                 "enabled": True,
                 "reason": "requires the matching ParamChem MOL2 and STR output for every molecule",
             },
         ]
     elif family == "amber":
-        ligand_options = [{
-            "value": "gaff2", "label": "GAFF2 + AM1-BCC",
-            "enabled": gaff_available(),
-            "reason": "" if gaff_available() else "AmberTools/ACPYPE is unavailable",
-        }]
+        ligand_options = [
+            {
+                "value": "gaff2",
+                "label": "GAFF2 + AM1-BCC",
+                "enabled": gaff_available(),
+                "reason": "" if gaff_available() else "AmberTools/ACPYPE is unavailable",
+            }
+        ]
     else:
-        ligand_options = [{
-            "value": "rtp", "label": "Bundled OPLS-AA template",
-            "enabled": rtp_all,
-            "reason": "" if rtp_all else "no exact bundled OPLS template; no general OPLS generator is installed",
-        }]
+        ligand_options = [
+            {
+                "value": "rtp",
+                "label": "Bundled OPLS-AA template",
+                "enabled": rtp_all,
+                "reason": ""
+                if rtp_all
+                else "no exact bundled OPLS template; no general OPLS generator is installed",
+            }
+        ]
 
     return {
         "protein_ff": protein_ff,
@@ -256,13 +267,14 @@ def compatibility_report(
             "reason": nucleic_reason if nucleic_components else "",
             "chains": len(nucleic_components),
             "residues": sum(
-                int(component.metadata.get("n_residues", 0))
-                for component in nucleic_components
+                int(component.metadata.get("n_residues", 0)) for component in nucleic_components
             ),
-            "polymer_types": sorted({
-                str(component.metadata.get("polymer_type", "unknown"))
-                for component in nucleic_components
-            }),
+            "polymer_types": sorted(
+                {
+                    str(component.metadata.get("polymer_type", "unknown"))
+                    for component in nucleic_components
+                }
+            ),
         },
     }
 

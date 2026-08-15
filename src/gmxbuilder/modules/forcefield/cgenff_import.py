@@ -14,8 +14,16 @@ from gmxbuilder.modules.forcefield.catalog import get_force_field_profile
 
 
 _ATOMIC_NUMBERS = {
-    "H": 1, "C": 6, "N": 7, "O": 8, "F": 9, "P": 15, "S": 16,
-    "CL": 17, "BR": 35, "I": 53,
+    "H": 1,
+    "C": 6,
+    "N": 7,
+    "O": 8,
+    "F": 9,
+    "P": 15,
+    "S": 16,
+    "CL": 17,
+    "BR": 35,
+    "I": 53,
 }
 
 
@@ -39,7 +47,9 @@ def _clean(line: str) -> str:
 def _parse_mol2(path: Path) -> tuple[list[str], list[str], np.ndarray]:
     lines = path.read_text(errors="replace").splitlines()
     try:
-        start = next(i for i, line in enumerate(lines) if line.strip().upper() == "@<TRIPOS>ATOM") + 1
+        start = (
+            next(i for i, line in enumerate(lines) if line.strip().upper() == "@<TRIPOS>ATOM") + 1
+        )
     except StopIteration as exc:
         raise ModuleConfigError("CGenFF MOL2 file has no @<TRIPOS>ATOM section") from exc
     names: list[str] = []
@@ -137,7 +147,9 @@ def prepare_cgenff_molecule(
         raise ModuleConfigError(f"Both MOL2 and STR files are required for CGenFF molecule {name}")
     atom_names, elements, coordinates = _parse_mol2(mol2)
     text = stream.read_text(errors="replace")
-    version_match = re.search(r"CGenFF(?:\s+program)?\s+version\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)", text, re.I)
+    version_match = re.search(
+        r"CGenFF(?:\s+program)?\s+version\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)", text, re.I
+    )
     version = version_match.group(1) if version_match else None
     expected_version = get_force_field_profile(force_field).cgenff_version
     if expected_version and not version:
@@ -196,7 +208,7 @@ def prepare_cgenff_molecule(
                 values = fields[1:]
                 if len(values) % 4:
                     raise ModuleConfigError(f"Malformed CGenFF improper record: {line}")
-                impropers.extend(tuple(values[i:i + 4]) for i in range(0, len(values), 4))
+                impropers.extend(tuple(values[i : i + 4]) for i in range(0, len(values), 4))
             elif keyword in {"LONEPAIR", "ANISOTROPY", "DRUDE"}:
                 raise ModuleConfigError(
                     f"CGenFF directive {keyword} requires a virtual-site/polarizable "
@@ -205,7 +217,16 @@ def prepare_cgenff_molecule(
             continue
         if mode != "param":
             continue
-        if keyword in {"ATOMS", "BONDS", "ANGLES", "DIHEDRALS", "IMPROPERS", "NONBONDED", "NBFIX", "CMAP"}:
+        if keyword in {
+            "ATOMS",
+            "BONDS",
+            "ANGLES",
+            "DIHEDRALS",
+            "IMPROPERS",
+            "NONBONDED",
+            "NBFIX",
+            "CMAP",
+        }:
             section = keyword
             if keyword == "NONBONDED" and len(fields) > 1:
                 continue
@@ -217,7 +238,9 @@ def prepare_cgenff_molecule(
                 values = tuple(float(item) for item in fields[3:7])
                 angle_params.append(((fields[0], fields[1], fields[2]), values))
             elif section == "DIHEDRALS" and len(fields) >= 7:
-                dihedral_params.append((tuple(fields[:4]), (float(fields[4]), float(fields[5]), float(fields[6]))))
+                dihedral_params.append(
+                    (tuple(fields[:4]), (float(fields[4]), float(fields[5]), float(fields[6])))
+                )
             elif section == "IMPROPERS" and len(fields) >= 6:
                 improper_params.append((tuple(fields[:4]), (float(fields[4]), float(fields[5]))))
             elif section == "NONBONDED" and len(fields) >= 4 and fields[0] in masses:
@@ -259,6 +282,7 @@ def prepare_cgenff_molecule(
     type_by_atom = {atom: atom_type for atom, atom_type, _charge in atoms}
     graph_bonds = [(atom_index[left], atom_index[right]) for left, right in bonds]
     from gmxbuilder.io.top import TopologyWriter
+
     angles, dihedrals, pairs = TopologyWriter._generate_graph_terms(graph_bonds)
 
     output = Path(output_dir)
@@ -268,7 +292,11 @@ def prepare_cgenff_molecule(
     bundled = _bundled_atom_types(force_field)
     used_types = {item[1] for item in atoms}
     missing_types = sorted(used_types - bundled)
-    atomtype_lines = ["; Imported CGenFF atom types", "[ atomtypes ]", "; name bond_type at.num mass charge ptype sigma epsilon"]
+    atomtype_lines = [
+        "; Imported CGenFF atom types",
+        "[ atomtypes ]",
+        "; name bond_type at.num mass charge ptype sigma epsilon",
+    ]
     element_by_type: dict[str, str] = {}
     for (_atom, atom_type, _charge), element in zip(atoms, elements):
         element_by_type.setdefault(atom_type, element)
@@ -296,7 +324,10 @@ def prepare_cgenff_molecule(
 
     lines = [
         f"; {name} imported from ParamChem/CGenFF",
-        "[ moleculetype ]", f"{name} 3", "", "[ atoms ]",
+        "[ moleculetype ]",
+        f"{name} 3",
+        "",
+        "[ atoms ]",
         "; nr type resnr residue atom cgnr charge mass",
     ]
     for index, ((atom, atom_type, charge), element) in enumerate(zip(atoms, elements), 1):
@@ -332,7 +363,9 @@ def prepare_cgenff_molecule(
         lines.extend(["", "[ dihedrals ]", "; ai aj ak al funct phase k multiplicity"])
         for indices in dihedrals:
             types = tuple(type_by_atom[atom_names[index - 1]] for index in indices)
-            for force_kcal, multiplicity, phase in _parameter_match(dihedral_params, types, multiple=True):
+            for force_kcal, multiplicity, phase in _parameter_match(
+                dihedral_params, types, multiple=True
+            ):
                 lines.append(
                     f"{indices[0]:6d} {indices[1]:6d} {indices[2]:6d} {indices[3]:6d} "
                     f"9 {phase:.5f} {force_kcal * 4.184:.7f} {int(multiplicity):d}"
@@ -352,7 +385,9 @@ def prepare_cgenff_molecule(
             )
     itp_path.write_text("\n".join(lines) + "\n")
 
-    penalty_values = [float(item) for item in re.findall(r"penalty\s*[=:]?\s*([0-9]+(?:\.[0-9]+)?)", text, re.I)]
+    penalty_values = [
+        float(item) for item in re.findall(r"penalty\s*[=:]?\s*([0-9]+(?:\.[0-9]+)?)", text, re.I)
+    ]
     maximum_penalty = max(penalty_values) if penalty_values else None
     if not np.isfinite(coordinates).all() or not math.isfinite(charge_sum):
         raise ModuleConfigError("CGenFF package contains non-finite numeric data")

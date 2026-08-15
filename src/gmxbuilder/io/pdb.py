@@ -72,17 +72,80 @@ def _infer_element_from_atom_field(atom_field: str) -> str:
 _PROTEIN_RESNAMES = PROTEIN_RESNAMES
 # Common solvent / buffer / ion residue names
 _SOLVENT_IONS = {
-    "HOH", "SOL", "WAT", "TIP", "TIP3", "SPC", "SPCE", "DOD",
-    "NA", "CL", "K", "CA", "ZN", "MG", "CD", "BR", "I", "CS", "LI",
-    "RB", "SR", "BA", "MN", "FE", "CO", "NI", "CU", "AU", "HG", "PT",
-    "F", "NH4", "NO3", "PO4", "SO4", "ACT", "EDO", "GOL", "MPD",
+    "HOH",
+    "SOL",
+    "WAT",
+    "TIP",
+    "TIP3",
+    "SPC",
+    "SPCE",
+    "DOD",
+    "NA",
+    "CL",
+    "K",
+    "CA",
+    "ZN",
+    "MG",
+    "CD",
+    "BR",
+    "I",
+    "CS",
+    "LI",
+    "RB",
+    "SR",
+    "BA",
+    "MN",
+    "FE",
+    "CO",
+    "NI",
+    "CU",
+    "AU",
+    "HG",
+    "PT",
+    "F",
+    "NH4",
+    "NO3",
+    "PO4",
+    "SO4",
+    "ACT",
+    "EDO",
+    "GOL",
+    "MPD",
 }
 # Common lipid / detergent residue names
 _LIPID_DETERGENT = {
-    "POPC", "DPPC", "DMPC", "DOPC", "POPE", "DOPE", "POPG", "POPS",
-    "DLPC", "DSPC", "SOPC", "CHOL", "CHL1", "ERG", "LPPC", "LPPE",
-    "PIP2", "PIP3", "CER", "DAG", "LPS", "LMN", "LMG", "LHG",
-    "OGL", "BNG", "DMU", "LDA", "OCT", "C8E", "C10E", "C12E",
+    "POPC",
+    "DPPC",
+    "DMPC",
+    "DOPC",
+    "POPE",
+    "DOPE",
+    "POPG",
+    "POPS",
+    "DLPC",
+    "DSPC",
+    "SOPC",
+    "CHOL",
+    "CHL1",
+    "ERG",
+    "LPPC",
+    "LPPE",
+    "PIP2",
+    "PIP3",
+    "CER",
+    "DAG",
+    "LPS",
+    "LMN",
+    "LMG",
+    "LHG",
+    "OGL",
+    "BNG",
+    "DMU",
+    "LDA",
+    "OCT",
+    "C8E",
+    "C10E",
+    "C12E",
 }
 
 
@@ -93,11 +156,7 @@ def _known_nucleic_resnames() -> set[str]:
         KNOWN_MODIFIED_NUCLEOTIDES,
     )
 
-    return set(
-        CANONICAL_DNA_RESNAMES
-        | CANONICAL_RNA_RESNAMES
-        | KNOWN_MODIFIED_NUCLEOTIDES
-    )
+    return set(CANONICAL_DNA_RESNAMES | CANONICAL_RNA_RESNAMES | KNOWN_MODIFIED_NUCLEOTIDES)
 
 
 class PDBParser:
@@ -242,7 +301,7 @@ class PDBParser:
 
         # Estimate box from coordinates when CRYST1 is absent OR physically
         # unreasonable (e.g. placeholder 1.0 Å cell in some CIF→PDB conversions).
-        dims = np.sqrt((box ** 2).sum(axis=1))
+        dims = np.sqrt((box**2).sum(axis=1))
         if np.allclose(box, np.eye(3) * 10.0) or np.any(dims < 1.0) or np.any(dims > 1000.0):
             cmin = coords.min(axis=0)
             cmax = coords.max(axis=0)
@@ -380,18 +439,120 @@ class PDBParser:
 
 # Set of standard element symbols for validation
 _ELEMENTS = {
-    "H", "HE", "LI", "BE", "B", "C", "N", "O", "F", "NE",
-    "NA", "MG", "AL", "SI", "P", "S", "CL", "AR", "K", "CA",
-    "SC", "TI", "V", "CR", "MN", "FE", "CO", "NI", "CU", "ZN",
-    "BR", "KR", "RB", "SR", "Y", "ZR", "NB", "MO", "TC", "RU",
-    "RH", "PD", "AG", "CD", "IN", "SN", "SB", "TE", "I", "XE",
-    "CS", "BA", "LA", "CE", "PR", "ND", "PM", "SM", "EU", "GD",
-    "TB", "DY", "HO", "ER", "TM", "YB", "LU", "HF", "TA", "W",
-    "RE", "OS", "IR", "PT", "AU", "HG", "TL", "PB", "BI", "PO",
-    "AT", "RN", "FR", "RA", "AC", "TH", "PA", "U", "NP", "PU",
-    "AM", "CM", "BK", "CF", "ES", "FM", "MD", "NO", "LR", "RF",
-    "DB", "SG", "BH", "HS", "MT", "DS", "RG", "CN", "NH", "FL",
-    "MC", "LV", "TS", "OG",
+    "H",
+    "HE",
+    "LI",
+    "BE",
+    "B",
+    "C",
+    "N",
+    "O",
+    "F",
+    "NE",
+    "NA",
+    "MG",
+    "AL",
+    "SI",
+    "P",
+    "S",
+    "CL",
+    "AR",
+    "K",
+    "CA",
+    "SC",
+    "TI",
+    "V",
+    "CR",
+    "MN",
+    "FE",
+    "CO",
+    "NI",
+    "CU",
+    "ZN",
+    "BR",
+    "KR",
+    "RB",
+    "SR",
+    "Y",
+    "ZR",
+    "NB",
+    "MO",
+    "TC",
+    "RU",
+    "RH",
+    "PD",
+    "AG",
+    "CD",
+    "IN",
+    "SN",
+    "SB",
+    "TE",
+    "I",
+    "XE",
+    "CS",
+    "BA",
+    "LA",
+    "CE",
+    "PR",
+    "ND",
+    "PM",
+    "SM",
+    "EU",
+    "GD",
+    "TB",
+    "DY",
+    "HO",
+    "ER",
+    "TM",
+    "YB",
+    "LU",
+    "HF",
+    "TA",
+    "W",
+    "RE",
+    "OS",
+    "IR",
+    "PT",
+    "AU",
+    "HG",
+    "TL",
+    "PB",
+    "BI",
+    "PO",
+    "AT",
+    "RN",
+    "FR",
+    "RA",
+    "AC",
+    "TH",
+    "PA",
+    "U",
+    "NP",
+    "PU",
+    "AM",
+    "CM",
+    "BK",
+    "CF",
+    "ES",
+    "FM",
+    "MD",
+    "NO",
+    "LR",
+    "RF",
+    "DB",
+    "SG",
+    "BH",
+    "HS",
+    "MT",
+    "DS",
+    "RG",
+    "CN",
+    "NH",
+    "FL",
+    "MC",
+    "LV",
+    "TS",
+    "OG",
 }
 
 
@@ -422,11 +583,10 @@ class PDBWriter:
         path = Path(path)
         coords = structure.coordinates
         box = structure.box_vectors
-        dims = np.sqrt((box ** 2).sum(axis=1))
+        dims = np.sqrt((box**2).sum(axis=1))
         if not wrap_ids_for_viewer:
             invalid_resids = [
-                int(resid) for resid in structure.resids
-                if int(resid) < -999 or int(resid) > 9999
+                int(resid) for resid in structure.resids if int(resid) < -999 or int(resid) > 9999
             ]
             if structure.num_atoms > 99999 or invalid_resids:
                 raise ValueError(
@@ -468,7 +628,11 @@ class PDBWriter:
                 occupancy = structure.occupancies[i] if i < len(structure.occupancies) else 1.0
                 tempfactor = structure.tempfactors[i] if i < len(structure.tempfactors) else 0.0
 
-                record = "HETATM" if resname in ("HOH", "SOL", "NA", "CL", "K", "CA", "ZN", "MG") else "ATOM"
+                record = (
+                    "HETATM"
+                    if resname in ("HOH", "SOL", "NA", "CL", "K", "CA", "ZN", "MG")
+                    else "ATOM"
+                )
 
                 fh.write(
                     f"{record:<6}{serial:5d} {format_pdb_atom_name(atom_name, element)}"
@@ -484,6 +648,7 @@ class PDBWriter:
 # =============================================================================
 # PDB validation & small-molecule detection
 # =============================================================================
+
 
 class PDBValidator:
     """Validate a PDB file and report issues."""
@@ -515,9 +680,7 @@ class PDBValidator:
         if not lines:
             return {"valid": False, "errors": ["File is empty"], "warnings": []}
 
-        atom_hetatm_lines = [
-            line for line in lines if line[:6].strip() in ("ATOM", "HETATM")
-        ]
+        atom_hetatm_lines = [line for line in lines if line[:6].strip() in ("ATOM", "HETATM")]
         if not atom_hetatm_lines:
             errors.append("No ATOM or HETATM records found — file contains no atomic coordinates")
 
@@ -577,7 +740,9 @@ class PDBValidator:
                     warnings.append(f"Atom {serial} has high temperature factor {tempfactor:.1f}")
 
             except (ValueError, IndexError):
-                errors.append(f"Malformed coordinate line — cannot parse atom record around serial {serial if 'serial' in dir() else '?'}")
+                errors.append(
+                    f"Malformed coordinate line — cannot parse atom record around serial {serial if 'serial' in dir() else '?'}"
+                )
                 break
 
         if not coord_x:
@@ -591,17 +756,24 @@ class PDBValidator:
         max_range = max(x_range, y_range, z_range)
 
         if max_range > 5000.0:
-            warnings.append(f"Structure spans {max_range:.0f} Å — unusually large, check coordinate units")
+            warnings.append(
+                f"Structure spans {max_range:.0f} Å — unusually large, check coordinate units"
+            )
         if max_range < 1.0:
-            warnings.append(f"Structure spans only {max_range:.1f} Å — very small, check coordinate format")
+            warnings.append(
+                f"Structure spans only {max_range:.1f} Å — very small, check coordinate format"
+            )
 
         if not has_cryst1:
             warnings.append("No CRYST1 record — box size will be estimated from coordinates")
 
         # Unknown residue names
         unknown_res = (
-            resnames_seen - _PROTEIN_RESNAMES - _SOLVENT_IONS
-            - _LIPID_DETERGENT - _known_nucleic_resnames()
+            resnames_seen
+            - _PROTEIN_RESNAMES
+            - _SOLVENT_IONS
+            - _LIPID_DETERGENT
+            - _known_nucleic_resnames()
         )
         if unknown_res:
             warnings.append(f"Non-standard residues detected: {', '.join(sorted(unknown_res))}")
@@ -624,11 +796,7 @@ class PDBValidator:
         except (ParseError, OSError, ValueError):
             polymer_residues = {}
         content = path.read_text()
-        lines = [
-            line
-            for line in content.split("\n")
-            if line[:6].strip() in ("ATOM", "HETATM")
-        ]
+        lines = [line for line in content.split("\n") if line[:6].strip() in ("ATOM", "HETATM")]
 
         # Group by (resname, chain, resid)
         groups: dict[tuple[str, str, int], list[tuple[str, str]]] = {}
@@ -670,19 +838,28 @@ class PDBValidator:
                 continue
             # Count element frequencies
             from collections import Counter
+
             elements = [element for element, _atom_name in atoms]
             elem_counts = Counter(e for e in elements if e != "?")
-            small_mols.append({
-                "resname": resname,
-                "chain": chain or " ",
-                "resid": resid,
-                "atom_count": len(elements),
-                "formula": "".join(f"{el}{c if c > 1 else ''}" for el, c in sorted(elem_counts.items())) if elem_counts else "?",
-                "category": (
-                    "lipid_or_detergent" if resname in _LIPID_DETERGENT
-                    else "ion_or_solvent_additive" if resname in _SOLVENT_IONS
-                    else "small_molecule"
-                ),
-            })
+            small_mols.append(
+                {
+                    "resname": resname,
+                    "chain": chain or " ",
+                    "resid": resid,
+                    "atom_count": len(elements),
+                    "formula": "".join(
+                        f"{el}{c if c > 1 else ''}" for el, c in sorted(elem_counts.items())
+                    )
+                    if elem_counts
+                    else "?",
+                    "category": (
+                        "lipid_or_detergent"
+                        if resname in _LIPID_DETERGENT
+                        else "ion_or_solvent_additive"
+                        if resname in _SOLVENT_IONS
+                        else "small_molecule"
+                    ),
+                }
+            )
 
         return small_mols

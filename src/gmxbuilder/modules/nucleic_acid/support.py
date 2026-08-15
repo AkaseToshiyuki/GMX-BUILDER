@@ -13,28 +13,81 @@ from collections.abc import Iterable
 import numpy as np
 
 
-CANONICAL_DNA_RESNAMES = frozenset({
-    "DA", "DC", "DG", "DT",
-    "DA5", "DC5", "DG5", "DT5",
-    "DA3", "DC3", "DG3", "DT3",
-    "DAN", "DCN", "DGN", "DTN",
-})
-CANONICAL_RNA_RESNAMES = frozenset({
-    "A", "C", "G", "U", "RA", "RC", "RG", "RU",
-    "RA5", "RC5", "RG5", "RU5",
-    "RA3", "RC3", "RG3", "RU3",
-    "RAN", "RCN", "RGN", "RUN",
-})
+CANONICAL_DNA_RESNAMES = frozenset(
+    {
+        "DA",
+        "DC",
+        "DG",
+        "DT",
+        "DA5",
+        "DC5",
+        "DG5",
+        "DT5",
+        "DA3",
+        "DC3",
+        "DG3",
+        "DT3",
+        "DAN",
+        "DCN",
+        "DGN",
+        "DTN",
+    }
+)
+CANONICAL_RNA_RESNAMES = frozenset(
+    {
+        "A",
+        "C",
+        "G",
+        "U",
+        "RA",
+        "RC",
+        "RG",
+        "RU",
+        "RA5",
+        "RC5",
+        "RG5",
+        "RU5",
+        "RA3",
+        "RC3",
+        "RG3",
+        "RU3",
+        "RAN",
+        "RCN",
+        "RGN",
+        "RUN",
+    }
+)
 
 # Frequent PDB Chemical Component Dictionary identifiers.  They are detected
 # as polymer residues but intentionally not mapped to a canonical base: doing
 # so would discard real chemistry (methylation, pseudouridine, oxidation,
 # caps, etc.).
-KNOWN_MODIFIED_NUCLEOTIDES = frozenset({
-    "1MA", "1MG", "2MA", "2MG", "5MC", "5MU", "6MA", "7MG",
-    "H2U", "M2G", "M5C", "MIA", "OMG", "OMC", "PSU", "YG",
-    "I", "DI", "DU", "BRU", "FHU", "UR3",
-})
+KNOWN_MODIFIED_NUCLEOTIDES = frozenset(
+    {
+        "1MA",
+        "1MG",
+        "2MA",
+        "2MG",
+        "5MC",
+        "5MU",
+        "6MA",
+        "7MG",
+        "H2U",
+        "M2G",
+        "M5C",
+        "MIA",
+        "OMG",
+        "OMC",
+        "PSU",
+        "YG",
+        "I",
+        "DI",
+        "DU",
+        "BRU",
+        "FHU",
+        "UR3",
+    }
+)
 
 
 def classify_nucleic_residue(resname: object) -> str | None:
@@ -87,9 +140,7 @@ def nucleic_polymer_residues(structure) -> dict[tuple[str, int], str]:
         if classification in {"DNA", "RNA"}:
             result[key] = classification
             candidates.add(key)
-        elif classification == "modified" or is_nucleic_like_residue(
-            resnames[key], atoms[key]
-        ):
+        elif classification == "modified" or is_nucleic_like_residue(resnames[key], atoms[key]):
             candidates.add(key)
 
     for left, right in zip(residue_order, residue_order[1:]):
@@ -99,9 +150,9 @@ def nucleic_polymer_residues(structure) -> dict[tuple[str, int], str]:
         right_p = atoms[right].get("P")
         if left_o3 is None or right_p is None:
             continue
-        distance = float(np.linalg.norm(
-            structure.coordinates[left_o3] - structure.coordinates[right_p]
-        ))
+        distance = float(
+            np.linalg.norm(structure.coordinates[left_o3] - structure.coordinates[right_p])
+        )
         if distance <= 0.25:
             result.setdefault(left, classify_nucleic_residue(resnames[left]) or "modified")
             result.setdefault(right, classify_nucleic_residue(resnames[right]) or "modified")
@@ -122,14 +173,10 @@ def validate_nucleic_backbone(structure, component) -> list[str]:
         lookup[key][name] = index
 
     issues: list[str] = []
-    for (left_key, left_atoms), (right_key, right_atoms) in zip(
-        residues, residues[1:]
-    ):
+    for (left_key, left_atoms), (right_key, right_atoms) in zip(residues, residues[1:]):
         left_o3 = left_atoms.get("O3'")
         right_p = right_atoms.get("P")
-        label = (
-            f"chain {left_key[0] or '?'} residues {left_key[1]}-{right_key[1]}"
-        )
+        label = f"chain {left_key[0] or '?'} residues {left_key[1]}-{right_key[1]}"
         if left_o3 is None or right_p is None:
             missing = []
             if left_o3 is None:
@@ -138,23 +185,20 @@ def validate_nucleic_backbone(structure, component) -> list[str]:
                 missing.append(f"P at {right_key[1]}")
             issues.append(f"{label} lacks {' and '.join(missing)}")
             continue
-        distance = float(np.linalg.norm(
-            structure.coordinates[left_o3] - structure.coordinates[right_p]
-        ))
+        distance = float(
+            np.linalg.norm(structure.coordinates[left_o3] - structure.coordinates[right_p])
+        )
         if not 0.12 <= distance <= 0.25:
-            issues.append(
-                f"{label} has O3'-P distance {distance:.3f} nm "
-                "(expected 0.12-0.25 nm)"
-            )
+            issues.append(f"{label} has O3'-P distance {distance:.3f} nm (expected 0.12-0.25 nm)")
     if len(residues) > 1:
         first_key, first_atoms = residues[0]
         last_key, last_atoms = residues[-1]
         first_p = first_atoms.get("P")
         last_o3 = last_atoms.get("O3'")
         if first_p is not None and last_o3 is not None:
-            closing_distance = float(np.linalg.norm(
-                structure.coordinates[last_o3] - structure.coordinates[first_p]
-            ))
+            closing_distance = float(
+                np.linalg.norm(structure.coordinates[last_o3] - structure.coordinates[first_p])
+            )
             if closing_distance <= 0.20:
                 issues.append(
                     f"chain {first_key[0] or '?'} has a {closing_distance:.3f} nm "

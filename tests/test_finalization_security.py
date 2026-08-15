@@ -146,7 +146,8 @@ def test_wet_finalization_contract_includes_launcher_and_mdp_without_path_leaks(
 
 
 def test_task_download_prefers_current_export_over_larger_legacy_zip(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     manager = TaskManager(tmp_path / "tasks")
     task = manager.create_task("example.pdb")
@@ -191,13 +192,12 @@ def test_public_build_log_redacts_server_paths():
 def test_path_redaction_uses_configured_task_root(monkeypatch):
     from types import SimpleNamespace
 
-    monkeypatch.setattr(
-        server, "task_manager", SimpleNamespace(root=Path("/workspace/gmx/tasks"))
-    )
+    monkeypatch.setattr(server, "task_manager", SimpleNamespace(root=Path("/workspace/gmx/tasks")))
 
-    assert server._redact_server_paths(
-        "Failed at /workspace/gmx/tasks/abc/steps/ions/system.npz"
-    ) == "Failed at <server-path>"
+    assert (
+        server._redact_server_paths("Failed at /workspace/gmx/tasks/abc/steps/ions/system.npz")
+        == "Failed at <server-path>"
+    )
 
 
 def test_finalization_requires_the_confirmed_checkpoint(tmp_path):

@@ -13,7 +13,7 @@
   // Physical / simulation constants
   // ======================================================================
   var PHYS = {
-    /** Default lipid bilayer hydrophobic half-thickness (nm) — POPC */
+    /** Default full headgroup-to-headgroup distance DHH (nm) — POPC */
     DEFAULT_DHH: 3.8,
 
     /** Water molecule effective volume in a box (nm^3) — TIP3P at 300 K */

@@ -22,11 +22,11 @@ _MODEL_PKA: dict[str, dict[str, float]] = {
     # pKa is the pH at which half the residues are protonated.
     # For acidic residues: pKa of sidechain COOH → COO⁻ + H⁺
     # For basic residues: pKa of sidechain NH₃⁺ → NH₂ + H⁺
-    "HIS": {"neutral": 6.0},     # imidazole H⁺ dissociation
-    "ASP": {"neutral": 3.9},     # β-COOH → β-COO⁻
-    "GLU": {"neutral": 4.3},     # γ-COOH → γ-COO⁻
-    "CYS": {"thiolate": 8.3},    # -SH → -S⁻
-    "LYS": {"neutral": 10.5},    # ε-NH₃⁺ → ε-NH₂
+    "HIS": {"neutral": 6.0},  # imidazole H⁺ dissociation
+    "ASP": {"neutral": 3.9},  # β-COOH → β-COO⁻
+    "GLU": {"neutral": 4.3},  # γ-COOH → γ-COO⁻
+    "CYS": {"thiolate": 8.3},  # -SH → -S⁻
+    "LYS": {"neutral": 10.5},  # ε-NH₃⁺ → ε-NH₂
     "TYR": {"phenolate": 10.1},  # -OH → -O⁻
     # N-terminal NH₃⁺: pKa ~8.0 (model compound)
     # C-terminal COOH: pKa ~3.5 (model compound)
@@ -39,13 +39,15 @@ _MODEL_PKA: dict[str, dict[str, float]] = {
 # Protonation states and residue names (CHARMM / AMBER conventions)
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass
 class ProtonationState:
     """A possible protonation state of a residue at a given pH."""
 
-    residue_name: str   # new residue name, e.g. "HSD"
-    charge: int         # net sidechain charge
-    description: str    # human-readable
+    residue_name: str  # new residue name, e.g. "HSD"
+    charge: int  # net sidechain charge
+    description: str  # human-readable
+
 
 _TITRATABLE_STATES: dict[str, list[ProtonationState]] = {
     "HIS": [
@@ -79,6 +81,7 @@ _TITRATABLE_STATES: dict[str, list[ProtonationState]] = {
 # ---------------------------------------------------------------------------
 # Protonation assignment
 # ---------------------------------------------------------------------------
+
 
 def get_titratable_residues() -> dict[str, list[ProtonationState]]:
     """Return a copy of the titratable residues dictionary."""
@@ -173,8 +176,7 @@ def assign_protonation(
         "is_titratable": True,
         "ambiguous_at_pka": abs(float(pH) - pka_val) < 1e-9,
         "alternatives": [
-            {"name": s.residue_name, "charge": s.charge, "label": s.description}
-            for s in states
+            {"name": s.residue_name, "charge": s.charge, "label": s.description} for s in states
         ],
     }
 
@@ -237,6 +239,7 @@ def get_charge_adjustment(
 # =============================================================================
 # PROPKA integration — environment-sensitive pKa prediction
 # =============================================================================
+
 
 def predict_pka_from_pdb(pdb_path: str | Path) -> list[dict]:
     """Run PROPKA on a PDB file and return per-residue pKa predictions.
@@ -333,7 +336,7 @@ def _parse_propka_output(pka_file: Path) -> list[dict]:
                 continue
 
             # Detect the summary table header
-            if 'SUMMARY' in stripped.upper() and 'PREDICTION' in stripped.upper():
+            if "SUMMARY" in stripped.upper() and "PREDICTION" in stripped.upper():
                 in_summary = True
                 continue
 
@@ -341,7 +344,7 @@ def _parse_propka_output(pka_file: Path) -> list[dict]:
                 continue
 
             # Skip separator lines and non-data
-            if stripped.startswith('-') or stripped.startswith('='):
+            if stripped.startswith("-") or stripped.startswith("="):
                 continue
 
             parts = stripped.split()
@@ -368,14 +371,16 @@ def _parse_propka_output(pka_file: Path) -> list[dict]:
                 else:
                     continue
 
-                results.append({
-                    "residue_name": resname,
-                    "chain": chain,
-                    "resid": resid,
-                    "model_pKa": round(model_pka, 2),
-                    "predicted_pKa": round(predicted_pka, 2),
-                    "shift": round(predicted_pka - model_pka, 2),
-                })
+                results.append(
+                    {
+                        "residue_name": resname,
+                        "chain": chain,
+                        "resid": resid,
+                        "model_pKa": round(model_pka, 2),
+                        "predicted_pKa": round(predicted_pka, 2),
+                        "shift": round(predicted_pka - model_pka, 2),
+                    }
+                )
             except (ValueError, IndexError):
                 continue
 
@@ -407,8 +412,7 @@ def assign_protonation_with_propka(
     # Build a lookup: (resname, chain, resid) → predicted pKa
     pka_lookup: dict[tuple[str, str, int], dict] = {}
     for p in pka_predictions:
-        key = (p["residue_name"].upper(), p.get("chain", "").strip(),
-               p.get("resid", 0))
+        key = (p["residue_name"].upper(), p.get("chain", "").strip(), p.get("resid", 0))
         pka_lookup[key] = p
 
     results = []

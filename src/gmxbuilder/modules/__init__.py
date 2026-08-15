@@ -54,8 +54,10 @@ def discover_modules() -> dict[str, Type[BaseModule]]:
                 pass  # Skip broken/unloadable plugins
             except Exception:
                 import logging
+
                 logging.getLogger("gmxbuilder.modules").warning(
-                    "Unexpected error loading plugin %s", ep, exc_info=True)
+                    "Unexpected error loading plugin %s", ep, exc_info=True
+                )
     except Exception:
         pass  # entry_points() can fail in some environments
 

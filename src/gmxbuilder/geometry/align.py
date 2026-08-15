@@ -7,9 +7,7 @@ import numpy as np
 from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
 
 
-def compute_principal_axes(
-    coords: np.ndarray, masses: np.ndarray | None = None
-) -> np.ndarray:
+def compute_principal_axes(coords: np.ndarray, masses: np.ndarray | None = None) -> np.ndarray:
     """Compute principal axes of a point set via weighted PCA.
 
     Returns the three principal axes as rows of a (3,3) matrix, sorted by
@@ -27,22 +25,13 @@ def compute_principal_axes(
         axes[0] = longest axis, axes[1] = medium, axes[2] = shortest.
     """
     coords = np.asarray(coords, dtype=np.float64)
-    if (
-        coords.ndim != 2
-        or coords.shape[1] != 3
-        or len(coords) < 2
-        or not np.isfinite(coords).all()
-    ):
+    if coords.ndim != 2 or coords.shape[1] != 3 or len(coords) < 2 or not np.isfinite(coords).all():
         raise ValueError("coordinates must contain at least two finite 3D points")
     if masses is None:
         center = coords.mean(axis=0)
     else:
         masses = np.asarray(masses, dtype=np.float64)
-        if (
-            masses.shape != (len(coords),)
-            or not np.isfinite(masses).all()
-            or np.any(masses <= 0)
-        ):
+        if masses.shape != (len(coords),) or not np.isfinite(masses).all() or np.any(masses <= 0):
             raise ValueError("masses must be positive finite values for every point")
         center = np.average(coords, axis=0, weights=masses)
 
@@ -66,9 +55,7 @@ def compute_principal_axes(
     # across CPU/library builds without pretending the degenerate PCA axis is
     # physically unique.
     ordered_values = eigenvalues[order]
-    if abs(ordered_values[0] - ordered_values[1]) <= max(
-        1e-12, 1e-8 * abs(ordered_values[0])
-    ):
+    if abs(ordered_values[0] - ordered_values[1]) <= max(1e-12, 1e-8 * abs(ordered_values[0])):
         first = int(np.lexsort((coords[:, 2], coords[:, 1], coords[:, 0]))[0])
         second = int(np.argmax(np.sum((coords - coords[first]) ** 2, axis=1)))
         third = int(np.argmax(np.sum((coords - coords[second]) ** 2, axis=1)))

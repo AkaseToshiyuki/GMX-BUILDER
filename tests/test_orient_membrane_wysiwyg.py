@@ -38,9 +38,7 @@ def _synthetic_helical_bundle(tilt_degrees: float = 24.0) -> Structure:
         for residue_index in range(24):
             phase = np.radians(100.0 * residue_index)
             axial = (residue_index - 11.5) * 0.15 * axis
-            radial = 0.23 * (
-                np.cos(phase) * radial_u + np.sin(phase) * radial_v
-            )
+            radial = 0.23 * (np.cos(phase) * radial_u + np.sin(phase) * radial_v)
             offset = offset_u * radial_u + offset_v * radial_v
             coordinates.append(axial + radial + offset)
             atom_names.append("CA")
@@ -61,12 +59,7 @@ def _synthetic_helical_bundle(tilt_degrees: float = 24.0) -> Structure:
 def test_orientation_viewer_uses_backend_coordinates_and_fixed_membrane():
     """Auto and manual previews must display backend Step 4 coordinates."""
     app_js = (
-        Path(__file__).parents[1]
-        / "src"
-        / "gmxbuilder"
-        / "web"
-        / "static"
-        / "app.js"
+        Path(__file__).parents[1] / "src" / "gmxbuilder" / "web" / "static" / "app.js"
     ).read_text(encoding="utf-8")
     redraw = app_js.split("function _redrawOrientViewer()", 1)[1].split(
         "window._redrawOrientViewer", 1
@@ -79,12 +72,7 @@ def test_orientation_viewer_uses_backend_coordinates_and_fixed_membrane():
 
 def test_orientation_resume_uses_incremental_step_config():
     app_js = (
-        Path(__file__).parents[1]
-        / "src"
-        / "gmxbuilder"
-        / "web"
-        / "static"
-        / "app.js"
+        Path(__file__).parents[1] / "src" / "gmxbuilder" / "web" / "static" / "app.js"
     ).read_text(encoding="utf-8")
     restore = app_js.split("function _restoreOrientationConfig", 1)[1].split(
         "function invalidateOrientationCheck", 1
@@ -97,14 +85,16 @@ def test_orientation_resume_uses_incremental_step_config():
 
 def test_membrane_builder_preserves_checked_orientation(monkeypatch):
     structure = Structure(
-        coordinates=np.array([
-            [-0.3, 0.0, -1.2],
-            [0.2, 0.1, -0.7],
-            [-0.1, -0.2, -0.2],
-            [0.3, 0.0, 0.3],
-            [-0.2, 0.2, 0.8],
-            [0.1, -0.1, 1.3],
-        ]),
+        coordinates=np.array(
+            [
+                [-0.3, 0.0, -1.2],
+                [0.2, 0.1, -0.7],
+                [-0.1, -0.2, -0.2],
+                [0.3, 0.0, 0.3],
+                [-0.2, 0.2, 0.8],
+                [0.1, -0.1, 1.3],
+            ]
+        ),
         box_vectors=np.eye(3) * 8.0,
         atom_names=["CA"] * 6,
         resnames=["LEU", "ILE", "VAL", "PHE", "LEU", "ILE"],
@@ -129,16 +119,20 @@ def test_membrane_builder_preserves_checked_orientation(monkeypatch):
             0.0,
         ),
     )
-    oriented = OrientModule().run(
-        system,
-        {
-            "method": "manual",
-            "z_offset": 0.4,
-            "tilt": 20.0,
-            "phi": 35.0,
-            "half_thickness": 1.7,
-        },
-    ).system
+    oriented = (
+        OrientModule()
+        .run(
+            system,
+            {
+                "method": "manual",
+                "z_offset": 0.4,
+                "tilt": 20.0,
+                "phi": 35.0,
+                "half_thickness": 1.7,
+            },
+        )
+        .system
+    )
     assert oriented.metadata["_orientation_half_thickness_nm"] == 1.7
     checked_coordinates = oriented.structure.coordinates.copy()
     checked_params = dict(oriented.metadata["_orient_params"])
@@ -189,13 +183,15 @@ def test_orientation_quality_warns_about_globular_overembedding():
 
 
 def test_ppm_scan_returns_the_translation_that_was_scored():
-    coords = np.array([
-        [0.0, 0.0, -2.0],
-        [0.0, 0.0, -1.5],
-        [0.0, 0.0, -1.0],
-        [0.0, 0.0, 1.5],
-        [0.0, 0.0, 2.0],
-    ])
+    coords = np.array(
+        [
+            [0.0, 0.0, -2.0],
+            [0.0, 0.0, -1.5],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, 1.5],
+            [0.0, 0.0, 2.0],
+        ]
+    )
     energies = np.array([-1.0, -1.0, -1.0, 1.0, 1.0])
 
     z_offset, _tilt_axis, _tilt_angle, score = _scan_ppm_z_and_tilt(
@@ -209,10 +205,7 @@ def test_ppm_scan_returns_the_translation_that_was_scored():
 
     z_span = max(abs(coords[:, 2].min()), abs(coords[:, 2].max()), 2.1)
     scan_values = np.linspace(-z_span, z_span, 51)
-    scan_scores = [
-        _membrane_transfer_score(coords, energies, z, 1.4)
-        for z in scan_values
-    ]
+    scan_scores = [_membrane_transfer_score(coords, energies, z, 1.4) for z in scan_values]
     assert z_offset > 0.0
     assert np.isclose(z_offset, scan_values[int(np.argmin(scan_scores))])
     assert np.isclose(score, min(scan_scores))
@@ -233,10 +226,7 @@ def test_ppm_uses_transmembrane_helix_consensus_for_bundle_axis():
 
 def test_orientation_quality_detects_tilted_bundle_and_buried_non_tm_region():
     structure = _synthetic_helical_bundle(tilt_degrees=28.0)
-    extra_coordinates = np.array([
-        [-0.5 + 0.2 * index, 2.2, 0.0]
-        for index in range(6)
-    ])
+    extra_coordinates = np.array([[-0.5 + 0.2 * index, 2.2, 0.0] for index in range(6)])
     structure.coordinates = np.vstack([structure.coordinates, extra_coordinates])
     structure.atom_names.extend(["CA"] * 6)
     structure.resnames.extend(["GLU"] * 6)

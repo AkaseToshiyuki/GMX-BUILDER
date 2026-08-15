@@ -17,13 +17,15 @@ def _prepare_cli_build_config(cfg, output: str | None = None):
     """Bind top-level CLI options to the modules that consume them."""
     output_dir = Path(output) if output else cfg.output_dir
 
-    modules = {
-        name: dict(values)
-        for name, values in cfg.modules.items()
-    }
+    modules = {name: dict(values) for name, values in cfg.modules.items()}
     for name in {
-        "input", "forcefield", "structure", "orient",
-        "membrane", "solvation", "ions",
+        "input",
+        "forcefield",
+        "structure",
+        "orient",
+        "membrane",
+        "solvation",
+        "ions",
     }:
         if name in modules:
             modules[name].setdefault("seed", cfg.seed)
@@ -49,13 +51,15 @@ def main():
 
 @main.command()
 @click.option(
-    "--config", "-c",
+    "--config",
+    "-c",
     required=True,
     type=click.Path(exists=True),
     help="Path to YAML configuration file",
 )
 @click.option(
-    "--output", "-o",
+    "--output",
+    "-o",
     default=None,
     type=click.Path(),
     help="Override output directory",
@@ -134,23 +138,89 @@ def _parse_cg_lipids(values: tuple[str, ...], label: str) -> list[dict]:
 
 def _martini_common_options(command):
     options = [
-        click.option("--protein-model", type=click.Choice(["folded", "tm_helix", "disordered"]), default="folded", show_default=True),
-        click.option("--secondary-structure", default="auto", show_default=True, help="auto or a manual DSSP string"),
+        click.option(
+            "--protein-model",
+            type=click.Choice(["folded", "tm_helix", "disordered"]),
+            default="folded",
+            show_default=True,
+        ),
+        click.option(
+            "--secondary-structure",
+            default="auto",
+            show_default=True,
+            help="auto or a manual DSSP string",
+        ),
         click.option("--elastic/--no-elastic", default=True, show_default=True),
-        click.option("--rotate-x", default=0.0, type=click.FloatRange(-180, 180), show_default=True),
-        click.option("--rotate-y", default=0.0, type=click.FloatRange(-180, 180), show_default=True),
-        click.option("--rotate-z", default=0.0, type=click.FloatRange(-180, 180), show_default=True),
-        click.option("--z-offset", default=0.0, type=click.FloatRange(-8, 8), show_default=True),
         click.option("--padding", default=2.0, type=click.FloatRange(1.0, 8.0), show_default=True),
         click.option("--salt", default=0.15, type=click.FloatRange(0.0, 1.0), show_default=True),
-        click.option("--production-ns", default=1000.0, type=click.FloatRange(1, 100000), show_default=True),
+        click.option(
+            "--production-ns", default=1000.0, type=click.FloatRange(1, 100000), show_default=True
+        ),
         click.option("--threads", default=8, type=click.IntRange(1, 1024), show_default=True),
         click.option("--mpi-ranks", default=1, type=click.IntRange(1, 1024), show_default=True),
-        click.option("--gpu-ids", default="0", show_default=True, help="Comma-separated logical GPU IDs; empty disables GPU"),
-        click.option("--seed", default=42, type=click.IntRange(0, 2_147_483_647), show_default=True),
+        click.option(
+            "--gpu-ids",
+            default="0",
+            show_default=True,
+            help="Comma-separated logical GPU IDs; empty disables GPU",
+        ),
+        click.option(
+            "--seed", default=42, type=click.IntRange(0, 2_147_483_647), show_default=True
+        ),
         click.option("--system-name", default="martini3_system", show_default=True),
         click.option("--output", "output_dir", required=True, type=click.Path(file_okay=False)),
-        click.option("--yes", "accept", is_flag=True, help="Accept the checked exact system non-interactively"),
+        click.option(
+            "--yes",
+            "accept",
+            is_flag=True,
+            help="Accept the checked exact system non-interactively",
+        ),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
+def _martini_bilayer_orientation_options(command):
+    """Expose the same insertion-depth/tilt model as the Bilayer Web UI."""
+    options = [
+        click.option(
+            "--orientation",
+            "orientation_method",
+            type=click.Choice(["ppm", "manual"]),
+            default="ppm",
+            show_default=True,
+            help="Automatic PPM-like placement or manual adjustment of that base pose",
+        ),
+        click.option("--z-offset", default=0.0, type=click.FloatRange(-10, 10), show_default=True),
+        click.option("--tilt", default=0.0, type=click.FloatRange(0, 45), show_default=True),
+        click.option(
+            "--tilt-direction",
+            "tilt_direction",
+            default=0.0,
+            type=click.FloatRange(0, 360),
+            show_default=True,
+            help="In-plane direction of the manual tilt in degrees",
+        ),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
+def _martini_solvent_pose_options(command):
+    """Keep independent Cartesian placement controls for solution systems."""
+    options = [
+        click.option(
+            "--rotate-x", default=0.0, type=click.FloatRange(-180, 180), show_default=True
+        ),
+        click.option(
+            "--rotate-y", default=0.0, type=click.FloatRange(-180, 180), show_default=True
+        ),
+        click.option(
+            "--rotate-z", default=0.0, type=click.FloatRange(-180, 180), show_default=True
+        ),
+        click.option("--z-offset", default=0.0, type=click.FloatRange(-8, 8), show_default=True),
     ]
     for option in reversed(options):
         command = option(command)
@@ -158,11 +228,23 @@ def _martini_common_options(command):
 
 
 @main.command("martini3-bilayer")
-@click.option("--pdb", type=click.Path(exists=True, dir_okay=False), help="Optional standard-protein PDB")
-@click.option("--upper", "upper_lipids", multiple=True, default=("POPC:1",), show_default=True, help="Upper leaflet NAME:RATIO; repeat for mixtures")
-@click.option("--lower", "lower_lipids", multiple=True, help="Lower leaflet NAME:RATIO; defaults to upper")
+@click.option(
+    "--pdb", type=click.Path(exists=True, dir_okay=False), help="Optional standard-protein PDB"
+)
+@click.option(
+    "--upper",
+    "upper_lipids",
+    multiple=True,
+    default=("POPC:1",),
+    show_default=True,
+    help="Upper leaflet NAME:RATIO; repeat for mixtures",
+)
+@click.option(
+    "--lower", "lower_lipids", multiple=True, help="Lower leaflet NAME:RATIO; defaults to upper"
+)
 @click.option("--lipids-per-leaflet", default=150, type=click.IntRange(64, 5000), show_default=True)
 @click.option("--dry", is_flag=True, help="Bilayer geometry/topology only; no simulation MDPs")
+@_martini_bilayer_orientation_options
 @_martini_common_options
 def martini3_bilayer(
     pdb: str | None,
@@ -170,33 +252,97 @@ def martini3_bilayer(
     lower_lipids: tuple[str, ...],
     lipids_per_leaflet: int,
     dry: bool,
+    orientation_method: str,
+    z_offset: float,
+    tilt: float,
+    tilt_direction: float,
     **options,
 ):
     """Build a Martini 3 bilayer or protein/bilayer system."""
     upper = _parse_cg_lipids(upper_lipids, "upper")
     lower = _parse_cg_lipids(lower_lipids or upper_lipids, "lower")
     _run_martini3(
-        mode="bilayer", pdb=pdb, upper=upper, lower=lower,
-        lipids_per_leaflet=lipids_per_leaflet, dry=dry, **options,
+        mode="bilayer",
+        pdb=pdb,
+        upper=upper,
+        lower=lower,
+        lipids_per_leaflet=lipids_per_leaflet,
+        dry=dry,
+        orientation_method=orientation_method,
+        z_offset=z_offset,
+        tilt=tilt,
+        tilt_direction=tilt_direction,
+        rotate_x=0.0,
+        rotate_y=0.0,
+        rotate_z=0.0,
+        **options,
     )
 
 
 @main.command("martini3-solvent")
-@click.option("--pdb", required=True, type=click.Path(exists=True, dir_okay=False), help="Standard-protein PDB")
+@click.option(
+    "--pdb",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Standard-protein PDB",
+)
+@_martini_solvent_pose_options
 @_martini_common_options
-def martini3_solvent(pdb: str, **options):
+def martini3_solvent(
+    pdb: str,
+    rotate_x: float,
+    rotate_y: float,
+    rotate_z: float,
+    z_offset: float,
+    **options,
+):
     """Build a solvated Martini 3 protein system."""
-    _run_martini3(mode="solution", pdb=pdb, upper=[], lower=[], dry=False,
-                  lipids_per_leaflet=None, **options)
+    _run_martini3(
+        mode="solution",
+        pdb=pdb,
+        upper=[],
+        lower=[],
+        dry=False,
+        lipids_per_leaflet=None,
+        orientation_method="ppm",
+        tilt=0.0,
+        tilt_direction=0.0,
+        rotate_x=rotate_x,
+        rotate_y=rotate_y,
+        rotate_z=rotate_z,
+        z_offset=z_offset,
+        **options,
+    )
 
 
 def _run_martini3(
-    *, mode: str, pdb: str | None, upper: list[dict], lower: list[dict],
-    lipids_per_leaflet: int | None, dry: bool, protein_model: str,
-    secondary_structure: str, elastic: bool, rotate_x: float, rotate_y: float,
-    rotate_z: float, z_offset: float, padding: float, salt: float,
-    production_ns: float, threads: int, mpi_ranks: int, gpu_ids: str,
-    seed: int, system_name: str, output_dir: str, accept: bool,
+    *,
+    mode: str,
+    pdb: str | None,
+    upper: list[dict],
+    lower: list[dict],
+    lipids_per_leaflet: int | None,
+    dry: bool,
+    protein_model: str,
+    secondary_structure: str,
+    elastic: bool,
+    rotate_x: float,
+    rotate_y: float,
+    rotate_z: float,
+    z_offset: float,
+    orientation_method: str,
+    tilt: float,
+    tilt_direction: float,
+    padding: float,
+    salt: float,
+    production_ns: float,
+    threads: int,
+    mpi_ranks: int,
+    gpu_ids: str,
+    seed: int,
+    system_name: str,
+    output_dir: str,
+    accept: bool,
 ) -> None:
     from gmxbuilder.pipeline.step_executor import StepRunner
 
@@ -213,29 +359,40 @@ def _run_martini3(
     mapping_config = {
         "protein_model": protein_model,
         "secondary_structure": secondary_mode,
-        "secondary_structure_string": "" if secondary_mode == "auto" else secondary_structure.strip().upper(),
+        "secondary_structure_string": ""
+        if secondary_mode == "auto"
+        else secondary_structure.strip().upper(),
         "elastic": elastic,
     }
     environment_config = {"seed": seed}
     orientation_config = None
     if mode == "bilayer":
-        manual_pose = any(abs(value) > 1e-12 for value in (rotate_x, rotate_y, rotate_z, z_offset))
-        orientation_config = (
-            {"method": "manual", "rotate_x": rotate_x, "rotate_y": rotate_y,
-             "rotate_z": rotate_z, "z_offset": z_offset, "half_thickness": 1.4}
-            if manual_pose else {"method": "ppm", "half_thickness": 1.4}
+        orientation_config = {"method": orientation_method, "half_thickness": 1.4}
+        if orientation_method == "manual":
+            orientation_config.update(
+                {
+                    "z_offset": z_offset,
+                    "tilt": tilt,
+                    "phi": tilt_direction,
+                }
+            )
+        environment_config.update(
+            {
+                "upper_leaflet": upper,
+                "lower_leaflet": lower,
+                "asymmetric": upper != lower,
+                "n_lipids_per_leaflet": lipids_per_leaflet,
+            }
         )
-        environment_config.update({
-            "upper_leaflet": upper,
-            "lower_leaflet": lower,
-            "asymmetric": upper != lower,
-            "n_lipids_per_leaflet": lipids_per_leaflet,
-        })
     else:
-        environment_config.update({
-            "rotate_x": rotate_x, "rotate_y": rotate_y,
-            "rotate_z": rotate_z, "z_offset": z_offset,
-        })
+        environment_config.update(
+            {
+                "rotate_x": rotate_x,
+                "rotate_y": rotate_y,
+                "rotate_z": rotate_z,
+                "z_offset": z_offset,
+            }
+        )
 
     def checked_step(runner: StepRunner, name: str, config: dict) -> None:
         click.echo(f"[{name}] running")
@@ -246,9 +403,7 @@ def _run_martini3(
             click.echo(f"  {line}")
 
     with tempfile.TemporaryDirectory(prefix="gmxbuilder-martini3-") as temporary:
-        pipeline_type = (
-            "martini3-bilayer" if mode == "bilayer" else "martini3-solvent"
-        )
+        pipeline_type = "martini3-bilayer" if mode == "bilayer" else "martini3-solvent"
         runner = StepRunner(Path(temporary) / "task", pipeline_type=pipeline_type)
         checked_step(runner, "input", {"include_protein": include_protein, "environment": mode})
         checked_step(runner, "cg_model", {"model": "martini3", "water_model": "W"})
@@ -298,7 +453,8 @@ def _run_martini3(
 
 @main.command()
 @click.option(
-    "--pdb", "-p",
+    "--pdb",
+    "-p",
     required=True,
     type=click.Path(exists=True),
     help="Path to PDB file",
@@ -316,6 +472,7 @@ def info(pdb: str):
 
     # Residue summary
     from collections import Counter
+
     res_counts = Counter(structure.resnames)
     click.echo(f"Residues: {len(res_counts)} unique types")
     for res, count in res_counts.most_common(10):
@@ -349,7 +506,9 @@ def list_water():
     click.echo("Available water models:")
     for name in WaterRegistry.list():
         wm = WaterRegistry.get(name)
-        click.echo(f"  {wm.name:<8s}  {wm.full_name:<8s}  atoms={wm.n_atoms}  density={wm.default_density}")
+        click.echo(
+            f"  {wm.name:<8s}  {wm.full_name:<8s}  atoms={wm.n_atoms}  density={wm.default_density}"
+        )
 
 
 @main.command()
@@ -434,11 +593,16 @@ def lipid_library_status(force_field: tuple[str, ...]):
     library = EquilibratedLipidLibrary()
     jobs = library.coverage(list(force_field) or None)
     ready = sum(bool(job["ready"]) for job in jobs)
-    click.echo(f"Validated entries: {ready}/{len(jobs)} compatible force-field jobs")
+    unavailable = sum(bool(job.get("unavailable")) for job in jobs)
+    pending = len(jobs) - ready - unavailable
+    click.echo(
+        f"Validated entries: {ready}/{len(jobs)} compatible force-field jobs; "
+        f"unavailable: {unavailable}; pending: {pending}"
+    )
     for job in jobs:
-        mark = "READY" if job["ready"] else "MISSING"
+        mark = "READY" if job["ready"] else "UNAVAILABLE" if job.get("unavailable") else "MISSING"
         click.echo(
-            f"{mark:<7s} {job['parameter_family']:<18s} "
+            f"{mark:<11s} {job['parameter_family']:<18s} "
             f"{job['lipid_name']:<8s} ({job['force_field']})"
         )
 
@@ -446,12 +610,16 @@ def lipid_library_status(force_field: tuple[str, ...]):
 @lipid_library.command("build")
 @click.option("--force-field", default="charmm36m", show_default=True)
 @click.option("--lipid", "lipids", multiple=True, help="Build only these lipid names")
+@click.option("--lipid-ff", default=None, help="Build only this exact lipid backend")
 @click.option("--npt-ps", default=1000.0, type=float, show_default=True)
-@click.option("--test-mode", is_flag=True, help="Short GROMACS smoke run; output is not runtime eligible")
+@click.option(
+    "--test-mode", is_flag=True, help="Short GROMACS smoke run; output is not runtime eligible"
+)
 @click.option("--force", is_flag=True, help="Replace an existing validated entry")
 def lipid_library_build(
     force_field: str,
     lipids: tuple[str, ...],
+    lipid_ff: str | None,
     npt_ps: float,
     test_mode: bool,
     force: bool,
@@ -472,15 +640,17 @@ def lipid_library_build(
             raise click.ClickException(
                 "Incompatible or unknown lipid(s): " + ", ".join(sorted(missing))
             )
+    if lipid_ff:
+        requested_backend = str(lipid_ff).strip().lower()
+        jobs = [job for job in jobs if str(job["lipid_ff"]).strip().lower() == requested_backend]
+        if not jobs:
+            raise click.ClickException(f"No compatible {requested_backend} lipid-library jobs")
     if not jobs:
         raise click.ClickException("No compatible lipid-library jobs")
     builder = LipidEquilibrationBuilder(library=library)
     failures = []
     for number, job in enumerate(jobs, 1):
-        click.echo(
-            f"[{number}/{len(jobs)}] {job['lipid_name']} "
-            f"{job['parameter_family']}"
-        )
+        click.echo(f"[{number}/{len(jobs)}] {job['lipid_name']} {job['parameter_family']}")
         try:
             output = builder.build(
                 job["lipid_name"],
@@ -495,15 +665,16 @@ def lipid_library_build(
             failures.append((job["lipid_name"], str(exc)))
             click.echo(f"  FAILED: {exc}", err=True)
     if failures:
-        raise click.ClickException(
-            f"{len(failures)} of {len(jobs)} library builds failed"
-        )
+        raise click.ClickException(f"{len(failures)} of {len(jobs)} library builds failed")
 
 
 @lipid_library.command("queue")
 @click.option(
-    "--force-field", "force_fields", multiple=True,
-    default=("amber14sb", "charmm36m", "charmm36"), show_default=True,
+    "--force-field",
+    "force_fields",
+    multiple=True,
+    default=("amber14sb", "charmm36m", "charmm36"),
+    show_default=True,
     help="Parameter releases to continue in order",
 )
 @click.option("--npt-ps", default=1000.0, type=float, show_default=True)
@@ -519,11 +690,24 @@ def lipid_library_queue(force_fields: tuple[str, ...], npt_ps: float, log_dir: s
     if not results:
         click.echo("All requested force-field libraries are already validated")
         return
+    from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
+
+    library = EquilibratedLipidLibrary()
     failures = []
     for job, success, path in results:
-        status = "DONE" if success else "FAILED"
+        unavailable = (
+            not success
+            and library.inspect_failure(
+                job["lipid_name"],
+                job["force_field"],
+                job["lipid_ff"],
+                min_npt_ps=npt_ps,
+            )
+            is not None
+        )
+        status = "DONE" if success else "UNAVAILABLE" if unavailable else "FAILED"
         click.echo(f"{status:<6s} {job['force_field']:<15s} {job['lipid_name']:<8s} {path}")
-        if not success:
+        if not success and not unavailable:
             failures.append(job)
     if failures:
         raise click.ClickException(f"{len(failures)} of {len(results)} queued builds failed")
@@ -533,28 +717,42 @@ def lipid_library_queue(force_fields: tuple[str, ...], npt_ps: float, log_dir: s
 @click.option("--host", "-h", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", "-p", default=7788, type=int, help="Port to listen on")
 @click.option(
-    "--max-builds", "-j", default=None, type=click.IntRange(min=1),
+    "--max-builds",
+    "-j",
+    default=None,
+    type=click.IntRange(min=1),
     help="Maximum concurrent compute tasks (default: up to 4 within the CPU budget)",
 )
 @click.option(
-    "--cpu-cores", type=click.IntRange(min=1), default=None,
+    "--cpu-cores",
+    type=click.IntRange(min=1),
+    default=None,
     help="CPU threads exposed to GMXBUILDER (default: half of available threads)",
 )
 @click.option(
-    "--task-threads", type=click.IntRange(min=1), default=None,
+    "--task-threads",
+    type=click.IntRange(min=1),
+    default=None,
     help=(
         "Maximum CPU threads per task; must divide --cpu-cores exactly "
         "(default: largest exact share for the requested concurrency)"
     ),
 )
 @click.option(
-    "--gpu-count", type=click.IntRange(min=0), default=None,
+    "--gpu-count",
+    type=click.IntRange(min=0),
+    default=None,
     help="Number of GPUs exposed to GMXBUILDER (default: GPU 0 only; 0 disables GPU)",
 )
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 def serve(
-    host: str, port: int, reload: bool, max_builds: int | None,
-    cpu_cores: int | None, task_threads: int | None, gpu_count: int | None,
+    host: str,
+    port: int,
+    reload: bool,
+    max_builds: int | None,
+    cpu_cores: int | None,
+    task_threads: int | None,
+    gpu_count: int | None,
 ):
     """Start the GMXBUILDER web interface.
 
@@ -586,13 +784,9 @@ def serve(
         try:
             requested_slots = int(configured_max_builds)
         except ValueError as exc:
-            raise click.ClickException(
-                "GMXBUILDER_MAX_BUILDS must be a positive integer"
-            ) from exc
+            raise click.ClickException("GMXBUILDER_MAX_BUILDS must be a positive integer") from exc
         if requested_slots <= 0:
-            raise click.ClickException(
-                "GMXBUILDER_MAX_BUILDS must be a positive integer"
-            )
+            raise click.ClickException("GMXBUILDER_MAX_BUILDS must be a positive integer")
         slots_are_explicit = True
     else:
         requested_slots = 4
@@ -627,10 +821,7 @@ def serve(
         f"  Deployment security: {security.mode}; "
         f"authentication={'enabled' if security.authentication_enabled else 'disabled'}"
     )
-    click.echo(
-        f"  Concurrent task slots: {effective_slots}  "
-        "(env GMXBUILDER_MAX_BUILDS)"
-    )
+    click.echo(f"  Concurrent task slots: {effective_slots}  (env GMXBUILDER_MAX_BUILDS)")
     click.echo(
         f"  CPU budget: {hardware.configured_cpu_cores}/"
         f"{hardware.detected_cpu_threads} available threads"
@@ -640,10 +831,7 @@ def serve(
         f"({hardware.configured_task_slots} exact CPU shares)"
     )
     if hardware.gmx_installed:
-        click.echo(
-            f"  GROMACS: {hardware.gmx_version or 'unknown version'} "
-            f"({hardware.gmx_path})"
-        )
+        click.echo(f"  GROMACS: {hardware.gmx_version or 'unknown version'} ({hardware.gmx_path})")
     else:
         click.echo("  GROMACS: not found (GROMACS-dependent features disabled)")
     if hardware.configured_gpu_count:

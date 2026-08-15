@@ -43,10 +43,9 @@ from gmxbuilder.runtime.hardware import configured_task_threads
 def _reconcile_lipid_selection(system: System, active_lipids: list[str]) -> str | None:
     """Accept a changed Step 5 set only within the already selected FF family."""
     active = sorted({str(name).strip().upper() for name in active_lipids})
-    selected = sorted({
-        str(name).strip().upper()
-        for name in system.metadata.get("selected_lipid_names", [])
-    })
+    selected = sorted(
+        {str(name).strip().upper() for name in system.metadata.get("selected_lipid_names", [])}
+    )
     protein_ff = str(system.metadata.get("force_field", "")).lower()
     lipid_ff = str(system.metadata.get("lipid_ff", "")).lower()
     original_lipid_ff = lipid_ff
@@ -77,7 +76,8 @@ def _reconcile_lipid_selection(system: System, active_lipids: list[str]) -> str 
     backend_change = (
         f"Amber lipid backend updated for this composition: "
         f"{original_lipid_ff or 'unset'} -> {lipid_ff}. {resolved_reason}"
-        if original_lipid_ff != lipid_ff else None
+        if original_lipid_ff != lipid_ff
+        else None
     )
     if not selected or active == selected:
         return backend_change
@@ -150,20 +150,15 @@ def _leaflet_headgroup_plane(leaflet_system: System, *, upper: bool) -> float:
     """Return the mean Z position of recorded per-lipid headgroup anchors."""
     coords = leaflet_system.coordinates
     lipid_sizes = list(leaflet_system.metadata.get("lipid_sizes") or [])
-    local_indices = list(
-        leaflet_system.metadata.get("headgroup_anchor_local_indices") or []
-    )
+    local_indices = list(leaflet_system.metadata.get("headgroup_anchor_local_indices") or [])
     if lipid_sizes and len(local_indices) == len(lipid_sizes):
         offsets = np.cumsum([0] + lipid_sizes)
-        absolute = np.asarray([
-            int(offsets[index]) + int(local_indices[index])
-            for index in range(len(lipid_sizes))
-        ])
+        absolute = np.asarray(
+            [int(offsets[index]) + int(local_indices[index]) for index in range(len(lipid_sizes))]
+        )
         return float(np.mean(coords[absolute, 2]))
 
-    stripped = np.asarray([
-        str(name).strip() for name in leaflet_system.structure.atom_names
-    ])
+    stripped = np.asarray([str(name).strip() for name in leaflet_system.structure.atom_names])
     phosphorus = coords[stripped == "P", 2]
     if len(phosphorus):
         return float(np.mean(phosphorus))
@@ -177,9 +172,9 @@ class MembraneBuilder(BaseModule):
     name = "membrane"
     description = "Generate lipid bilayer with optional protein embedding"
 
-    _MIN_BOX_XY = 4.0   # nm
+    _MIN_BOX_XY = 4.0  # nm
     _MIN_LIPIDS_PER_LEAFLET = 64  # minimum lipids for a stable bilayer
-    _GRID_JITTER = 0.05       # nm — random XY displacement for lipid placement
+    _GRID_JITTER = 0.05  # nm — random XY displacement for lipid placement
     _PROTEIN_EXCLUSION_XY = 0.20  # nm — grid-point exclusion around protein (tight)
     _LIPID_PROTEIN_MIN_DIST = 0.10  # nm — minimum lipid-protein atom distance
 
@@ -209,16 +204,35 @@ class MembraneBuilder(BaseModule):
     #   even after protein exclusion and random thinning.
     _DENSE_GRID_SPACING = 0.35
 
-    def __init__(self, use_equilibrated_library: bool = True):
+    def __init__(
+        self,
+        use_equilibrated_library: bool = True,
+        *,
+        allow_repairable_core_gap: bool = False,
+    ):
         # The offline library builder disables reads while bootstrapping the
         # bilayer from which validated conformers will be extracted.
         self.use_equilibrated_library = bool(use_equilibrated_library)
+        # Only the offline library workflow may accept an initially open core:
+        # it immediately regrids whole lipids, performs gradual vacuum
+        # precompression, and then runs explicit-solvent NVT/NPT.  Interactive
+        # membrane construction keeps the strict sealed-core invariant.
+        self.allow_repairable_core_gap = bool(allow_repairable_core_gap)
 
     def validate_config(self, config: dict) -> bool:
         self.validate_config_keys(
             config,
-            {"lipid_type", "lipid_composition", "n_lipids_per_leaflet", "seed",
-             "box_padding", "pad", "bilayer_size", "orient_method", "embed_method"},
+            {
+                "lipid_type",
+                "lipid_composition",
+                "n_lipids_per_leaflet",
+                "seed",
+                "box_padding",
+                "pad",
+                "bilayer_size",
+                "orient_method",
+                "embed_method",
+            },
         )
         # Accept either lipid_type (single) or lipid_composition (mixed)
         if "lipid_composition" in config:
@@ -233,14 +247,10 @@ class MembraneBuilder(BaseModule):
                 has_bilayer_host = False
                 for index, entry in enumerate(entries):
                     if not isinstance(entry, dict):
-                        raise ModuleConfigError(
-                            f"{label} leaflet entry {index} must be an object"
-                        )
+                        raise ModuleConfigError(f"{label} leaflet entry {index} must be an object")
                     name = entry.get("name")
                     if not isinstance(name, str) or not name.strip():
-                        raise ModuleConfigError(
-                            f"{label} leaflet entry {index} has no lipid name"
-                        )
+                        raise ModuleConfigError(f"{label} leaflet entry {index} has no lipid name")
                     try:
                         ratio = float(entry.get("ratio"))
                     except (TypeError, ValueError) as exc:
@@ -329,9 +339,7 @@ class MembraneBuilder(BaseModule):
         if len(padding_values) == 2 and not np.isclose(
             padding_values["box_padding"], padding_values["pad"], atol=1e-9
         ):
-            raise ModuleConfigError(
-                "box_padding and legacy pad disagree; provide only box_padding"
-            )
+            raise ModuleConfigError("box_padding and legacy pad disagree; provide only box_padding")
 
         size = config.get("bilayer_size")
         if size is not None and size != "auto":
@@ -350,12 +358,18 @@ class MembraneBuilder(BaseModule):
 
         orient_method = config.get("orient_method")
         if orient_method is not None and orient_method not in {
-            "ppm", "hmoment", "tmd", "pca", "com",
+            "ppm",
+            "hmoment",
+            "tmd",
+            "pca",
+            "com",
         }:
             raise ModuleConfigError(f"Unknown orient_method: {orient_method}")
         embed_method = config.get("embed_method")
         if embed_method is not None and embed_method not in {
-            "com", "hydrophobic", "ppm",
+            "com",
+            "hydrophobic",
+            "ppm",
         }:
             raise ModuleConfigError(f"Unknown embed_method: {embed_method}")
         if "seed" in config:
@@ -374,7 +388,9 @@ class MembraneBuilder(BaseModule):
                 raise ModuleConfigError("seed must be an integer")
         return True
 
-    def _parse_composition(self, config: dict) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    def _parse_composition(
+        self, config: dict
+    ) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
         """Return (upper_mix, lower_mix) as lists of (lipid_name, ratio_pct)."""
         if "lipid_composition" in config:
             comp = config["lipid_composition"]
@@ -411,9 +427,9 @@ class MembraneBuilder(BaseModule):
         # to build.  Otherwise structure processing may have used a different
         # protein force field and the incremental preview would not match the
         # final full-pipeline build.
-        active_lipids = sorted({
-            name for name, ratio in upper_mix + lower_mix if float(ratio) > 0.0
-        })
+        active_lipids = sorted(
+            {name for name, ratio in upper_mix + lower_mix if float(ratio) > 0.0}
+        )
         reconciliation_log = _reconcile_lipid_selection(system, active_lipids)
         self.validate_config(config)
         seed = system.metadata.get("seed", config.get("seed", 42))
@@ -522,13 +538,17 @@ class MembraneBuilder(BaseModule):
         box_z = max(prot_z_extent, membrane_z_full)
 
         if n_lipids_per_leaflet is not None:
-            log.append(f"Membrane system: {box_xy:.1f}×{box_xy:.1f}×{box_z:.1f} nm — "
-                       f"area: {box_xy*box_xy:.1f} nm² "
-                       f"(n={n_lipids_per_leaflet} lipids/leaflet, Z water layer added in solvation)")
+            log.append(
+                f"Membrane system: {box_xy:.1f}×{box_xy:.1f}×{box_z:.1f} nm — "
+                f"area: {box_xy * box_xy:.1f} nm² "
+                f"(n={n_lipids_per_leaflet} lipids/leaflet, Z water layer added in solvation)"
+            )
         else:
-            log.append(f"Membrane system: {box_xy:.1f}×{box_xy:.1f}×{box_z:.1f} nm — "
-                       f"area: {box_xy*box_xy:.1f} nm² "
-                       f"(XY padding={box_padding:.1f} nm, Z water layer added in solvation)")
+            log.append(
+                f"Membrane system: {box_xy:.1f}×{box_xy:.1f}×{box_z:.1f} nm — "
+                f"area: {box_xy * box_xy:.1f} nm² "
+                f"(XY padding={box_padding:.1f} nm, Z water layer added in solvation)"
+            )
 
         # ---- 4. Dense candidate placement ----
         # 5a. Generate VERY dense hexagonal grid (0.35 nm spacing ≈ 3× denser than target)
@@ -544,8 +564,7 @@ class MembraneBuilder(BaseModule):
         # PBC; subtracting a molecular-radius margin here would compress all
         # centres into a smaller area and invalidate the requested APL.
         half_box = box_xy / 2.0
-        grid_in_box = (np.abs(grid_xy[:, 0]) < half_box) & \
-                      (np.abs(grid_xy[:, 1]) < half_box)
+        grid_in_box = (np.abs(grid_xy[:, 0]) < half_box) & (np.abs(grid_xy[:, 1]) < half_box)
         grid_xy = grid_xy[grid_in_box]
         n_dense = len(grid_xy)
         log.append(f"Dense grid: {n_dense} candidate positions (spacing={dense_spacing:.2f} nm)")
@@ -557,13 +576,14 @@ class MembraneBuilder(BaseModule):
             protein_xy = system.coordinates[all_prot_idx][:, :2]
             if len(protein_xy) > 0 and len(grid_xy) > 0:
                 from scipy.spatial import cKDTree
+
                 prot_tree = cKDTree(protein_xy)
-                dists, _ = prot_tree.query(
-                    grid_xy, k=1, workers=configured_task_threads()
-                )
+                dists, _ = prot_tree.query(grid_xy, k=1, workers=configured_task_threads())
                 grid_xy = grid_xy[dists >= self._PROTEIN_EXCLUSION_XY]
-            log.append(f"Protein overlap filter: {len(grid_xy)} positions survived "
-                       f"(exclusion={self._PROTEIN_EXCLUSION_XY:.2f} nm)")
+            log.append(
+                f"Protein overlap filter: {len(grid_xy)} positions survived "
+                f"(exclusion={self._PROTEIN_EXCLUSION_XY:.2f} nm)"
+            )
 
         # 5d. Thin to the requested target density.
         # After protein exclusion, randomly select lipids to reach the
@@ -578,19 +598,18 @@ class MembraneBuilder(BaseModule):
                 # There is no protein clash filter to compensate for.
                 target_n = n_lipids_per_leaflet
         else:
-            target_n = max(self._MIN_LIPIDS_PER_LEAFLET,
-                           int(box_xy * box_xy / avg_area * 1.30))
+            target_n = max(self._MIN_LIPIDS_PER_LEAFLET, int(box_xy * box_xy / avg_area * 1.30))
         n_after_protein = len(grid_xy)
         if n_after_protein > target_n:
             # Farthest-point thinning keeps the selected lipid centres
             # uniformly separated. Random thinning of a 0.35 nm dense grid
             # frequently selected adjacent sites and created hard overlaps.
-            chosen = _select_spread_positions(
-                grid_xy, target_n, rng, box_xy=box_xy
-            )
+            chosen = _select_spread_positions(grid_xy, target_n, rng, box_xy=box_xy)
             grid_xy = grid_xy[chosen]
-            log.append(f"Density thinning: {target_n} lipids/leaflet selected "
-                       f"(from {n_after_protein} candidates, target APL={avg_area:.3f} nm²)")
+            log.append(
+                f"Density thinning: {target_n} lipids/leaflet selected "
+                f"(from {n_after_protein} candidates, target APL={avg_area:.3f} nm²)"
+            )
             actual_n = target_n
         else:
             actual_n = n_after_protein
@@ -599,14 +618,15 @@ class MembraneBuilder(BaseModule):
             return ModuleResult(
                 success=False,
                 system=system,
-                log=[(
-                    f"ERROR: Only {actual_n} lipids/leaflet available "
-                    f"(need ≥{self._MIN_LIPIDS_PER_LEAFLET}). "
-                    "Increase lipids-per-leaflet or reduce protein exclusion."
-                )],
+                log=[
+                    (
+                        f"ERROR: Only {actual_n} lipids/leaflet available "
+                        f"(need ≥{self._MIN_LIPIDS_PER_LEAFLET}). "
+                        "Increase lipids-per-leaflet or reduce protein exclusion."
+                    )
+                ],
             )
-        log.append(f"Final placement: {actual_n} lipids/leaflet "
-                   f"({box_xy:.1f}×{box_xy:.1f} nm²)")
+        log.append(f"Final placement: {actual_n} lipids/leaflet ({box_xy:.1f}×{box_xy:.1f} nm²)")
 
         # ---- 8. Assign lipid types to grid positions by ratio ----
         upper_assignments = self._assign_lipids(actual_n, upper_mix, rng)
@@ -615,6 +635,7 @@ class MembraneBuilder(BaseModule):
         # Build composition summary
         def _counts(assignments):
             from collections import Counter
+
             c = Counter(assignments)
             return {k: c[k] for k in sorted(c)}
 
@@ -630,11 +651,21 @@ class MembraneBuilder(BaseModule):
         force_field = str(system.metadata.get("force_field", "amber14sb"))
         lipid_ff = str(system.metadata.get("lipid_ff", force_field))
         upper_system = self._build_mixed_leaflet(
-            grid_xy, z_upper, upper_assignments, rng, force_field, lipid_ff,
+            grid_xy,
+            z_upper,
+            upper_assignments,
+            rng,
+            force_field,
+            lipid_ff,
             box_xy=box_xy,
         )
         lower_system = self._build_mixed_leaflet(
-            grid_xy, z_lower, lower_assignments, rng, force_field, lipid_ff,
+            grid_xy,
+            z_lower,
+            lower_assignments,
+            rng,
+            force_field,
+            lipid_ff,
             box_xy=box_xy,
         )
         library_hits = int(upper_system.metadata.get("library_hits", 0)) + int(
@@ -655,9 +686,7 @@ class MembraneBuilder(BaseModule):
         # Per-lipid translational repulsion is deliberately avoided here:
         # dense many-body tail contacts can otherwise collapse the lattice.
         # Azimuthal rigid-body declashing below preserves every lipid centre.
-        log.append(
-            f"Built 2 leaflets: upper={actual_n}, lower={actual_n} lipids"
-        )
+        log.append(f"Built 2 leaflets: upper={actual_n}, lower={actual_n} lipids")
 
         # ---- 9a2. Leaflet closing — eliminate vacuum gap between leaflets ----
         # After relaxation, the leaflets may have a gap between tail ends at
@@ -672,24 +701,21 @@ class MembraneBuilder(BaseModule):
             lower_system.metadata.get("lipid_sizes", []),
             box_xy=box_xy,
         )
-        _close_leaflets(
-            upper_system, lower_system, log, target_dhh=dh, box_xy=box_xy
-        )
+        _close_leaflets(upper_system, lower_system, log, target_dhh=dh, box_xy=box_xy)
 
         # ---- 9b. Protein-lipid clash removal (atom level, protein only) ----
         # Only remove lipids that clash with protein atoms.
         # Lipid-lipid clashes are resolved by energy minimization in MD.
         if has_protein:
             from scipy.spatial import cKDTree
-            prot_indices_all = np.concatenate([
-                c.atom_indices for c in protein_comps
-            ])
+
+            prot_indices_all = np.concatenate([c.atom_indices for c in protein_comps])
             prot_coords = system.coordinates[prot_indices_all]
             prot_tree = cKDTree(prot_coords)
             for leaflet_name, leaflet_sys in [("upper", upper_system), ("lower", lower_system)]:
                 MembraneBuilder._filter_protein_clashes(
-                    leaflet_sys, prot_tree, leaflet_name,
-                    self._LIPID_PROTEIN_MIN_DIST, log)
+                    leaflet_sys, prot_tree, leaflet_name, self._LIPID_PROTEIN_MIN_DIST, log
+                )
 
         # ---- 9b2. Pack lipids against protein surface ----
         # After clash removal, surviving lipids may still sit far from the
@@ -701,7 +727,8 @@ class MembraneBuilder(BaseModule):
             prot_coords_local = system.coordinates[prot_indices_all]
             for leaflet_name, leaflet_sys in [("upper", upper_system), ("lower", lower_system)]:
                 _pack_lipids_against_protein(
-                    leaflet_sys, prot_coords_local,
+                    leaflet_sys,
+                    prot_coords_local,
                     target_contact=self._LIPID_PROTEIN_MIN_DIST + 0.15,
                     max_shift=0.05,
                     log=log,
@@ -711,8 +738,8 @@ class MembraneBuilder(BaseModule):
             prot_tree_local = cKDTree(prot_coords_local)
             for leaflet_name, leaflet_sys in [("upper", upper_system), ("lower", lower_system)]:
                 MembraneBuilder._filter_protein_clashes(
-                    leaflet_sys, prot_tree_local, leaflet_name,
-                    self._LIPID_PROTEIN_MIN_DIST, log)
+                    leaflet_sys, prot_tree_local, leaflet_name, self._LIPID_PROTEIN_MIN_DIST, log
+                )
 
         # Explicit lipid counts are a final-output contract.  Protein builds
         # start with a small surplus to survive clash filtering; retain a
@@ -743,9 +770,8 @@ class MembraneBuilder(BaseModule):
             if np.any(initial_extent < 0.01):
                 continue
             target_extent = box_xy - 0.04
-            if (
-                n_lipids_per_leaflet is None
-                and np.any(np.abs(initial_extent - target_extent) > 0.005)
+            if n_lipids_per_leaflet is None and np.any(
+                np.abs(initial_extent - target_extent) > 0.005
             ):
                 _, scales = scale_lipid_centres_xy(coords, lipid_sizes, target_extent)
                 final_extent = np.ptp(coords[:, :2], axis=0)
@@ -755,13 +781,11 @@ class MembraneBuilder(BaseModule):
                     f"extent={final_extent[0]:.2f}×{final_extent[1]:.2f} nm"
                 )
 
-            leaflet_sys.structure.coordinates, minimum_clearance = (
-                rotate_lipids_away_from_clashes(
-                    leaflet_sys.structure.coordinates,
-                    lipid_sizes,
-                    min_distance=0.035,
-                    box_xy=box_xy,
-                )
+            leaflet_sys.structure.coordinates, minimum_clearance = rotate_lipids_away_from_clashes(
+                leaflet_sys.structure.coordinates,
+                lipid_sizes,
+                min_distance=0.035,
+                box_xy=box_xy,
             )
             if minimum_clearance < 0.025:
                 log.append(
@@ -776,9 +800,7 @@ class MembraneBuilder(BaseModule):
             lower_system.metadata.get("lipid_sizes", []),
             box_xy=box_xy,
         )
-        _close_leaflets(
-            upper_system, lower_system, log, target_dhh=dh, box_xy=box_xy
-        )
+        _close_leaflets(upper_system, lower_system, log, target_dhh=dh, box_xy=box_xy)
         upper_system.structure.coordinates, upper_cross_clearance = (
             rotate_lipids_away_from_external_clashes(
                 upper_system.structure.coordinates,
@@ -806,20 +828,28 @@ class MembraneBuilder(BaseModule):
         # pushed lipids into the protein.
         if has_protein:
             from scipy.spatial import cKDTree
+
             _prot_coords_scl = system.coordinates[prot_indices_all]
             _prot_tree_scl = cKDTree(_prot_coords_scl)
             for leaflet_name, leaflet_sys in [("upper", upper_system), ("lower", lower_system)]:
                 MembraneBuilder._filter_protein_clashes(
-                    leaflet_sys, _prot_tree_scl, leaflet_name,
-                    self._LIPID_PROTEIN_MIN_DIST, log,
-                    label_prefix="Post-scale clash filter")
+                    leaflet_sys,
+                    _prot_tree_scl,
+                    leaflet_name,
+                    self._LIPID_PROTEIN_MIN_DIST,
+                    log,
+                    label_prefix="Post-scale clash filter",
+                )
 
         # Counts and structural invariants must describe the final leaflets,
         # after every protein clash filter and trimming operation.
         actual_upper = int(upper_system.metadata.get("n_lipids", 0))
         actual_lower = int(lower_system.metadata.get("n_lipids", 0))
         orientation_quality = _validate_bilayer_structure(
-            upper_system, lower_system, log,
+            upper_system,
+            lower_system,
+            log,
+            allow_repairable_core_gap=self.allow_repairable_core_gap,
         )
 
         # ---- 10. Embed protein ----
@@ -888,9 +918,7 @@ class MembraneBuilder(BaseModule):
         z_abs_max = max(abs(all_z_centred.min()), abs(all_z_centred.max()))
         box_z = max(box_z, 2.0 * z_abs_max)
 
-        protein_extent_xy = (
-            float(np.max(prot_max_xy - prot_min_xy)) if has_protein else 0.0
-        )
+        protein_extent_xy = float(np.max(prot_max_xy - prot_min_xy)) if has_protein else 0.0
         if protein_extent_xy > box_xy:
             raise ModuleConfigError(
                 f"Protein XY extent ({protein_extent_xy:.2f} nm) exceeds the "
@@ -906,8 +934,10 @@ class MembraneBuilder(BaseModule):
             )
 
         if abs(z_mid_actual) > 0.01:
-            log.append(f"Membrane midplane centred: shifted by {-z_mid_actual:.2f} nm "
-                       f"to Z=0 (was at {z_mid_actual:.2f} nm)")
+            log.append(
+                f"Membrane midplane centred: shifted by {-z_mid_actual:.2f} nm "
+                f"to Z=0 (was at {z_mid_actual:.2f} nm)"
+            )
 
         # Set final box vectors
         merged.structure.box_vectors = np.diag([box_xy, box_xy, box_z])
@@ -920,13 +950,19 @@ class MembraneBuilder(BaseModule):
         # no membrane to validate.
         if mem_indices.size > 0:
             _validate_membrane_quality(
-                merged, mem_indices, system.num_atoms, box_xy, box_z,
-                has_protein, log,
+                merged,
+                mem_indices,
+                system.num_atoms,
+                box_xy,
+                box_z,
+                has_protein,
+                log,
             )
 
         # Build a compact label for the composition
         def _label(mix):
             return "+".join(f"{n}({r}%)" for n, r in mix if r > 0)
+
         comp_label = _label(upper_mix)
         if _asymmetric_check(config):
             comp_label += "_asym"
@@ -948,26 +984,28 @@ class MembraneBuilder(BaseModule):
         # Add MEMBRANE component
         n_mem_atoms = membrane_system.num_atoms
         mem_start = merged.num_atoms - n_mem_atoms
-        merged.add_component(Component(
-                        name=f"MEMBRANE_{comp_label}"[:50],
-            kind=ComponentKind.MEMBRANE,
-            atom_indices=np.arange(mem_start, merged.num_atoms),
-            metadata={
-                "composition_upper": [(n, r) for n, r in upper_mix],
-                "composition_lower": [(n, r) for n, r in lower_mix],
-                "n_lipids_upper": actual_upper,
-                "n_lipids_lower": actual_lower,
-                "lipid_sizes": all_lipid_sizes,
-                "bilayer_thickness": actual_dhh,  # measured from placed lipids
-                "bilayer_thickness_nominal": dh,   # original estimate from registry
-                "equilibrated_library_lipids": library_hits,
-                "bootstrap_geometry_lipids": bootstrap_hits,
-                "orientation_quality": orientation_quality,
-                "box_xy": box_xy,
-                "box_z": box_z,
-                "box_padding": float(config.get("box_padding", config.get("pad", 2.0))),
-            },
-        ))
+        merged.add_component(
+            Component(
+                name=f"MEMBRANE_{comp_label}"[:50],
+                kind=ComponentKind.MEMBRANE,
+                atom_indices=np.arange(mem_start, merged.num_atoms),
+                metadata={
+                    "composition_upper": [(n, r) for n, r in upper_mix],
+                    "composition_lower": [(n, r) for n, r in lower_mix],
+                    "n_lipids_upper": actual_upper,
+                    "n_lipids_lower": actual_lower,
+                    "lipid_sizes": all_lipid_sizes,
+                    "bilayer_thickness": actual_dhh,  # measured from placed lipids
+                    "bilayer_thickness_nominal": dh,  # original estimate from registry
+                    "equilibrated_library_lipids": library_hits,
+                    "bootstrap_geometry_lipids": bootstrap_hits,
+                    "orientation_quality": orientation_quality,
+                    "box_xy": box_xy,
+                    "box_z": box_z,
+                    "box_padding": float(config.get("box_padding", config.get("pad", 2.0))),
+                },
+            )
+        )
 
         return ModuleResult(
             success=True,
@@ -988,18 +1026,30 @@ class MembraneBuilder(BaseModule):
             raise ValueError("keep_mask length must match lipid_sizes")
 
         offsets = np.cumsum([0] + lipid_sizes)
-        atom_indices = np.concatenate([
-            np.arange(offsets[i], offsets[i + 1], dtype=np.int64)
-            for i in range(n_lipids)
-            if keep_mask[i]
-        ]) if keep_mask.any() else np.empty(0, dtype=np.int64)
+        atom_indices = (
+            np.concatenate(
+                [
+                    np.arange(offsets[i], offsets[i + 1], dtype=np.int64)
+                    for i in range(n_lipids)
+                    if keep_mask[i]
+                ]
+            )
+            if keep_mask.any()
+            else np.empty(0, dtype=np.int64)
+        )
 
         structure = leaflet_sys.structure
         n_atoms_before = structure.num_atoms
         structure.coordinates = structure.coordinates[atom_indices].copy()
         for field_name in (
-            "atom_names", "resnames", "resids", "chain_ids", "segids",
-            "elements", "occupancies", "tempfactors",
+            "atom_names",
+            "resnames",
+            "resids",
+            "chain_ids",
+            "segids",
+            "elements",
+            "occupancies",
+            "tempfactors",
         ):
             values = getattr(structure, field_name)
             if values and len(values) == n_atoms_before:
@@ -1007,9 +1057,7 @@ class MembraneBuilder(BaseModule):
 
         retained_sizes = [lipid_sizes[i] for i in range(n_lipids) if keep_mask[i]]
         leaflet_sys.metadata["lipid_sizes"] = retained_sizes
-        anchor_indices = list(
-            leaflet_sys.metadata.get("headgroup_anchor_local_indices") or []
-        )
+        anchor_indices = list(leaflet_sys.metadata.get("headgroup_anchor_local_indices") or [])
         if len(anchor_indices) == n_lipids:
             leaflet_sys.metadata["headgroup_anchor_local_indices"] = [
                 anchor_indices[i] for i in range(n_lipids) if keep_mask[i]
@@ -1101,7 +1149,7 @@ class MembraneBuilder(BaseModule):
         explicit = config.get("n_lipids_per_leaflet")
         if explicit is not None:
             return int(explicit)
-        area = box_xy ** 2
+        area = box_xy**2
         if avg_area <= 0:
             raise ModuleConfigError(
                 f"Cannot compute lipid count: weighted average APL is {avg_area:.3f} nm². "
@@ -1155,8 +1203,13 @@ class MembraneBuilder(BaseModule):
                     break
             elements.append(elem)
 
-        return (rotated, atom_names, [lipid_name] * len(atom_names),
-                [i + 1] * len(atom_names), elements)
+        return (
+            rotated,
+            atom_names,
+            [lipid_name] * len(atom_names),
+            [i + 1] * len(atom_names),
+            elements,
+        )
 
     def _build_mixed_leaflet(
         self,
@@ -1171,6 +1224,7 @@ class MembraneBuilder(BaseModule):
     ) -> System:
         """Build a leaflet with full-atom lipid geometries at each grid position."""
         from scipy.spatial import cKDTree
+
         used = min(len(grid_xy), len(assignments))
         if used == 0:
             return System(
@@ -1186,6 +1240,7 @@ class MembraneBuilder(BaseModule):
         headgroup_anchor_local_indices = []
         library_hits = 0
         bootstrap_hits = 0
+        bootstrap_conformer_retries = 0
         placed_coords = np.empty((0, 3), dtype=float)
         placed_tree = None
         for i in range(used):
@@ -1202,7 +1257,10 @@ class MembraneBuilder(BaseModule):
                 )
                 try:
                     coords, atom_names = get_equilibrated_lipid_library().load_one(
-                        ln, force_field, selected_lipid_ff, rng=rng,
+                        ln,
+                        force_field,
+                        selected_lipid_ff,
+                        rng=rng,
                     )
                     loaded = True
                     library_hits += 1
@@ -1210,8 +1268,11 @@ class MembraneBuilder(BaseModule):
                     pass
             if not loaded:
                 coords, atom_names = build_rdkit_lipid_geometry(
-                    ln, lipid.smiles, force_field=force_field,
-                    seed=int(conf_seeds[i] % 5), net_charge=lipid.charge,
+                    ln,
+                    lipid.smiles,
+                    force_field=force_field,
+                    seed=int(conf_seeds[i] % 5),
+                    net_charge=lipid.charge,
                     lipid_ff=lipid_ff,
                 )
                 bootstrap_hits += 1
@@ -1221,13 +1282,51 @@ class MembraneBuilder(BaseModule):
             # force-field bond geometry and equilibrated torsions are kept.
             try:
                 coords = orient_lipid_to_outward_normal(
-                    coords, atom_names, upper=True,
+                    coords,
+                    atom_names,
+                    upper=True,
                 )
-            except LipidOrientationError as exc:
-                source = "pre-equilibrated library" if loaded else "bootstrap geometry"
-                raise ModuleConfigError(
-                    f"Lipid {ln} from {source} cannot form a physical bilayer: {exc}"
-                ) from exc
+            except LipidOrientationError as initial_exc:
+                # RDKit embedding can occasionally return a compact folded
+                # conformer whose head and tail centroids nearly cancel even
+                # though other deterministic seeds give a valid amphiphile.
+                # Retry only coordinate-only bootstrap backends.  GAFF2 and
+                # Lipid21 carry authoritative cached coordinates and must not
+                # be silently replaced by a different geometry source.
+                retry_error = initial_exc
+                recovered = False
+                selected_lipid_ff = str(lipid_ff or "").strip().lower()
+                if not loaded and selected_lipid_ff not in {"gaff2", "lipid21"}:
+                    first_seed = int(conf_seeds[i] % 5)
+                    for retry_seed in range(5):
+                        if retry_seed == first_seed:
+                            continue
+                        retry_coords, retry_names = build_rdkit_lipid_geometry(
+                            ln,
+                            lipid.smiles,
+                            force_field=force_field,
+                            seed=retry_seed,
+                            net_charge=lipid.charge,
+                            lipid_ff=lipid_ff,
+                        )
+                        try:
+                            coords = orient_lipid_to_outward_normal(
+                                retry_coords,
+                                retry_names,
+                                upper=True,
+                            )
+                        except LipidOrientationError as exc:
+                            retry_error = exc
+                            continue
+                        atom_names = retry_names
+                        bootstrap_conformer_retries += 1
+                        recovered = True
+                        break
+                if not recovered:
+                    source = "pre-equilibrated library" if loaded else "bootstrap geometry"
+                    raise ModuleConfigError(
+                        f"Lipid {ln} from {source} cannot form a physical bilayer: {retry_error}"
+                    ) from retry_error
 
             # ``z`` is the physical headgroup plane (DHH/2).  Phosphorus
             # remains the marker for phospholipids; for nonphospholipids use
@@ -1247,18 +1346,26 @@ class MembraneBuilder(BaseModule):
             best_result = None
             best_clearance = -np.inf
             for offset in np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False):
-                candidate = self._build_one_lipid((
-                    i, ln, coords, atom_names,
-                    float(grid_xy[i, 0]), float(grid_xy[i, 1]), z,
-                    base_angle + float(offset),
-                ))
+                candidate = self._build_one_lipid(
+                    (
+                        i,
+                        ln,
+                        coords,
+                        atom_names,
+                        float(grid_xy[i, 0]),
+                        float(grid_xy[i, 1]),
+                        z,
+                        base_angle + float(offset),
+                    )
+                )
                 if placed_tree is None:
                     best_result = candidate
                     break
                 candidate_search = candidate[0].copy()
                 if box_xy is not None:
                     candidate_search[:, :2] = wrap_periodic_coordinates(
-                        candidate_search[:, :2], box_xy,
+                        candidate_search[:, :2],
+                        box_xy,
                     )
                 clearance = float(placed_tree.query(candidate_search, k=1)[0].min())
                 if clearance > best_clearance:
@@ -1270,7 +1377,8 @@ class MembraneBuilder(BaseModule):
             tree_options = {}
             if box_xy is not None:
                 placed_search[:, :2] = wrap_periodic_coordinates(
-                    placed_search[:, :2], box_xy,
+                    placed_search[:, :2],
+                    box_xy,
                 )
                 tree_options = {"boxsize": np.asarray([box_xy, box_xy, 0.0])}
             placed_tree = cKDTree(placed_search, **tree_options)
@@ -1293,13 +1401,17 @@ class MembraneBuilder(BaseModule):
             resids=all_resids,
             elements=all_elements,
         )
-        return System(structure=structure, metadata={
-            "n_lipids": used,
-            "lipid_sizes": lipid_sizes,
-            "headgroup_anchor_local_indices": headgroup_anchor_local_indices,
-            "library_hits": library_hits,
-            "bootstrap_hits": bootstrap_hits,
-        })
+        return System(
+            structure=structure,
+            metadata={
+                "n_lipids": used,
+                "lipid_sizes": lipid_sizes,
+                "headgroup_anchor_local_indices": headgroup_anchor_local_indices,
+                "library_hits": library_hits,
+                "bootstrap_hits": bootstrap_hits,
+                "bootstrap_conformer_retries": bootstrap_conformer_retries,
+            },
+        )
 
 
 def _select_spread_positions(
@@ -1329,7 +1441,7 @@ def _select_spread_positions(
         selected[index] = int(np.argmax(min_distance_sq))
         distance_sq = squared_distances(points[selected[index]])
         min_distance_sq = np.minimum(min_distance_sq, distance_sq)
-        min_distance_sq[selected[:index + 1]] = -1.0
+        min_distance_sq[selected[: index + 1]] = -1.0
     return selected
 
 
@@ -1352,7 +1464,8 @@ def _leaflet_orientation_data(
         molecule_names = [str(value).strip() for value in names[start:end]]
         try:
             profile = infer_lipid_orientation(
-                leaflet_system.coordinates[start:end], molecule_names,
+                leaflet_system.coordinates[start:end],
+                molecule_names,
             )
         except LipidOrientationError as exc:
             leaflet_name = "upper" if upper else "lower"
@@ -1362,9 +1475,7 @@ def _leaflet_orientation_data(
         projection, cosine = outward_orientation(profile, upper=upper)
         projections.append(projection)
         cosines.append(cosine)
-        tail_z.append(
-            leaflet_system.coordinates[start:end][profile.tail_indices, 2]
-        )
+        tail_z.append(leaflet_system.coordinates[start:end][profile.tail_indices, 2])
     return (
         np.asarray(projections, dtype=float),
         np.asarray(cosines, dtype=float),
@@ -1376,6 +1487,8 @@ def _validate_bilayer_structure(
     upper_system: System,
     lower_system: System,
     log: list[str],
+    *,
+    allow_repairable_core_gap: bool = False,
 ) -> dict:
     """Enforce chemical orientation and hydrophobic-core continuity.
 
@@ -1384,16 +1497,16 @@ def _validate_bilayer_structure(
     layer at the midplane is not emitted as a successful membrane.
     """
     upper_projection, upper_cosine, upper_tail_z = _leaflet_orientation_data(
-        upper_system, upper=True,
+        upper_system,
+        upper=True,
     )
     lower_projection, lower_cosine, lower_tail_z = _leaflet_orientation_data(
-        lower_system, upper=False,
+        lower_system,
+        upper=False,
     )
     projections = np.concatenate((upper_projection, lower_projection))
     cosines = np.concatenate((upper_cosine, lower_cosine))
-    invalid = (projections < MIN_INWARD_PROJECTION_NM) | (
-        cosines < MIN_INWARD_COSINE
-    )
+    invalid = (projections < MIN_INWARD_PROJECTION_NM) | (cosines < MIN_INWARD_COSINE)
     if invalid.any():
         raise ModuleConfigError(
             "Membrane orientation validation failed: "
@@ -1416,7 +1529,8 @@ def _validate_bilayer_structure(
     lower_inner = float(np.percentile(lower_tail_z, 99.0))
     tail_core_gap = upper_inner - lower_inner
     maximum_core_gap = MAX_TAIL_CORE_GAP_NM
-    if tail_core_gap > maximum_core_gap:
+    core_sealed = tail_core_gap <= maximum_core_gap
+    if not core_sealed and not allow_repairable_core_gap:
         raise ModuleConfigError(
             "Membrane hydrophobic core is not sealed: "
             f"leaflet tail gap {tail_core_gap:.3f} nm exceeds "
@@ -1428,12 +1542,20 @@ def _validate_bilayer_structure(
         f"{len(projections)} lipids have solvent-facing heads and inward tails "
         f"(minimum inward projection {projections.min():.3f} nm)"
     )
-    log.append(
-        f"Hydrophobic core sealed: tail gap {tail_core_gap:.3f} nm "
-        "(negative values indicate interdigitation)"
-    )
+    if core_sealed:
+        log.append(
+            f"Hydrophobic core sealed: tail gap {tail_core_gap:.3f} nm "
+            "(negative values indicate interdigitation)"
+        )
+    else:
+        log.append(
+            "WARNING: offline bootstrap core gap "
+            f"{tail_core_gap:.3f} nm requires rigid regridding, gradual "
+            "precompression, and explicit-solvent equilibration"
+        )
     return {
-        "passed": True,
+        "passed": bool(core_sealed),
+        "repair_required": bool(not core_sealed),
         "n_lipids_checked": len(projections),
         "minimum_inward_projection_nm": float(projections.min()),
         "minimum_inward_cosine": float(cosines.min()),
@@ -1490,18 +1612,15 @@ def _close_leaflets(
     if box_xy is not None and (not np.isfinite(box_xy) or box_xy <= 0.0):
         raise ValueError("box_xy must be a positive finite length")
 
-    current_dhh = _leaflet_headgroup_plane(
-        upper_system, upper=True
-    ) - _leaflet_headgroup_plane(lower_system, upper=False)
+    current_dhh = _leaflet_headgroup_plane(upper_system, upper=True) - _leaflet_headgroup_plane(
+        lower_system, upper=False
+    )
     # Leaflet translation is a last-resort bulk correction.  Registry DHH is
     # an approximate fluid-bilayer target rather than an exact constraint;
     # allow a 5% contraction while sealing the core.  The previous fixed
     # 0.10-nm allowance was only ~2% for thick sphingomyelins and left a
     # water-sized midplane gap even with otherwise physical tail geometry.
-    dhh_tolerance = (
-        max(0.10, 0.05 * float(target_dhh))
-        if target_dhh is not None else 0.10
-    )
+    dhh_tolerance = max(0.10, 0.05 * float(target_dhh)) if target_dhh is not None else 0.10
     max_outward = float("inf")
     max_inward = float("inf")
     if target_dhh is not None:
@@ -1513,34 +1632,34 @@ def _close_leaflets(
     lower_search = lower_coords.copy()
     tree_options = {}
     if box_xy is not None:
-        z_origin = min(
-            float(upper_search[:, 2].min()), float(lower_search[:, 2].min())
-        ) - 1.0
-        z_box = max(
-            float(upper_search[:, 2].max()), float(lower_search[:, 2].max())
-        ) - z_origin + 1.0
+        z_origin = min(float(upper_search[:, 2].min()), float(lower_search[:, 2].min())) - 1.0
+        z_box = (
+            max(float(upper_search[:, 2].max()), float(lower_search[:, 2].max())) - z_origin + 1.0
+        )
         upper_search[:, :2] = wrap_periodic_coordinates(
-            upper_search[:, :2], box_xy,
+            upper_search[:, :2],
+            box_xy,
         )
         lower_search[:, :2] = wrap_periodic_coordinates(
-            lower_search[:, :2], box_xy,
+            lower_search[:, :2],
+            box_xy,
         )
         upper_search[:, 2] -= z_origin
         lower_search[:, 2] -= z_origin
         tree_options = {"boxsize": np.asarray([box_xy, box_xy, z_box])}
     tree = cKDTree(upper_search, **tree_options)
-    dists, _ = tree.query(
-        lower_search, k=1, workers=configured_task_threads()
-    )
+    dists, _ = tree.query(lower_search, k=1, workers=configured_task_threads())
     min_dist = float(dists.min())
 
     # ---- metric 2: chemically identified hydrophobic-tail Z-gap ----
     # Headgroup atoms must not make an inverted conformation look sealed.
     _, _, upper_hydrophobic_z = _leaflet_orientation_data(
-        upper_system, upper=True,
+        upper_system,
+        upper=True,
     )
     _, _, lower_hydrophobic_z = _leaflet_orientation_data(
-        lower_system, upper=False,
+        lower_system,
+        upper=False,
     )
     upper_tail_z = float(np.percentile(upper_hydrophobic_z, 1))
     lower_tail_z = float(np.percentile(lower_hydrophobic_z, 99))
@@ -1557,8 +1676,7 @@ def _close_leaflets(
             upper_system.structure.translate(np.array([0.0, 0.0, +separation]))
             lower_system.structure.translate(np.array([0.0, 0.0, -separation]))
             log.append(
-                f"Leaflet separation: clash {min_dist:.3f} nm; "
-                f"backed off {separation:.3f} nm each"
+                f"Leaflet separation: clash {min_dist:.3f} nm; backed off {separation:.3f} nm each"
             )
         return
 
@@ -1569,7 +1687,9 @@ def _close_leaflets(
     target_bulk_overlap = 0.05  # nm — slight interdigitation of tail clouds
 
     # Shift needed to close the bulk tail gap
-    shift_from_bulk = (bulk_gap + target_bulk_overlap) / 2.0 if bulk_gap > -target_bulk_overlap else 0.0
+    shift_from_bulk = (
+        (bulk_gap + target_bulk_overlap) / 2.0 if bulk_gap > -target_bulk_overlap else 0.0
+    )
     # Shift that would bring closest atoms to the safety limit
     # Shift that creates the desired min distance (target contact)
     shift_from_target = (min_dist - (target_contact + backoff_margin)) / 2.0
@@ -1591,8 +1711,7 @@ def _close_leaflets(
             )
         else:
             log.append(
-                f"Leaflets: bulk gap {bulk_gap:.3f} nm — shift too small "
-                f"({shift:.4f} nm), skipped"
+                f"Leaflets: bulk gap {bulk_gap:.3f} nm — shift too small ({shift:.4f} nm), skipped"
             )
     elif shift_from_target > 0.01 and min_dist > safety_min_dist:
         # No significant bulk gap but atom pairs too far apart
@@ -1613,13 +1732,11 @@ def _close_leaflets(
             upper_system.structure.translate(np.array([0.0, 0.0, +shift]))
             lower_system.structure.translate(np.array([0.0, 0.0, -shift]))
             log.append(
-                f"Leaflet separation: clash {min_dist:.3f} nm → "
-                f"backed off {shift:.3f} nm each"
+                f"Leaflet separation: clash {min_dist:.3f} nm → backed off {shift:.3f} nm each"
             )
     else:
         log.append(
-            f"Leaflets at optimal contact "
-            f"(min {min_dist:.3f} nm, bulk gap {bulk_gap:.3f} nm)"
+            f"Leaflets at optimal contact (min {min_dist:.3f} nm, bulk gap {bulk_gap:.3f} nm)"
         )
 
 
@@ -1671,9 +1788,9 @@ def _pack_lipids_against_protein(
 
     offsets = np.cumsum([0] + list(lipid_sizes))
     coords = leaflet_system.coordinates
-    surface_band = 0.6     # nm — only nudge lipids very close to the protein surface
-    step_size = 0.04       # nm — tiny incremental shift per pass
-    max_passes = 4         # converge quickly — this is a gap-filler, not a wall-builder
+    surface_band = 0.6  # nm — only nudge lipids very close to the protein surface
+    step_size = 0.04  # nm — tiny incremental shift per pass
+    max_passes = 4  # converge quickly — this is a gap-filler, not a wall-builder
 
     total_pushed = 0
 
@@ -1686,9 +1803,7 @@ def _pack_lipids_against_protein(
             end = offsets[li + 1]
             lipid_atoms = coords[start:end]
 
-            dists, idx = prot_tree.query(
-                lipid_atoms, k=1, workers=configured_task_threads()
-            )
+            dists, idx = prot_tree.query(lipid_atoms, k=1, workers=configured_task_threads())
             min_dist = float(dists.min())
 
             # Only push lipids near the protein surface
@@ -1764,8 +1879,10 @@ def _validate_membrane_quality(
     for i in range(n_cells):
         for j in range(n_cells):
             in_cell = (
-                (lipid_xy[:, 0] >= cell_edges[i]) & (lipid_xy[:, 0] < cell_edges[i + 1]) &
-                (lipid_xy[:, 1] >= cell_edges[j]) & (lipid_xy[:, 1] < cell_edges[j + 1])
+                (lipid_xy[:, 0] >= cell_edges[i])
+                & (lipid_xy[:, 0] < cell_edges[i + 1])
+                & (lipid_xy[:, 1] >= cell_edges[j])
+                & (lipid_xy[:, 1] < cell_edges[j + 1])
             )
             cell_counts[i, j] = in_cell.sum()
     # Exclude cells overlapping protein
@@ -1776,8 +1893,10 @@ def _validate_membrane_quality(
                 cx_min, cx_max = cell_edges[i], cell_edges[i + 1]
                 cy_min, cy_max = cell_edges[j], cell_edges[j + 1]
                 prot_in_cell = (
-                    (prot_xy[:, 0] >= cx_min) & (prot_xy[:, 0] < cx_max) &
-                    (prot_xy[:, 1] >= cy_min) & (prot_xy[:, 1] < cy_max)
+                    (prot_xy[:, 0] >= cx_min)
+                    & (prot_xy[:, 0] < cx_max)
+                    & (prot_xy[:, 1] >= cy_min)
+                    & (prot_xy[:, 1] < cy_max)
                 ).sum()
                 if prot_in_cell > 10:
                     cell_counts[i, j] = -1
@@ -1790,7 +1909,7 @@ def _validate_membrane_quality(
         if empty_cells > total_valid * 0.15:
             log.append(
                 f"⚠ Membrane has {empty_cells} empty XY cells "
-                f"({empty_cells}/{total_valid}, {empty_cells/total_valid*100:.0f}%). "
+                f"({empty_cells}/{total_valid}, {empty_cells / total_valid * 100:.0f}%). "
                 f"Increase lipids per leaflet for full coverage."
             )
 
@@ -1804,7 +1923,8 @@ def _validate_membrane_quality(
         rng_check = np.random.default_rng(42)
         sample_points = rng_check.uniform(0.0, box_xy, (n_xy_samples, 2))
         periodic_lipid_xy = wrap_periodic_coordinates(
-            lipid_coords[:, :2] + box_xy / 2.0, box_xy,
+            lipid_coords[:, :2] + box_xy / 2.0,
+            box_xy,
         )
         lipid_tree = cKDTree(periodic_lipid_xy, boxsize=box_xy)
         gap_count = 0
@@ -1822,11 +1942,11 @@ def _validate_membrane_quality(
         gap_fraction = gap_count / n_xy_samples
         if gap_fraction > 0.20:
             log.append(
-                f"⚠ Membrane has Z-axis gaps in {gap_fraction*100:.0f}% of "
+                f"⚠ Membrane has Z-axis gaps in {gap_fraction * 100:.0f}% of "
                 f"sampled XY area. Increase lipids per leaflet to seal the bilayer."
             )
         elif gap_fraction > 0.0:
-            log.append(f"Membrane Z-seal: {gap_fraction*100:.0f}% sparse (within tolerance)")
+            log.append(f"Membrane Z-seal: {gap_fraction * 100:.0f}% sparse (within tolerance)")
 
     # ---- Check 3: protein-lipid interface seal ----
     if has_protein:
@@ -1839,17 +1959,15 @@ def _validate_membrane_quality(
             lipid_z_min = float(lipid_coords[:, 2].min())
             lipid_z_max = float(lipid_coords[:, 2].max())
             if protein_z_max < lipid_z_min or protein_z_min > lipid_z_max:
-                    raise ModuleConfigError(
-                        "Protein and bilayer Z envelopes do not intersect after membrane "
-                        "construction. Re-run protein orientation or manually place the "
-                        "protein within the membrane preview before continuing. "
-                        f"Protein Z={protein_z_min:.3f}..{protein_z_max:.3f} nm; "
-                        f"bilayer Z={lipid_z_min:.3f}..{lipid_z_max:.3f} nm."
-                    )
+                raise ModuleConfigError(
+                    "Protein and bilayer Z envelopes do not intersect after membrane "
+                    "construction. Re-run protein orientation or manually place the "
+                    "protein within the membrane preview before continuing. "
+                    f"Protein Z={protein_z_min:.3f}..{protein_z_max:.3f} nm; "
+                    f"bilayer Z={lipid_z_min:.3f}..{lipid_z_max:.3f} nm."
+                )
             lipid_tree_3d = cKDTree(lipid_coords)
-            prot_dists, _ = lipid_tree_3d.query(
-                prot_coords, k=1, workers=configured_task_threads()
-            )
+            prot_dists, _ = lipid_tree_3d.query(prot_coords, k=1, workers=configured_task_threads())
             closest_5pct = float(np.percentile(prot_dists, 5))
             closest_10pct = float(np.percentile(prot_dists, 10))
             if closest_5pct > 0.40:
@@ -1878,12 +1996,15 @@ def _validate_membrane_quality(
         prot_coords = coords[:n_solute]
         box_half = box_xy / 2.0
         # Distance from each protein atom to each of the 4 box edges
-        dist_to_edges = np.stack([
-            prot_coords[:, 0] - (-box_half),   # left edge
-            box_half - prot_coords[:, 0],       # right edge
-            prot_coords[:, 1] - (-box_half),   # bottom edge
-            box_half - prot_coords[:, 1],       # top edge
-        ], axis=1)  # (N_prot, 4)
+        dist_to_edges = np.stack(
+            [
+                prot_coords[:, 0] - (-box_half),  # left edge
+                box_half - prot_coords[:, 0],  # right edge
+                prot_coords[:, 1] - (-box_half),  # bottom edge
+                box_half - prot_coords[:, 1],  # top edge
+            ],
+            axis=1,
+        )  # (N_prot, 4)
         min_edge_dist = float(dist_to_edges.min())
         min_buffer = 2.0  # nm — ~4-5 POPC diameters, prevents periodic image contact
         if min_edge_dist < min_buffer:

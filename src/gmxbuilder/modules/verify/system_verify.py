@@ -27,8 +27,8 @@ from gmxbuilder.modules import register_module
 # Tolerance thresholds
 # ---------------------------------------------------------------------------
 
-BOX_TOLERANCE_NM = 0.5          # nm — box dimensions must match within this
-MEMBRANE_Z_TOLERANCE_NM = 0.5   # nm — membrane midplane Z within this
+BOX_TOLERANCE_NM = 0.5  # nm — box dimensions must match within this
+MEMBRANE_Z_TOLERANCE_NM = 0.5  # nm — membrane midplane Z within this
 PROTEIN_COM_TOLERANCE_NM = 0.5  # nm — protein COM within this
 PROTEIN_EXTENT_TOLERANCE_NM = 0.6  # nm — per-axis protein CA extent
 
@@ -71,8 +71,10 @@ class SystemVerificationModule(BaseModule):
         preview_path = output_dir / "preview.pdb"
         try:
             from gmxbuilder.io.pdb import PDBWriter
-            PDBWriter.write(system.structure, preview_path,
-                            title="GMXBUILDER System Verification Preview")
+
+            PDBWriter.write(
+                system.structure, preview_path, title="GMXBUILDER System Verification Preview"
+            )
             log.append(f"Wrote preview PDB: {preview_path}")
         except Exception as exc:
             log.append(f"Warning: could not write preview PDB: {exc}")
@@ -200,6 +202,7 @@ class SystemVerificationModule(BaseModule):
         """Read GRO file and compute metrics, using system components for atom classification."""
         try:
             from gmxbuilder.io.gro import GROReader
+
             gro_struct = GROReader().read(gro_path)
         except Exception:
             return None
@@ -369,9 +372,7 @@ class SystemVerificationModule(BaseModule):
             sv = sys_box[i] if i < len(sys_box) else 0
             gv = gro_box[i] if i < len(gro_box) else 0
             if abs(sv - gv) > tight_tol:
-                errors.append(
-                    f"GRO vs System box {axis}: system={sv:.3f} nm, gro={gv:.3f} nm"
-                )
+                errors.append(f"GRO vs System box {axis}: system={sv:.3f} nm, gro={gv:.3f} nm")
 
         # Protein COM
         sys_prot = sys_metrics.get("protein")
@@ -404,6 +405,7 @@ class SystemVerificationModule(BaseModule):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _json_default(obj):
     """Handle numpy types in JSON serialization."""

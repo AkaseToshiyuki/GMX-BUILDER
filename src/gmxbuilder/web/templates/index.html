@@ -77,7 +77,7 @@
           <span class="param-item"><label for="cg-eq2-temperature">Temperature (K)</label><input id="cg-eq2-temperature" type="number" value="310" min="250" max="370" step="1"></span>
           <span class="param-item"><label for="cg-eq2-tau-t">Thermostat tau (ps)</label><input id="cg-eq2-tau-t" type="number" value="1" min="0.1" max="20" step="0.1"></span>
           <span class="param-item"><label for="cg-eq2-pressure">Pressure (bar)</label><input id="cg-eq2-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></span>
-          <span class="param-item"><label for="cg-eq2-tau-p">Barostat tau (ps)</label><input id="cg-eq2-tau-p" type="number" value="4" min="0.1" max="50" step="0.1"></span>
+          <span class="param-item"><label for="cg-eq2-tau-p">Barostat tau (ps)</label><input id="cg-eq2-tau-p" type="number" value="5" min="0.1" max="50" step="0.1"></span>
         </div><p class="hint">Pressure geometry is automatically semi-isotropic for bilayers and isotropic for solution systems.</p></div></div>
         <div class="sim-stage-card" style="border-color:#6366f1"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9679;</span><span class="sim-stage-title">Production</span><span class="sim-stage-summary">Required; starts after the last enabled equilibration stage</span></div><div class="sim-stage-body open"><div class="param-row">
           <span class="param-item"><label for="cg-production-ns">Duration (ns)</label><input id="cg-production-ns" type="number" value="1000" min="1" max="100000" step="100"></span>
@@ -85,7 +85,7 @@
           <span class="param-item"><label for="cg-production-temperature">Temperature (K)</label><input id="cg-production-temperature" type="number" value="310" min="250" max="370" step="1"></span>
           <span class="param-item"><label for="cg-production-tau-t">Thermostat tau (ps)</label><input id="cg-production-tau-t" type="number" value="1" min="0.1" max="20" step="0.1"></span>
           <span class="param-item"><label for="cg-production-pressure">Pressure (bar)</label><input id="cg-production-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></span>
-          <span class="param-item"><label for="cg-production-tau-p">Barostat tau (ps)</label><input id="cg-production-tau-p" type="number" value="4" min="0.1" max="50" step="0.1"></span>
+          <span class="param-item"><label for="cg-production-tau-p">Barostat tau (ps)</label><input id="cg-production-tau-p" type="number" value="5" min="0.1" max="50" step="0.1"></span>
         </div><div class="param-row">
           <span class="param-item"><label for="cg-output-ps">Trajectory interval (ps)</label><input id="cg-output-ps" type="number" value="100" min="1" step="10"></span>
           <span class="param-item"><label for="cg-energy-ps">Energy interval (ps)</label><input id="cg-energy-ps" type="number" value="20" min="0.02" step="1"></span>
@@ -204,18 +204,63 @@
 
     <section class="panel" id="panel-cg_orientation">
       <h2>Protein Orientation in Membrane</h2>
-      <p class="section-desc">Position the mapped Martini protein relative to the bilayer midplane before adding lipids.</p>
-      <div class="validation-info"><b>Automatic mode:</b> a local PPM-like transfer-free-energy scan ranks whole-protein and hydrophobic-segment axes. Grey planes mark the hydrophobic-core boundaries; inspect the result because this is not the external OPM/PPM server.</div>
+      <p class="section-desc">Determine how the mapped Martini protein is positioned in the lipid bilayer — insertion depth and tilt angle.</p>
+      <input id="cg-orientation-half-thickness" type="hidden" value="1.4">
       <div class="form-grid" id="cg-orientation-controls">
-        <div class="field"><label for="cg-orientation-method">Method</label><select id="cg-orientation-method"><option value="ppm">Automatic PPM-like positioning</option><option value="manual">Manual adjustment</option></select></div>
-        <div class="field"><label for="cg-orientation-half-thickness">Hydrophobic half-thickness (nm)</label><input id="cg-orientation-half-thickness" type="number" value="1.4" min="0.8" max="2.5" step="0.1"><span class="hint">Distance from the bilayer midplane to one hydrophobic-core boundary.</span></div>
-        <div class="field cg-orientation-manual"><label for="cg-orient-rotate-x">Rotation X (°)</label><input id="cg-orient-rotate-x" type="number" value="0" min="-180" max="180"></div>
-        <div class="field cg-orientation-manual"><label for="cg-orient-rotate-y">Rotation Y (°)</label><input id="cg-orient-rotate-y" type="number" value="0" min="-180" max="180"></div>
-        <div class="field cg-orientation-manual"><label for="cg-orient-rotate-z">Rotation Z (°)</label><input id="cg-orient-rotate-z" type="number" value="0" min="-180" max="180"></div>
-        <div class="field cg-orientation-manual"><label for="cg-orient-z-offset">Z offset (nm)</label><input id="cg-orient-z-offset" type="number" value="0" min="-8" max="8" step="0.1"></div>
+        <div class="field">
+          <label>Orientation Method</label>
+          <div class="orient-method-tabs">
+            <button type="button" class="cg-orient-tab active" data-method="ppm" id="cg-orient-tab-ppm">&#9678; Auto</button>
+            <button type="button" class="cg-orient-tab" data-method="manual" id="cg-orient-tab-manual">&#9681; Manual Adjustment</button>
+          </div>
+        </div>
+
+        <div class="orient-auto-result" id="cg-orient-auto-result">
+          <div class="field">
+            <label>Algorithm</label>
+            <div class="readonly-field">PPM-like — Wimley-White/CG hydrophobic-segment scan</div>
+          </div>
+          <table>
+            <tr><td>Z-offset</td><td id="cg-orient-result-z">— nm</td></tr>
+            <tr><td>Tilt refinement</td><td id="cg-orient-result-tilt">—°</td></tr>
+            <tr><td>Description</td><td><span class="hint">Local PPM-like transfer-energy minimization over mapped Martini backbone beads. Review the result because this is not the external OPM/PPM server.</span></td></tr>
+          </table>
+          <p class="hint" style="margin-top:6px;">&#9432; If the orientation appears incorrect, switch to Manual Adjustment.</p>
+          <button type="button" class="btn" id="cg-orient-rerun-btn">&#8635; Re-run</button>
+        </div>
+
+        <div class="orient-manual hidden" id="cg-orient-manual">
+          <p class="hint">Adjust the automatic base pose. The grey membrane remains fixed; every slider movement previews the exact independent Martini backend transform that Check will save.</p>
+          <div class="orient-controls">
+            <div class="field">
+              <label>Z-offset: <span id="cg-orient-manual-z-val">0.00</span> nm</label>
+              <div class="slider-with-input">
+                <input type="range" id="cg-orient-manual-z" min="-10" max="10" step="0.05" value="0">
+                <input type="number" id="cg-orient-manual-z-num" value="0.00" min="-10" max="10" step="0.05" style="width:80px">
+              </div>
+            </div>
+            <div class="field">
+              <label>Tilt angle: <span id="cg-orient-manual-tilt-val">0</span>°</label>
+              <div class="slider-with-input">
+                <input type="range" id="cg-orient-manual-tilt" min="0" max="45" step="1" value="0">
+                <input type="number" id="cg-orient-manual-tilt-num" value="0" min="0" max="45" step="1" style="width:80px">
+              </div>
+            </div>
+            <div class="field">
+              <label>Tilt direction: <span id="cg-orient-manual-phi-val">0</span>°</label>
+              <div class="slider-with-input">
+                <input type="range" id="cg-orient-manual-phi" min="0" max="360" step="5" value="0">
+                <input type="number" id="cg-orient-manual-phi-num" value="0" min="0" max="360" step="1" style="width:80px">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="info-section-title" style="margin-top:16px;">Membrane Position Preview <span class="hint">— grey planes show membrane</span></h3>
+        <div class="viewer-box" id="cg-orientation-viewer" style="height:380px"></div>
+        <p id="cg-orient-preview-status" class="hint" aria-live="polite"></p>
+        <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-orientation-check">&#10003; Check Orientation</button><span class="hint" id="cg-orientation-status"></span></div>
       </div>
-      <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-orientation-check">&#10003; Position Protein</button><span class="hint" id="cg-orientation-status"></span></div>
-      <div class="viewer-box" id="cg-orientation-viewer" style="height:360px"></div>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
@@ -248,6 +293,7 @@
       </div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-environment-check">&#10003; Build Environment</button><span class="hint" id="cg-environment-status"></span></div>
       <div class="viewer-box" id="cg-environment-viewer" style="height:360px"></div>
+      <p class="hint cg-construction-state-note">This viewer shows the dry COBY construction geometry with topology-defined Martini bead connections. It is not an energy-minimized or equilibrated membrane. Use the exported minimization, NVT, and semi-isotropic NPT stages before interpreting bilayer structure or properties.</p>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
@@ -708,7 +754,7 @@
 <script src="/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js"></script>
 <script src="/static/constants.js?v=1"></script>
 <script src="/static/ions.js?v=10"></script>
-<script src="/static/app.js?v=68"></script>
+<script src="/static/app.js?v=70"></script>
 
 <!-- Custom Lipid Modal -->
 <div class="modal-overlay hidden" id="custom-lipid-modal">

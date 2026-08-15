@@ -13,11 +13,35 @@ from gmxbuilder.modules import register_module
 
 
 _HYDROPHOBIC_RESIDUES = {
-    "ILE", "LEU", "VAL", "PHE", "TRP", "TYR", "MET", "CYS", "CYX",
+    "ILE",
+    "LEU",
+    "VAL",
+    "PHE",
+    "TRP",
+    "TYR",
+    "MET",
+    "CYS",
+    "CYX",
 }
 _CHARGED_RESIDUES = {
-    "ARG", "LYS", "ASP", "GLU", "HIP", "SEP", "TPO", "PTR", "S1P", "T1P", "Y1P",
-    "MLZ", "MLY", "M3L", "2MR", "DA2", "OCS", "KCX",
+    "ARG",
+    "LYS",
+    "ASP",
+    "GLU",
+    "HIP",
+    "SEP",
+    "TPO",
+    "PTR",
+    "S1P",
+    "T1P",
+    "Y1P",
+    "MLZ",
+    "MLY",
+    "M3L",
+    "2MR",
+    "DA2",
+    "OCS",
+    "KCX",
 }
 
 
@@ -39,10 +63,11 @@ def assess_membrane_orientation(
             "warnings": ["No protein component is available for orientation checks."],
         }
 
-    atom_indices = np.unique(np.concatenate([
-        np.asarray(component.atom_indices, dtype=int)
-        for component in protein_components
-    ]))
+    atom_indices = np.unique(
+        np.concatenate(
+            [np.asarray(component.atom_indices, dtype=int) for component in protein_components]
+        )
+    )
     structure = system.structure
     residue_atoms: dict[tuple[str, int, str], list[int]] = {}
     for index in atom_indices:
@@ -59,10 +84,7 @@ def assess_membrane_orientation(
     for key, indices in residue_atoms.items():
         _chain, _resid, resname = key
         ca_index = next(
-            (
-                index for index in indices
-                if structure.atom_names[index].strip().upper() == "CA"
-            ),
+            (index for index in indices if structure.atom_names[index].strip().upper() == "CA"),
             None,
         )
         coordinate = (
@@ -78,24 +100,16 @@ def assess_membrane_orientation(
             "warnings": ["No protein residue coordinates could be assessed."],
         }
 
-    core_rows = [
-        row for row in residue_rows if abs(float(row[2][2])) <= half_thickness
-    ]
-    hydrophobic_core = [
-        row for row in core_rows if row[1] in _HYDROPHOBIC_RESIDUES
-    ]
-    charged_core = [
-        row for row in core_rows if row[1] in _CHARGED_RESIDUES
-    ]
+    core_rows = [row for row in residue_rows if abs(float(row[2][2])) <= half_thickness]
+    hydrophobic_core = [row for row in core_rows if row[1] in _HYDROPHOBIC_RESIDUES]
+    charged_core = [row for row in core_rows if row[1] in _CHARGED_RESIDUES]
     n_residues = len(residue_rows)
     n_core = len(core_rows)
     core_fraction = n_core / n_residues
     hydrophobic_core_fraction = len(hydrophobic_core) / max(n_core, 1)
     charged_core_fraction = len(charged_core) / max(n_core, 1)
     z_values = np.asarray([float(row[2][2]) for row in residue_rows])
-    spans_bilayer = bool(
-        z_values.min() <= -half_thickness and z_values.max() >= half_thickness
-    )
+    spans_bilayer = bool(z_values.min() <= -half_thickness and z_values.max() >= half_thickness)
 
     warnings: list[str] = []
     if n_core < 3:
@@ -148,16 +162,11 @@ def assess_membrane_orientation(
         axis = np.asarray(tm_analysis["axis"], dtype=float)
         tm_bundle_tilt = float(np.degrees(np.arccos(np.clip(abs(axis[2]), 0.0, 1.0))))
         window_axes = np.asarray(tm_analysis["window_axes"], dtype=float)
-        window_tilts = np.degrees(
-            np.arccos(np.clip(np.abs(window_axes[:, 2]), 0.0, 1.0))
-        )
+        window_tilts = np.degrees(np.arccos(np.clip(np.abs(window_axes[:, 2]), 0.0, 1.0)))
         median_tm_window_tilt = float(np.median(window_tilts))
         covered_keys = tm_analysis["covered_residue_keys"]
         non_tm_rows = [row for row in residue_rows if row[0] not in covered_keys]
-        non_tm_core_rows = [
-            row for row in non_tm_rows
-            if abs(float(row[2][2])) <= half_thickness
-        ]
+        non_tm_core_rows = [row for row in non_tm_rows if abs(float(row[2][2])) <= half_thickness]
         non_tm_core_fraction = len(non_tm_core_rows) / max(len(non_tm_rows), 1)
         if tm_bundle_tilt > 20.0:
             warnings.append(
@@ -209,22 +218,18 @@ def assess_membrane_orientation(
             round(tm_bundle_tilt, 2) if tm_bundle_tilt is not None else None
         ),
         "median_tm_window_tilt_degrees": (
-            round(median_tm_window_tilt, 2)
-            if median_tm_window_tilt is not None else None
+            round(median_tm_window_tilt, 2) if median_tm_window_tilt is not None else None
         ),
         "non_tm_residue_count": len(non_tm_rows) if tm_confident else None,
         "non_tm_core_residue_count": len(non_tm_core_rows) if tm_confident else None,
         "non_tm_core_fraction": (
-            round(len(non_tm_core_rows) / max(len(non_tm_rows), 1), 4)
-            if tm_confident else None
+            round(len(non_tm_core_rows) / max(len(non_tm_rows), 1), 4) if tm_confident else None
         ),
         "applied_transfer_score": (
-            round(applied_transfer_score, 4)
-            if applied_transfer_score is not None else None
+            round(applied_transfer_score, 4) if applied_transfer_score is not None else None
         ),
         "optimal_transfer_score": (
-            round(float(optimal_transfer_score), 4)
-            if optimal_transfer_score is not None else None
+            round(float(optimal_transfer_score), 4) if optimal_transfer_score is not None else None
         ),
     }
 
@@ -250,9 +255,7 @@ class OrientModule(BaseModule):
             except (TypeError, ValueError) as exc:
                 raise ModuleConfigError("half_thickness must be a finite number") from exc
             if not np.isfinite(half_thickness) or not 0.5 <= half_thickness <= 3.0:
-                raise ModuleConfigError(
-                    "half_thickness must be between 0.5 and 3.0 nm"
-                )
+                raise ModuleConfigError("half_thickness must be between 0.5 and 3.0 nm")
         if method == "manual":
             values: dict[str, float] = {}
             for key, default in (("tilt", 0.0), ("z_offset", 0.0), ("phi", 0.0)):
@@ -282,9 +285,7 @@ class OrientModule(BaseModule):
     def run(self, system: System, config: dict) -> ModuleResult:
         method = config.get("method", "ppm")
         half_thickness = (
-            float(config["half_thickness"])
-            if config.get("half_thickness") is not None
-            else None
+            float(config["half_thickness"]) if config.get("half_thickness") is not None else None
         )
         has_protein = bool(system.component_by_kind(ComponentKind.PROTEIN))
         log = []
@@ -294,15 +295,17 @@ class OrientModule(BaseModule):
             if method == "manual":
                 z_off = float(config.get("z_offset", 0.0))
                 tilt = float(config.get("tilt", 0.0))
-                phi  = float(config.get("phi", 0.0))
+                phi = float(config.get("phi", 0.0))
                 # Use PPM to find the best membrane-normal axis (matching the
                 # orientation the user sees in the 3D viewer).  Only the axis
                 # rotation is applied — manual z_offset/tilt/phi REPLACE PPM's
                 # computed values rather than adding on top of them.
                 from gmxbuilder.modules.membrane.orient import _find_best_ppm_orientation
                 from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
+
                 best_axis, _, _, _, _, _ = _find_best_ppm_orientation(
-                    system.structure, half_thickness=half_thickness)
+                    system.structure, half_thickness=half_thickness
+                )
                 rot = rotation_matrix_from_vectors(best_axis, np.array([0, 0, 1]))
                 system.structure.rotate(rot)
                 # Apply manual Z offset (replaces PPM's z_offset)
@@ -320,8 +323,7 @@ class OrientModule(BaseModule):
                     "phi": float(phi),
                 }
                 log.append(
-                    f"Manual orientation: Z-offset={z_off:.2f} nm, "
-                    f"tilt={tilt:.1f}°, phi={phi:.0f}°"
+                    f"Manual orientation: Z-offset={z_off:.2f} nm, tilt={tilt:.1f}°, phi={phi:.0f}°"
                 )
             else:
                 from gmxbuilder.modules.membrane.orient import apply_auto_orientation

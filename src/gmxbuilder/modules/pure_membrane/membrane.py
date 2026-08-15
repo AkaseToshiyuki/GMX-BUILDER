@@ -14,9 +14,7 @@ class PureMembraneBuilder(MembraneBuilder):
 
     def run(self, system: System, config: dict) -> ModuleResult:
         if system.num_atoms or system.components:
-            raise ModuleConfigError(
-                "Pure Bilayer System must start from an empty structure"
-            )
+            raise ModuleConfigError("Pure Bilayer System must start from an empty structure")
         result = super().run(system, config)
         membranes = result.system.component_by_kind(ComponentKind.MEMBRANE)
         if len(membranes) != 1 or result.system.num_atoms == 0:

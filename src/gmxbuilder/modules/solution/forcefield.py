@@ -13,12 +13,8 @@ class SolutionForceFieldSelector(ForceFieldSelector):
     def validate_config(self, config: dict) -> bool:
         super().validate_config(config)
         if config.get("lipid_names"):
-            raise ModuleConfigError(
-                "Solution Solvator does not accept membrane lipid selections"
-            )
+            raise ModuleConfigError("Solution Solvator does not accept membrane lipid selections")
         lipid_ff = str(config.get("lipid_ff", "none")).strip().lower()
         if lipid_ff not in {"", "none"}:
-            raise ModuleConfigError(
-                "Solution Solvator requires lipid_ff='none'"
-            )
+            raise ModuleConfigError("Solution Solvator requires lipid_ff='none'")
         return True

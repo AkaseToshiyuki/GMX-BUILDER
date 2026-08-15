@@ -34,9 +34,7 @@ def test_removed_and_new_task_cards_are_authoritative():
     assert pure.enabled
     assert pure.pipeline == "pure_membrane"
     assert not pure.requires_input
-    assert pure.visible_modules == [
-        "forcefield", "membrane", "solvation", "ions", "simparams"
-    ]
+    assert pure.visible_modules == ["forcefield", "membrane", "solvation", "ions", "simparams"]
 
 
 def test_solvator_and_pure_membrane_use_task_specific_module_classes():
@@ -56,22 +54,23 @@ def test_solvator_and_pure_membrane_use_task_specific_module_classes():
 
 def test_step_factory_is_scoped_by_pipeline_type():
     assert isinstance(_get_module("solvation", "solvator"), SolutionSolvationBuilder)
-    assert isinstance(
-        _get_module("solvation", "pure-membrane"), PureMembraneSolvationBuilder
-    )
+    assert isinstance(_get_module("solvation", "pure-membrane"), PureMembraneSolvationBuilder)
     assert get_pipeline_steps("pure-membrane")[0] == "forcefield"
 
 
 def test_pure_membrane_first_step_creates_checkpoint_without_upload(tmp_path):
     runner = StepRunner(tmp_path, pipeline_type="pure-membrane")
-    result = runner.run_step("forcefield", {
-        "name": "amber14sb",
-        "lipid_names": ["POPC"],
-        "lipid_ff": "lipid21",
-        "ligand_ff": "none",
-        "water_model": "tip3p",
-        "system_name": "pure_test",
-    })
+    result = runner.run_step(
+        "forcefield",
+        {
+            "name": "amber14sb",
+            "lipid_names": ["POPC"],
+            "lipid_ff": "lipid21",
+            "ligand_ff": "none",
+            "water_model": "tip3p",
+            "system_name": "pure_test",
+        },
+    )
 
     assert result["status"] == "ok"
     assert runner.has_checkpoint("forcefield")

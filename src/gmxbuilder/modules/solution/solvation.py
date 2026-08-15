@@ -14,9 +14,7 @@ class SolutionSolvationBuilder(SolvationBuilder):
 
     def run(self, system: System, config: dict) -> ModuleResult:
         if system.component_by_kind(ComponentKind.MEMBRANE):
-            raise ModuleConfigError(
-                "Solution Solvator cannot consume a membrane checkpoint"
-            )
+            raise ModuleConfigError("Solution Solvator cannot consume a membrane checkpoint")
         result = super().run(system, config)
         if not result.system.component_by_kind(ComponentKind.SOLVENT):
             raise ModuleConfigError("Solution solvation produced no solvent component")

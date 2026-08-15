@@ -68,24 +68,21 @@ def test_web_sequence_extraction_keeps_nucleic_chain():
 @pytest.mark.parametrize("force_field", ["amber14sb", "amber99sb-ildn", "charmm36"])
 def test_unvalidated_nucleic_backends_are_explicitly_blocked(force_field):
     with pytest.raises(ModuleConfigError, match="Nucleic-acid force-field selection"):
-        SolutionForceFieldSelector().run(
-            _input_system(), _force_field_config(force_field)
-        )
+        SolutionForceFieldSelector().run(_input_system(), _force_field_config(force_field))
 
 
 def test_broken_nucleic_backbone_is_explicitly_blocked():
     system = _input_system()
     right_p = next(
-        index for index, (resid, atom_name) in enumerate(zip(
-            system.structure.resids, system.structure.atom_names
-        ))
+        index
+        for index, (resid, atom_name) in enumerate(
+            zip(system.structure.resids, system.structure.atom_names)
+        )
         if int(resid) == 2 and str(atom_name).strip() == "P"
     )
     system.structure.coordinates[right_p, 0] += 1.0
     with pytest.raises(ModuleConfigError, match="backbone continuity"):
-        SolutionForceFieldSelector().run(
-            system, _force_field_config("charmm36m")
-        )
+        SolutionForceFieldSelector().run(system, _force_field_config("charmm36m"))
 
 
 def test_modified_nucleotide_is_not_routed_as_small_molecule():
@@ -105,9 +102,7 @@ def test_modified_nucleotide_is_not_routed_as_small_molecule():
     assert report["nucleic_acid"]["enabled"] is False
     assert "modified/noncanonical" in report["nucleic_acid"]["reason"]
     with pytest.raises(ModuleConfigError, match="Modified or noncanonical"):
-        SolutionForceFieldSelector().run(
-            system, _force_field_config("charmm36m")
-        )
+        SolutionForceFieldSelector().run(system, _force_field_config("charmm36m"))
 
 
 def test_free_nucleotide_like_ligand_is_not_mistaken_for_polymer():
@@ -153,13 +148,18 @@ def test_protein_and_nucleic_polymer_atoms_become_contiguous():
         elements=["C", "P", "O", "H"],
     )
     native = {"atom_indices": [1, 2]}
-    system = System(structure, components=[
-        Component("PROTEIN", ComponentKind.PROTEIN, np.asarray([0, 3])),
-        Component(
-            "NUCLEIC_D", ComponentKind.NUCLEIC_ACID, np.asarray([1, 2]),
-            metadata={"native_topology": native},
-        ),
-    ])
+    system = System(
+        structure,
+        components=[
+            Component("PROTEIN", ComponentKind.PROTEIN, np.asarray([0, 3])),
+            Component(
+                "NUCLEIC_D",
+                ComponentKind.NUCLEIC_ACID,
+                np.asarray([1, 2]),
+                metadata={"native_topology": native},
+            ),
+        ],
+    )
     _make_polymer_molecules_contiguous(system)
     assert system.structure.atom_names == ["CA", "H", "P", "O3'"]
     assert system.components[0].atom_indices.tolist() == [0, 1]
@@ -169,9 +169,9 @@ def test_protein_and_nucleic_polymer_atoms_become_contiguous():
 
 @pytest.mark.skipif(find_gromacs_executable() is None, reason="GROMACS unavailable")
 def test_native_charmm36m_dna_topology_adds_hydrogens_and_exact_charge(tmp_path):
-    system = SolutionForceFieldSelector().run(
-        _input_system(), _force_field_config("charmm36m")
-    ).system
+    system = (
+        SolutionForceFieldSelector().run(_input_system(), _force_field_config("charmm36m")).system
+    )
     prepared = SolutionStructureProcessor().run(system, {}).system
     component = prepared.component_by_kind(ComponentKind.NUCLEIC_ACID)[0]
     assert prepared.num_atoms > 38

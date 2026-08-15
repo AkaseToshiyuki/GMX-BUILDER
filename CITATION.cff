@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use GMXBUILDER, cite this software and the method/force-field references written to the exported CITATIONS.json."
+title: "GMXBUILDER"
+type: software
+authors:
+  - family-names: "Yang"
+    given-names: "Haochen"
+version: 0.9.9
+date-released: 2026-08-15
+license: MIT
+repository-code: "https://github.com/AkaseToshiyuki/GMX-BUILDER"
+url: "https://github.com/AkaseToshiyuki/GMX-BUILDER"
+keywords:
+  - GROMACS
+  - molecular dynamics
+  - membrane builder
+  - Martini 3

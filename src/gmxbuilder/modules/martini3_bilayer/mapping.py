@@ -28,11 +28,21 @@ class CGMappingModule(BaseModule):
     description = "Map a standard protein to Martini 3 beads"
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {
-            "protein_model", "secondary_structure", "secondary_structure_string",
-            "elastic", "elastic_force", "elastic_lower", "elastic_upper",
-            "seed", "_task_dir", "_step_dir",
-        })
+        self.validate_config_keys(
+            config,
+            {
+                "protein_model",
+                "secondary_structure",
+                "secondary_structure_string",
+                "elastic",
+                "elastic_force",
+                "elastic_lower",
+                "elastic_upper",
+                "seed",
+                "_task_dir",
+                "_step_dir",
+            },
+        )
         model = str(config.get("protein_model", "folded")).lower()
         if model not in {"folded", "tm_helix", "disordered"}:
             raise ModuleConfigError("protein_model must be folded, tm_helix, or disordered")
@@ -47,7 +57,9 @@ class CGMappingModule(BaseModule):
                 )
         elastic = strict_bool(config, "elastic", model == "folded")
         if model == "disordered" and elastic:
-            raise ModuleConfigError("A generic elastic network is not allowed for disordered proteins")
+            raise ModuleConfigError(
+                "A generic elastic network is not allowed for disordered proteins"
+            )
         force = float(config.get("elastic_force", 700.0))
         lower = float(config.get("elastic_lower", 0.5))
         upper = float(config.get("elastic_upper", 0.9))
@@ -60,10 +72,12 @@ class CGMappingModule(BaseModule):
     def run(self, system, config: dict) -> ModuleResult:
         if not system.metadata.get("cg_include_protein", True):
             output = system.copy()
-            output.metadata.update({
-                "cg_mapping": {"status": "not_applicable", "molecule_types": []},
-                "cg_topology_texts": {},
-            })
+            output.metadata.update(
+                {
+                    "cg_mapping": {"status": "not_applicable", "molecule_types": []},
+                    "cg_topology_texts": {},
+                }
+            )
             return ModuleResult(True, output, ["Protein mapping skipped for protein-free bilayer"])
 
         root = task_root(config)
@@ -79,22 +93,45 @@ class CGMappingModule(BaseModule):
         model = str(config.get("protein_model", "folded")).lower()
         elastic = strict_bool(config, "elastic", model == "folded")
         args = [
-            str(martinize_executable()), "-f", local_input.name,
-            "-x", "cg_protein.pdb", "-o", "protein.top",
-            "-ff", "martini3001", "-from", "charmm", "-resid", "input",
-            "-p", "backbone", "-cys", "auto", "-ignh",
+            str(martinize_executable()),
+            "-f",
+            local_input.name,
+            "-x",
+            "cg_protein.pdb",
+            "-o",
+            "protein.top",
+            "-ff",
+            "martini3001",
+            "-from",
+            "charmm",
+            "-resid",
+            "input",
+            "-p",
+            "backbone",
+            "-cys",
+            "auto",
+            "-ignh",
         ]
         if str(config.get("secondary_structure", "auto")).lower() == "manual":
             args.extend(["-ss", str(config["secondary_structure_string"]).strip().upper()])
         else:
             args.append("-dssp")
         if elastic:
-            args.extend([
-                "-elastic", "-ef", str(float(config.get("elastic_force", 700.0))),
-                "-el", str(float(config.get("elastic_lower", 0.5))),
-                "-eu", str(float(config.get("elastic_upper", 0.9))),
-                "-ea", "0", "-ep", "0",
-            ])
+            args.extend(
+                [
+                    "-elastic",
+                    "-ef",
+                    str(float(config.get("elastic_force", 700.0))),
+                    "-el",
+                    str(float(config.get("elastic_lower", 0.5))),
+                    "-eu",
+                    str(float(config.get("elastic_upper", 0.9))),
+                    "-ea",
+                    "0",
+                    "-ep",
+                    "0",
+                ]
+            )
         result = run_checked(args, cwd=work, timeout=600.0)
 
         cg_path = work / "cg_protein.pdb"
@@ -122,35 +159,47 @@ class CGMappingModule(BaseModule):
 
         output = system.copy()
         output.structure = structure
-        output.components = [Component(
-            name="Martini 3 Protein",
-            kind=ComponentKind.PROTEIN,
-            atom_indices=np.arange(structure.num_atoms, dtype=np.int64),
-            metadata={"molecule_types": molecule_types, "elastic_network": elastic},
-        )]
-        output.metadata.update({
-            "cg_topology_texts": texts,
-            "cg_protein_pdb": "steps/cg_mapping/martinize/cg_protein.pdb",
-            "cg_mapping": {
-                "status": "mapped",
-                "protein_model": model,
-                "elastic_network": elastic,
-                "elastic_force": float(config.get("elastic_force", 700.0)) if elastic else None,
-                "elastic_lower_nm": float(config.get("elastic_lower", 0.5)) if elastic else None,
-                "elastic_upper_nm": float(config.get("elastic_upper", 0.9)) if elastic else None,
-                "secondary_structure": str(config.get("secondary_structure", "auto")),
-                "molecule_types": molecule_types,
-                "beads": structure.num_atoms,
-                "protein_extent_nm": [
-                    round(float(value), 4)
-                    for value in np.ptp(structure.coordinates, axis=0)
-                ],
-            },
-        })
+        output.components = [
+            Component(
+                name="Martini 3 Protein",
+                kind=ComponentKind.PROTEIN,
+                atom_indices=np.arange(structure.num_atoms, dtype=np.int64),
+                metadata={"molecule_types": molecule_types, "elastic_network": elastic},
+            )
+        ]
+        output.metadata.update(
+            {
+                "cg_topology_texts": texts,
+                "cg_protein_pdb": "steps/cg_mapping/martinize/cg_protein.pdb",
+                "cg_connectivity_pdb": "steps/cg_mapping/martinize/cg_protein.pdb",
+                "cg_mapping": {
+                    "status": "mapped",
+                    "protein_model": model,
+                    "elastic_network": elastic,
+                    "elastic_force": float(config.get("elastic_force", 700.0)) if elastic else None,
+                    "elastic_lower_nm": float(config.get("elastic_lower", 0.5))
+                    if elastic
+                    else None,
+                    "elastic_upper_nm": float(config.get("elastic_upper", 0.9))
+                    if elastic
+                    else None,
+                    "secondary_structure": str(config.get("secondary_structure", "auto")),
+                    "molecule_types": molecule_types,
+                    "beads": structure.num_atoms,
+                    "protein_extent_nm": [
+                        round(float(value), 4) for value in np.ptp(structure.coordinates, axis=0)
+                    ],
+                },
+            }
+        )
         tail = [line for line in result.stdout.splitlines() if line.strip()][-8:]
-        return ModuleResult(True, output, [
-            f"Mapped protein to {structure.num_atoms} Martini 3 beads",
-            f"Protein molecule types: {', '.join(molecule_types)}",
-            f"Elastic network: {'enabled' if elastic else 'disabled'}",
-            *tail,
-        ])
+        return ModuleResult(
+            True,
+            output,
+            [
+                f"Mapped protein to {structure.num_atoms} Martini 3 beads",
+                f"Protein molecule types: {', '.join(molecule_types)}",
+                f"Elastic network: {'enabled' if elastic else 'disabled'}",
+                *tail,
+            ],
+        )

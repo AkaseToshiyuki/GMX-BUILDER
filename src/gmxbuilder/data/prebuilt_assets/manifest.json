@@ -1,23 +1,24 @@
 {
-  "archive": "gmxbuilder-lipid-assets-v2.tar.xz",
-  "archive_bytes": 32761932,
-  "archive_sha256": "d9decdba34b304e290b954bc8617803b4cc8eb77f1429603301f0a8f263d9344",
-  "asset_version": 2,
+  "archive": "gmxbuilder-lipid-assets-v3.tar.xz",
+  "archive_bytes": 35202412,
+  "archive_sha256": "84c96dcdce5c8a1771e19276ed7e0c5c5facdbfa31efc902b4a796fdb87e2e30",
+  "asset_version": 3,
   "contents": {
     "compatible_force_field_jobs": 260,
-    "conformations": 10600,
+    "conformations": 11400,
     "force_fields": [
       "amber14sb",
       "charmm36m",
       "charmm36"
     ],
-    "gaff2_cache_entries": 52,
-    "gaff2_cache_files": 208,
-    "strict_library_entries": 212,
-    "strict_library_files": 10812,
-    "unavailable_force_field_jobs": 48,
-    "validated_force_field_jobs": 212
+    "gaff2_cache_entries": 63,
+    "gaff2_cache_files": 252,
+    "strict_library_entries": 228,
+    "strict_library_files": 11628,
+    "unavailable_force_field_jobs": 32,
+    "validated_force_field_jobs": 228
   },
+  "download_url": "https://media.githubusercontent.com/media/AkaseToshiyuki/GMX-BUILDER/main/src/gmxbuilder/data/prebuilt_assets/gmxbuilder-lipid-assets-v3.tar.xz",
   "library_schema_version": 3,
   "schema_version": 1,
   "scientific_contract": {
@@ -26,5 +27,5 @@
     "quarantined_or_unavailable_entries_included": false,
     "strict_method": "explicit_solvent_semiisotropic_npt"
   },
-  "software_version": "0.9.0"
+  "software_version": "0.9.9"
 }

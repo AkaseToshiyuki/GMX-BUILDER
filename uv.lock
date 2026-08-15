@@ -805,7 +805,7 @@ wheels = [
 
 [[package]]
 name = "gmxbuilder"
-version = "0.9.0"
+version = "0.9.9"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -856,7 +856,7 @@ requires-dist = [
     { name = "mdtraj", specifier = "==1.10.3" },
     { name = "numpy", specifier = ">=1.24,<2.5" },
     { name = "openmm", specifier = ">=8.2" },
-    { name = "pdbfixer", git = "https://github.com/openmm/pdbfixer.git?rev=94cfa4c0ca551cdc5f13320f9a658efd59f2b881" },
+    { name = "pdbfixer", url = "https://github.com/openmm/pdbfixer/archive/94cfa4c0ca551cdc5f13320f9a658efd59f2b881.tar.gz" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
@@ -1799,12 +1799,20 @@ wheels = [
 [[package]]
 name = "pdbfixer"
 version = "1.12.0"
-source = { git = "https://github.com/openmm/pdbfixer.git?rev=94cfa4c0ca551cdc5f13320f9a658efd59f2b881#94cfa4c0ca551cdc5f13320f9a658efd59f2b881" }
+source = { url = "https://github.com/openmm/pdbfixer/archive/94cfa4c0ca551cdc5f13320f9a658efd59f2b881.tar.gz" }
 dependencies = [
     { name = "legacy-cgi", marker = "python_full_version >= '3.13'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "openmm" },
+]
+sdist = { hash = "sha256:eade9cc4abf6ebb44bde64b25e9dca3fdde71836876b6c337a0bfc905177bb6c" }
+
+[package.metadata]
+requires-dist = [
+    { name = "legacy-cgi", marker = "python_full_version >= '3.13'" },
+    { name = "numpy" },
+    { name = "openmm", specifier = ">=8.2" },
 ]
 
 [[package]]

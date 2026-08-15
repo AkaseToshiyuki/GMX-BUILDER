@@ -23,14 +23,17 @@ NEW_SMILES = "CCCCCCCCCCCCCCCCCC(=O)OCC(O)CO"
 
 def _web_task() -> str:
     task = task_manager.create_task("custom-test.pdb")
-    task_manager.update_state(task["task_id"], {
-        "task_type_id": "membrane-bilayer",
-        "task_type": {
-            "id": "membrane-bilayer",
-            "route_slug": "BilayerBuilder",
-            "requires_input": True,
+    task_manager.update_state(
+        task["task_id"],
+        {
+            "task_type_id": "membrane-bilayer",
+            "task_type": {
+                "id": "membrane-bilayer",
+                "route_slug": "BilayerBuilder",
+                "requires_input": True,
+            },
         },
-    })
+    )
     return task["task_id"]
 
 
@@ -82,9 +85,7 @@ def test_task_submission_is_private_and_not_selectable_until_ready(monkeypatch):
         with task_custom_lipid_scope(task_manager.get_task_dir(task_a)):
             with pytest.raises(KeyError):
                 LipidRegistry.get("PVA")
-        with task_custom_lipid_scope(
-            task_manager.get_task_dir(task_a), include_unready={"PVA"}
-        ):
+        with task_custom_lipid_scope(task_manager.get_task_dir(task_a), include_unready={"PVA"}):
             assert LipidRegistry.get("PVA").smiles
         with task_custom_lipid_scope(task_manager.get_task_dir(task_b)):
             with pytest.raises(KeyError):
@@ -102,7 +103,10 @@ def test_ready_task_lipid_uses_task_cache_and_cleanup_removes_all(tmp_path):
     properties = parse_custom_lipid(NEW_SMILES, "PVB")
     store.save_submission(properties, "amber14sb")
     store.update_status(
-        "PVB", state="ready", phase="complete", progress=100,
+        "PVB",
+        state="ready",
+        phase="complete",
+        progress=100,
         message="ready",
     )
     secret = store.gaff_cache / "private.dat"
@@ -131,15 +135,23 @@ def test_membrane_config_uses_server_definition_and_rejects_cross_task_reference
         properties = parse_custom_lipid(NEW_SMILES, "PVC")
         store.save_submission(properties, "amber14sb")
         store.update_status(
-            "PVC", state="ready", phase="complete", progress=100,
+            "PVC",
+            state="ready",
+            phase="complete",
+            progress=100,
             message="ready",
         )
         untrusted = {
             "lipid_composition": {
-                "upper": [{
-                    "name": "PVC", "ratio": 100,
-                    "category": "ST", "charge": 99, "smiles": "C",
-                }],
+                "upper": [
+                    {
+                        "name": "PVC",
+                        "ratio": 100,
+                        "category": "ST",
+                        "charge": 99,
+                        "smiles": "C",
+                    }
+                ],
                 "lower": None,
             }
         }
@@ -183,14 +195,10 @@ def test_workflow_routes_hide_task_ids_and_legacy_links_return_home():
     try:
         with TestClient(app) as client:
             assert client.get("/BilayerBuilder/Step1").status_code == 200
-            page = client.get(
-                f"/BilayerBuilder/{task_id}/Step2", follow_redirects=False
-            )
+            page = client.get(f"/BilayerBuilder/{task_id}/Step2", follow_redirects=False)
             assert page.status_code == 307
             assert page.headers["location"] == "/"
-            mismatch = client.get(
-                f"/Solvator/{task_id}/Step1", follow_redirects=False
-            )
+            mismatch = client.get(f"/Solvator/{task_id}/Step1", follow_redirects=False)
             assert mismatch.status_code == 307
             assert mismatch.headers["location"] == "/"
             assert client.get("/UnknownWorkflow/Step1").status_code == 404

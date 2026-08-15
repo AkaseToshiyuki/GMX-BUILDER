@@ -74,9 +74,8 @@ def test_refresh_and_enter_step_one_accepts_popc_with_lipid21():
 
         driver.refresh()
         wait.until(
-            lambda current: "active" in current.find_element(
-                By.ID, "panel-task-type"
-            ).get_attribute("class").split()
+            lambda current: "active"
+            in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
         )
         wait.until(lambda current: current.current_url.rstrip("/") == base_url.rstrip("/"))
         assert driver.current_url.rstrip("/") == base_url.rstrip("/")
@@ -106,32 +105,25 @@ END
         # Legacy task-bearing links are retired and return to the home page.
         driver.get(f"{base_url}/BilayerBuilder/{task_id}/Step1")
         wait.until(
-            lambda current: "active" in current.find_element(
-                By.ID, "panel-task-type"
-            ).get_attribute("class").split()
+            lambda current: "active"
+            in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
         )
         wait.until(lambda current: current.current_url.rstrip("/") == base_url.rstrip("/"))
         assert driver.current_url.rstrip("/") == base_url.rstrip("/")
         resume_input = driver.find_element(By.ID, "resume-task-id")
         resume_input.send_keys(task_id)
         driver.find_element(By.ID, "resume-task-btn").click()
-        wait.until(
-            lambda current: task_id
-            in current.find_element(By.ID, "task-id-display").text
-        )
-        assert driver.current_url.rstrip("/").endswith(
-            "/BilayerBuilder/Step1"
-        )
+        wait.until(lambda current: task_id in current.find_element(By.ID, "task-id-display").text)
+        assert driver.current_url.rstrip("/").endswith("/BilayerBuilder/Step1")
         driver.find_element(By.ID, "copy-task-id").click()
         wait.until(
-            lambda current: current.find_element(
-                By.ID, "copy-task-id-status"
-            ).text == "Copied"
+            lambda current: current.find_element(By.ID, "copy-task-id-status").text == "Copied"
         )
         driver.refresh()
-        wait.until(lambda current: "active" in current.find_element(
-            By.ID, "panel-task-type"
-        ).get_attribute("class").split())
+        wait.until(
+            lambda current: "active"
+            in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
+        )
         wait.until(lambda current: current.current_url.rstrip("/") == base_url.rstrip("/"))
         assert driver.current_url.rstrip("/") == base_url.rstrip("/")
 
@@ -184,16 +176,17 @@ END
             "hasGlobalTemperature": False,
             "hasSystemName": False,
         }
-        assert driver.find_element(
-            By.ID, "sim-hw-omp"
-        ).get_attribute("textContent") == "6"
-        assert driver.execute_script(
-            """
+        assert driver.find_element(By.ID, "sim-hw-omp").get_attribute("textContent") == "6"
+        assert (
+            driver.execute_script(
+                """
             _DEFAULT_EM.nsteps = 12345;
             initSimParams();
             return _DEFAULT_EM.nsteps;
             """
-        ) == 50000
+            )
+            == 50000
+        )
         membrane_protocol = driver.execute_script(
             """
             initSimParams();
@@ -286,9 +279,8 @@ END
             wait.until(lambda current: current.find_elements(By.CSS_SELECTOR, selector))
             driver.find_element(By.CSS_SELECTOR, selector).click()
             wait.until(
-                lambda current: "active" in current.find_element(
-                    By.ID, "panel-input"
-                ).get_attribute("class").split()
+                lambda current: "active"
+                in current.find_element(By.ID, "panel-input").get_attribute("class").split()
             )
             assert driver.current_url.rstrip("/").endswith(f"/{route}/Step1")
             displayed_task = driver.find_element(By.ID, "task-id-display").text.strip()
@@ -322,13 +314,14 @@ END
         }
         driver.find_element(By.ID, "compute-queue-saved").click()
         wait.until(
-            lambda current: not current.find_element(
-                By.ID, "compute-queue-close"
-            ).get_attribute("disabled")
+            lambda current: not current.find_element(By.ID, "compute-queue-close").get_attribute(
+                "disabled"
+            )
         )
         driver.find_element(By.ID, "compute-queue-close").click()
-        assert "hidden" in driver.find_element(
-            By.ID, "compute-queue-modal"
-        ).get_attribute("class").split()
+        assert (
+            "hidden"
+            in driver.find_element(By.ID, "compute-queue-modal").get_attribute("class").split()
+        )
     finally:
         driver.quit()

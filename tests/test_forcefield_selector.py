@@ -59,10 +59,19 @@ def test_forcefield_selector_rejects_invalid_ligand_ph(ligand_pH):
 @pytest.mark.parametrize(
     "config,match",
     [
-        ({"name": "charmm36m", "lipid_names": ["POPC"],
-          "lipid_ff": "gaff2", "ligand_ff": "none"}, "incompatible"),
-        ({"name": "oplsaa", "lipid_names": ["POPC"],
-          "lipid_ff": "oplsaa", "ligand_ff": "none"}, "Available alternatives"),
+        (
+            {
+                "name": "charmm36m",
+                "lipid_names": ["POPC"],
+                "lipid_ff": "gaff2",
+                "ligand_ff": "none",
+            },
+            "incompatible",
+        ),
+        (
+            {"name": "oplsaa", "lipid_names": ["POPC"], "lipid_ff": "oplsaa", "ligand_ff": "none"},
+            "Available alternatives",
+        ),
     ],
 )
 def test_forcefield_selector_rejects_cross_family_combinations(empty_system, config, match):
@@ -71,19 +80,29 @@ def test_forcefield_selector_rejects_cross_family_combinations(empty_system, con
 
 
 def test_forcefield_selector_accepts_charmm_family_lipids(empty_system):
-    result = ForceFieldSelector().run(empty_system, {
-        "name": "charmm36m", "lipid_names": ["POPC"],
-        "lipid_ff": "charmm36m", "ligand_ff": "none",
-    })
+    result = ForceFieldSelector().run(
+        empty_system,
+        {
+            "name": "charmm36m",
+            "lipid_names": ["POPC"],
+            "lipid_ff": "charmm36m",
+            "ligand_ff": "none",
+        },
+    )
     assert result.system.metadata["force_field"] == "charmm36m"
     assert result.system.metadata["lipid_ff"] == "charmm36m"
 
 
 def test_forcefield_selector_accepts_recommended_amber_lipid21(empty_system):
-    result = ForceFieldSelector().run(empty_system, {
-        "name": "amber14sb", "lipid_names": ["POPC"],
-        "lipid_ff": "lipid21", "ligand_ff": "none",
-    })
+    result = ForceFieldSelector().run(
+        empty_system,
+        {
+            "name": "amber14sb",
+            "lipid_names": ["POPC"],
+            "lipid_ff": "lipid21",
+            "ligand_ff": "none",
+        },
+    )
     assert result.system.metadata["force_field"] == "amber14sb"
     assert result.system.metadata["lipid_ff"] == "lipid21"
     assert result.system.metadata["lipid21_lipids"] == ["POPC"]
@@ -91,10 +110,16 @@ def test_forcefield_selector_accepts_recommended_amber_lipid21(empty_system):
 
 def test_missing_charmm_lipid_names_installed_alternative(empty_system, monkeypatch):
     monkeypatch.setattr(
-        "gmxbuilder.modules.forcefield.compatibility.gaff_available", lambda: True,
+        "gmxbuilder.modules.forcefield.compatibility.gaff_available",
+        lambda: True,
     )
     with pytest.raises(ModuleConfigError, match=r"20AHC -> no installed force field"):
-        ForceFieldSelector().run(empty_system, {
-            "name": "charmm36m", "lipid_names": ["20AHC"],
-            "lipid_ff": "charmm36m", "ligand_ff": "none",
-        })
+        ForceFieldSelector().run(
+            empty_system,
+            {
+                "name": "charmm36m",
+                "lipid_names": ["20AHC"],
+                "lipid_ff": "charmm36m",
+                "ligand_ff": "none",
+            },
+        )

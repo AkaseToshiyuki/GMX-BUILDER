@@ -21,11 +21,14 @@ def empty_system():
 @pytest.fixture
 def simple_protein_structure():
     """A minimal 3-atom 'protein' structure."""
-    coords = np.array([
-        [0.0, 0.0, 0.0],
-        [0.38, 0.0, 0.0],
-        [0.76, 0.0, 0.0],
-    ], dtype=np.float64)
+    coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.38, 0.0, 0.0],
+            [0.76, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
     return Structure(
         coordinates=coords,
         box_vectors=np.eye(3) * 5.0,

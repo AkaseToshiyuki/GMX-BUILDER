@@ -59,9 +59,7 @@ def test_pdb_parser_selects_first_model_by_order_and_accepts_bom_crlf(tmp_path):
         "\ufeffMODEL        5\r\n"
         + PDB_TEXT.replace("END\n", "ENDMDL\r\n")
         + "MODEL        9\r\n"
-        + PDB_TEXT.replace("  1       0.000", "  1       9.000").replace(
-            "END\n", "ENDMDL\r\n"
-        )
+        + PDB_TEXT.replace("  1       0.000", "  1       9.000").replace("END\n", "ENDMDL\r\n")
     )
     path.write_text(text, encoding="utf-8")
 
@@ -115,9 +113,7 @@ _atom_site.occupancy
     assert structure.coordinates[0, 0] == pytest.approx(0.2)
 
     insertion = tmp_path / "insertion.cif"
-    insertion.write_text(
-        header + "ATOM 1 C CA . ALA A 10 A 1.0 0.0 0.0 1.00\n#\n"
-    )
+    insertion.write_text(header + "ATOM 1 C CA . ALA A 10 A 1.0 0.0 0.0 1.00\n#\n")
     with pytest.raises(ParseError, match="insertion codes"):
         CIFParser().parse(insertion)
 
@@ -144,9 +140,7 @@ def test_upload_accepts_mmcif_and_preserves_original_for_input_step(tmp_path, mo
     assert manager.get_pdb_path(payload["task_id"]).name == "converted.pdb"
 
 
-def test_coarse_grained_mmcif_check_writes_canonical_mapping_pdb(
-    tmp_path, monkeypatch
-):
+def test_coarse_grained_mmcif_check_writes_canonical_mapping_pdb(tmp_path, monkeypatch):
     manager = TaskManager(tmp_path / "tasks")
     monkeypatch.setattr(server, "task_manager", manager)
     server._step_runners.clear()
@@ -223,21 +217,29 @@ def test_completed_task_resume_exposes_existing_package_and_result(tmp_path, mon
     task = manager.create_task("complete.pdb")
     task_id = task["task_id"]
     detail = get_task_type_detail("membrane-bilayer")
-    manager.update_state(task_id, {
-        "task_type": detail,
-        "task_type_id": "membrane-bilayer",
-        "current_step": "simparams",
-        "build_status": {
-            "status": "completed",
-            "result": {"task_id": task_id, "num_atoms": 2, "components": [], "log": []},
+    manager.update_state(
+        task_id,
+        {
+            "task_type": detail,
+            "task_type_id": "membrane-bilayer",
+            "current_step": "simparams",
+            "build_status": {
+                "status": "completed",
+                "result": {"task_id": task_id, "num_atoms": 2, "components": [], "log": []},
+            },
         },
-    })
-    source = System(Structure(
-        coordinates=np.zeros((1, 3)),
-        box_vectors=np.eye(3) * 3.0,
-        atom_names=["CA"], resnames=["ALA"], resids=[1],
-        chain_ids=["A"], elements=["C"],
-    ))
+    )
+    source = System(
+        Structure(
+            coordinates=np.zeros((1, 3)),
+            box_vectors=np.eye(3) * 3.0,
+            atom_names=["CA"],
+            resnames=["ALA"],
+            resids=[1],
+            chain_ids=["A"],
+            elements=["C"],
+        )
+    )
     source.save_checkpoint(manager.get_task_dir(task_id) / "steps" / "ions")
     export = manager.get_task_dir(task_id) / "steps" / "export"
     export.mkdir(parents=True)
@@ -249,6 +251,4 @@ def test_completed_task_resume_exposes_existing_package_and_result(tmp_path, mon
 
     assert resumed["resume_step"] == "simparams"
     assert resumed["build_status"]["download_available"] is True
-    assert resumed["build_status"]["result"]["download_url"] == (
-        f"/api/task/{task_id}/download"
-    )
+    assert resumed["build_status"]["result"]["download_url"] == (f"/api/task/{task_id}/download")

@@ -34,6 +34,7 @@ def task_expiry(now: datetime | None = None) -> str:
     current = now or datetime.now(timezone.utc)
     return (current + timedelta(hours=task_ttl_hours())).isoformat()
 
+
 # Per-task locks for atomic read-modify-write on state.json
 _state_locks: dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()
@@ -172,16 +173,17 @@ class TaskManager:
             if candidate.is_file() and not candidate.is_symlink():
                 return candidate
         pdb_files = sorted(
-            path for path in task_dir.glob("*.pdb")
-            if path.is_file() and not path.is_symlink()
+            path
+            for path in task_dir.glob("*.pdb")
+            if path.is_file()
+            and not path.is_symlink()
             and not path.name.lower().endswith(".cif.pdb")
             and not path.name.lower().endswith(".mmcif.pdb")
         )
         if pdb_files:
             return pdb_files[0]
         ent_files = sorted(
-            path for path in task_dir.glob("*.ent")
-            if path.is_file() and not path.is_symlink()
+            path for path in task_dir.glob("*.ent") if path.is_file() and not path.is_symlink()
         )
         return ent_files[0] if ent_files else None
 

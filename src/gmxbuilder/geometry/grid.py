@@ -52,7 +52,10 @@ def hexagonal_grid(
         x_offset = (spacing / 2.0) if row % 2 != 0 else 0.0
         for col in range(-n_cols - 1, n_cols + 2):
             x_pos = col * spacing + x_offset
-            if abs(x_pos) <= x_size / 2.0 + spacing * 0.5 and abs(y_pos) <= y_size / 2.0 + spacing * 0.5:
+            if (
+                abs(x_pos) <= x_size / 2.0 + spacing * 0.5
+                and abs(y_pos) <= y_size / 2.0 + spacing * 0.5
+            ):
                 points.append([x_pos, y_pos])
 
     points = np.array(points, dtype=np.float64)

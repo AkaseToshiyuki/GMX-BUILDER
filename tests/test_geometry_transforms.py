@@ -43,16 +43,18 @@ def test_valid_vector_alignment_remains_a_proper_rotation():
         np.asarray([1.0, 0.0, 0.0]), np.asarray([0.0, 0.0, 1.0])
     )
     assert np.linalg.det(rotation) == pytest.approx(1.0)
-    assert rotation @ np.asarray([1.0, 0.0, 0.0]) == pytest.approx(
-        np.asarray([0.0, 0.0, 1.0])
-    )
+    assert rotation @ np.asarray([1.0, 0.0, 0.0]) == pytest.approx(np.asarray([0.0, 0.0, 1.0]))
 
 
 def test_nearly_degenerate_principal_axes_use_deterministic_proper_basis():
-    square = np.asarray([
-        [-1.0, -1.0, 0.0], [1.0, -1.0, 0.0],
-        [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0],
-    ])
+    square = np.asarray(
+        [
+            [-1.0, -1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0],
+        ]
+    )
 
     first = compute_principal_axes(square)
     second = compute_principal_axes(square.copy())
@@ -64,10 +66,12 @@ def test_nearly_degenerate_principal_axes_use_deterministic_proper_basis():
 
 def test_periodic_wrap_never_rounds_tiny_negative_values_to_box_length():
     box = np.asarray([4.0, 5.0, 6.0])
-    coordinates = np.asarray([
-        [-np.finfo(float).eps, 5.0, 12.0 + np.finfo(float).eps],
-        [4.0, -np.finfo(float).eps, 6.0],
-    ])
+    coordinates = np.asarray(
+        [
+            [-np.finfo(float).eps, 5.0, 12.0 + np.finfo(float).eps],
+            [4.0, -np.finfo(float).eps, 6.0],
+        ]
+    )
 
     wrapped = wrap_periodic_coordinates(coordinates, box)
 

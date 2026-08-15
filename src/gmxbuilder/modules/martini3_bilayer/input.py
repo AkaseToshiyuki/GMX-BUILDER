@@ -37,9 +37,17 @@ class CGInputModule(BaseModule):
         return first_line.startswith("data_")
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {
-            "pdb", "include_protein", "environment", "seed", "_task_dir", "_step_dir",
-        })
+        self.validate_config_keys(
+            config,
+            {
+                "pdb",
+                "include_protein",
+                "environment",
+                "seed",
+                "_task_dir",
+                "_step_dir",
+            },
+        )
         environment = str(config.get("environment", "bilayer")).lower()
         if environment not in {"solution", "bilayer"}:
             raise ModuleConfigError("environment must be solution or bilayer")
@@ -58,32 +66,33 @@ class CGInputModule(BaseModule):
         include_protein = strict_bool(config, "include_protein", True)
         environment = str(config.get("environment", "bilayer")).lower()
         output = system.copy()
-        output.metadata.update({
-            "cg_environment": environment,
-            "cg_include_protein": include_protein,
-            "resolution": "coarse-grained",
-            "force_field": "martini3",
-        })
+        output.metadata.update(
+            {
+                "cg_environment": environment,
+                "cg_include_protein": include_protein,
+                "resolution": "coarse-grained",
+                "force_field": "martini3",
+            }
+        )
         if not include_protein:
-            return ModuleResult(True, output, [
-                "Protein-free Martini 3 bilayer requested",
-                "No atomistic structure will be mapped",
-            ])
+            return ModuleResult(
+                True,
+                output,
+                [
+                    "Protein-free Martini 3 bilayer requested",
+                    "No atomistic structure will be mapped",
+                ],
+            )
 
         source = Path(str(config["pdb"])).resolve()
         if not source.is_file() or source.is_symlink():
             raise ModuleConfigError("Uploaded protein structure is unavailable")
         source_is_cif = self._is_cif(source)
-        parsed = (
-            CIFParser().parse(source)
-            if source_is_cif
-            else PDBParser().parse(source)
-        )
+        parsed = CIFParser().parse(source) if source_is_cif else PDBParser().parse(source)
         water_names = {"HOH", "WAT", "SOL", "TIP", "TIP3", "SPC", "SPCE"}
-        keep = np.asarray([
-            str(name).strip().upper() not in water_names
-            for name in parsed.resnames
-        ], dtype=bool)
+        keep = np.asarray(
+            [str(name).strip().upper() not in water_names for name in parsed.resnames], dtype=bool
+        )
         ignored_water_atoms = int(np.count_nonzero(~keep))
         if ignored_water_atoms:
             indices = np.flatnonzero(keep)
@@ -117,17 +126,21 @@ class CGInputModule(BaseModule):
         # a misleading .pdb suffix or parsed differently by the two steps.
         PDBWriter.write(parsed, destination, title="Martini 3 atomistic input")
         output.structure = parsed
-        output.components = [Component(
-            name="Atomistic Protein Input",
-            kind=ComponentKind.PROTEIN,
-            atom_indices=np.arange(parsed.num_atoms, dtype=np.int64),
-            metadata={"mapping_target": "martini3001"},
-        )]
-        output.metadata.update({
-            "cg_input_file": "steps/input/cg_input.pdb",
-            "cg_input_residues": observed,
-            "cg_input_atom_count": parsed.num_atoms,
-        })
+        output.components = [
+            Component(
+                name="Atomistic Protein Input",
+                kind=ComponentKind.PROTEIN,
+                atom_indices=np.arange(parsed.num_atoms, dtype=np.int64),
+                metadata={"mapping_target": "martini3001"},
+            )
+        ]
+        output.metadata.update(
+            {
+                "cg_input_file": "steps/input/cg_input.pdb",
+                "cg_input_residues": observed,
+                "cg_input_atom_count": parsed.num_atoms,
+            }
+        )
         log = [
             (
                 f"Accepted {parsed.num_atoms} protein atoms for Martini 3 mapping"

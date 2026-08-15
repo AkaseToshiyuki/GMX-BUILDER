@@ -51,9 +51,7 @@ def _two_residue_system(force_field: str) -> System:
     )
     return System(
         structure=structure,
-        components=[
-            Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(names)))
-        ],
+        components=[Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(names)))],
         metadata={"force_field": force_field},
     )
 
@@ -64,7 +62,8 @@ def _three_residue_modification_system(force_field: str, residue: str) -> System
     template = load_force_field_rtp(force_field).get_residue(residue)
     assert template is not None
     sidechains = [
-        atom[0] for atom in template["atoms"]
+        atom[0]
+        for atom in template["atoms"]
         if atom[0] not in {"N", "CA", "C", "O", "OXT", "OT1", "OT2"}
         and not atom[0].startswith("H")
         and not (len(atom[0]) > 1 and atom[0][0].isdigit() and atom[0][1] == "H")
@@ -76,24 +75,38 @@ def _three_residue_modification_system(force_field: str, residue: str) -> System
     resnames = ["ALA"] * 5 + [residue] * target_count + ["ALA"] * 5
     resids = [1] * 5 + [2] * target_count + [3] * 5
 
-    first = np.array([
-        [1.800, 2.000, 2.000], [1.945, 2.000, 2.000],
-        [2.045, 2.100, 2.000], [2.025, 2.220, 2.000],
-        [1.960, 1.850, 2.000],
-    ])
-    target_backbone = np.array([
-        [2.170, 2.080, 2.000], [2.270, 2.160, 2.000],
-        [2.390, 2.100, 2.000], [2.490, 2.160, 2.000],
-    ])
-    sidechain_coords = np.array([
-        [2.280 + 0.025 * i, 2.310 + 0.055 * i, 2.000 + 0.035 * (i % 2)]
-        for i in range(len(sidechains))
-    ])
-    last = np.array([
-        [2.515, 2.080, 2.000], [2.615, 2.160, 2.000],
-        [2.735, 2.100, 2.000], [2.835, 2.160, 2.000],
-        [2.620, 2.310, 2.000],
-    ])
+    first = np.array(
+        [
+            [1.800, 2.000, 2.000],
+            [1.945, 2.000, 2.000],
+            [2.045, 2.100, 2.000],
+            [2.025, 2.220, 2.000],
+            [1.960, 1.850, 2.000],
+        ]
+    )
+    target_backbone = np.array(
+        [
+            [2.170, 2.080, 2.000],
+            [2.270, 2.160, 2.000],
+            [2.390, 2.100, 2.000],
+            [2.490, 2.160, 2.000],
+        ]
+    )
+    sidechain_coords = np.array(
+        [
+            [2.280 + 0.025 * i, 2.310 + 0.055 * i, 2.000 + 0.035 * (i % 2)]
+            for i in range(len(sidechains))
+        ]
+    )
+    last = np.array(
+        [
+            [2.515, 2.080, 2.000],
+            [2.615, 2.160, 2.000],
+            [2.735, 2.100, 2.000],
+            [2.835, 2.160, 2.000],
+            [2.620, 2.310, 2.000],
+        ]
+    )
     coordinates = np.vstack([first, target_backbone, sidechain_coords, last])
     elements = [next(char for char in name if char.isalpha()) for name in names]
     structure = Structure(
@@ -107,16 +120,18 @@ def _three_residue_modification_system(force_field: str, residue: str) -> System
     )
     return System(
         structure=structure,
-        components=[
-            Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(names)))
-        ],
+        components=[Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(names)))],
         metadata={"force_field": force_field},
     )
+
+
 def _build_gromacs_input(tmp_path: Path, force_field: str) -> tuple[str, Path]:
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _two_residue_system(force_field), {"skip_protonation": True}
-    ).system
+    system = (
+        StructureProcessor()
+        .run(_two_residue_system(force_field), {"skip_protonation": True})
+        .system
+    )
     gro_path = tmp_path / "input.gro"
     top_path = tmp_path / "topol.top"
     mdp_path = tmp_path / "smoke.mdp"
@@ -144,8 +159,18 @@ def _build_gromacs_input(tmp_path: Path, force_field: str) -> tuple[str, Path]:
     )
     result = subprocess.run(
         [
-            gmx, "grompp", "-f", str(mdp_path), "-c", str(gro_path),
-            "-p", str(top_path), "-o", "smoke.tpr", "-po", "processed.mdp",
+            gmx,
+            "grompp",
+            "-f",
+            str(mdp_path),
+            "-c",
+            str(gro_path),
+            "-p",
+            str(top_path),
+            "-o",
+            "smoke.tpr",
+            "-po",
+            "processed.mdp",
         ],
         cwd=tmp_path,
         text=True,
@@ -180,13 +205,17 @@ def test_grompp_accepts_generated_protein_system(tmp_path, force_field):
 @pytest.mark.parametrize("force_field", ["charmm36m", "amber14sb"])
 def test_grompp_accepts_explicit_ace_nme_caps(tmp_path, force_field):
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _two_residue_system(force_field),
-        {
-            "skip_protonation": True,
-            "termini": {"A": {"nter": "ACE", "cter": "NME"}},
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _two_residue_system(force_field),
+            {
+                "skip_protonation": True,
+                "termini": {"A": {"nter": "ACE", "cter": "NME"}},
+            },
+        )
+        .system
+    )
     gro_path = tmp_path / "capped.gro"
     top_path = tmp_path / "capped.top"
     mdp_path = tmp_path / "capped.mdp"
@@ -199,10 +228,21 @@ def test_grompp_accepts_explicit_ace_nme_caps(tmp_path, force_field):
     )
     result = subprocess.run(
         [
-            gmx, "grompp", "-f", str(mdp_path), "-c", str(gro_path),
-            "-p", str(top_path), "-o", "capped.tpr",
+            gmx,
+            "grompp",
+            "-f",
+            str(mdp_path),
+            "-c",
+            str(gro_path),
+            "-p",
+            str(top_path),
+            "-o",
+            "capped.tpr",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=60,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
@@ -222,20 +262,22 @@ def test_amber14sb_phosphorylation_states_pass_grompp(
     tmp_path, residue, patch_id, product, expected_charge
 ):
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _three_residue_modification_system("amber14sb", residue),
-        {
-            "skip_protonation": True,
-            "modifications": [{"index": 1, "patch_id": patch_id}],
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _three_residue_modification_system("amber14sb", residue),
+            {
+                "skip_protonation": True,
+                "modifications": [{"index": 1, "patch_id": patch_id}],
+            },
+        )
+        .system
+    )
     target_indices = [
-        index for index, name in enumerate(system.structure.resnames)
-        if name == product
+        index for index, name in enumerate(system.structure.resnames) if name == product
     ]
     assert target_indices
-    assert all(np.isfinite(system.structure.coordinates[index]).all()
-               for index in target_indices)
+    assert all(np.isfinite(system.structure.coordinates[index]).all() for index in target_indices)
 
     from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 
@@ -266,10 +308,21 @@ def test_amber14sb_phosphorylation_states_pass_grompp(
     )
     result = subprocess.run(
         [
-            gmx, "grompp", "-f", str(mdp_path), "-c", str(gro_path),
-            "-p", str(top_path), "-o", "phospho.tpr",
+            gmx,
+            "grompp",
+            "-f",
+            str(mdp_path),
+            "-c",
+            str(gro_path),
+            "-p",
+            str(top_path),
+            "-o",
+            "phospho.tpr",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=60,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
@@ -277,28 +330,43 @@ def test_amber14sb_phosphorylation_states_pass_grompp(
 @pytest.mark.parametrize(
     "residue,patch_id",
     [
-        ("SER", "PHOS_SER"), ("THR", "PHOS_THR"), ("TYR", "PHOS_TYR"),
-        ("LYS", "ACET_LYS"), ("ARG", "CIT_ARG"), ("CYS", "CSO_CYS"),
-        ("CYS", "CSX_CYS"), ("TYR", "TYS_TYR"),
+        ("SER", "PHOS_SER"),
+        ("THR", "PHOS_THR"),
+        ("TYR", "PHOS_TYR"),
+        ("LYS", "ACET_LYS"),
+        ("ARG", "CIT_ARG"),
+        ("CYS", "CSO_CYS"),
+        ("CYS", "CSX_CYS"),
+        ("TYR", "TYS_TYR"),
         ("LYS", "CARBOXY_LYS"),
-        ("LYS", "KME_LYS"), ("LYS", "KME2_LYS"), ("LYS", "KME3_LYS"),
-        ("ARG", "RME2_ARG"), ("ARG", "RME2A_ARG"),
-        ("CYS", "CSN_CYS"), ("CYS", "SMC_CYS"), ("CYS", "OCS_CYS"),
-        ("SER", "SAC_SER"), ("TYR", "NIY_TYR"),
-        ("MET", "MSO_R_MET"), ("PRO", "HYP_PRO"), ("LYS", "HYL_LYS"),
+        ("LYS", "KME_LYS"),
+        ("LYS", "KME2_LYS"),
+        ("LYS", "KME3_LYS"),
+        ("ARG", "RME2_ARG"),
+        ("ARG", "RME2A_ARG"),
+        ("CYS", "CSN_CYS"),
+        ("CYS", "SMC_CYS"),
+        ("CYS", "OCS_CYS"),
+        ("SER", "SAC_SER"),
+        ("TYR", "NIY_TYR"),
+        ("MET", "MSO_R_MET"),
+        ("PRO", "HYP_PRO"),
+        ("LYS", "HYL_LYS"),
     ],
 )
-def test_every_enabled_charmm36m_native_ptm_passes_grompp(
-    tmp_path, residue, patch_id
-):
+def test_every_enabled_charmm36m_native_ptm_passes_grompp(tmp_path, residue, patch_id):
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _three_residue_modification_system("charmm36m", residue),
-        {
-            "skip_protonation": True,
-            "modifications": [{"index": 1, "patch_id": patch_id}],
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _three_residue_modification_system("charmm36m", residue),
+            {
+                "skip_protonation": True,
+                "modifications": [{"index": 1, "patch_id": patch_id}],
+            },
+        )
+        .system
+    )
     geometry = system.metadata["modification_geometry"]
     assert len(geometry) == 1
     assert geometry[0]["status"] == "passed"
@@ -314,10 +382,21 @@ def test_every_enabled_charmm36m_native_ptm_passes_grompp(
     )
     result = subprocess.run(
         [
-            gmx, "grompp", "-f", "ptm.mdp", "-c", "ptm.gro",
-            "-p", "ptm.top", "-o", "ptm.tpr",
+            gmx,
+            "grompp",
+            "-f",
+            "ptm.mdp",
+            "-c",
+            "ptm.gro",
+            "-p",
+            "ptm.top",
+            "-o",
+            "ptm.tpr",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=60,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
@@ -328,13 +407,17 @@ def test_every_enabled_charmm36m_native_ptm_passes_grompp(
 )
 def test_amber_hydroxyproline_passes_grompp(tmp_path, force_field):
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _three_residue_modification_system(force_field, "PRO"),
-        {
-            "skip_protonation": True,
-            "modifications": [{"index": 1, "patch_id": "HYP_PRO"}],
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _three_residue_modification_system(force_field, "PRO"),
+            {
+                "skip_protonation": True,
+                "modifications": [{"index": 1, "patch_id": "HYP_PRO"}],
+            },
+        )
+        .system
+    )
     geometry = system.metadata["modification_geometry"][0]
     assert geometry["stereo_centres"] == ["4R carbon (HYP)"]
     GROWriter.write(system.structure, tmp_path / "hyp.gro")
@@ -348,10 +431,21 @@ def test_amber_hydroxyproline_passes_grompp(tmp_path, force_field):
     )
     result = subprocess.run(
         [
-            gmx, "grompp", "-f", "hyp.mdp", "-c", "hyp.gro",
-            "-p", "hyp.top", "-o", "hyp.tpr",
+            gmx,
+            "grompp",
+            "-f",
+            "hyp.mdp",
+            "-c",
+            "hyp.gro",
+            "-p",
+            "hyp.top",
+            "-o",
+            "hyp.tpr",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=60,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
@@ -364,16 +458,18 @@ def test_amber_disulfide_pair_passes_grompp(tmp_path, force_field):
     from tests.test_structure_processor import _disulfide_system
 
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _disulfide_system(force_field),
-        {
-            "skip_protonation": True,
-            "prepare_standard_termini": False,
-            "crosslinks": [
-                {"type": "disulfide", "first_index": 0, "second_index": 1}
-            ],
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _disulfide_system(force_field),
+            {
+                "skip_protonation": True,
+                "prepare_standard_termini": False,
+                "crosslinks": [{"type": "disulfide", "first_index": 0, "second_index": 1}],
+            },
+        )
+        .system
+    )
     system = ForceFieldAssigner().run(system, {}).system
     GROWriter.write(system.structure, tmp_path / "disulfide.gro")
     TopologyWriter(force_field).write_top(
@@ -386,10 +482,21 @@ def test_amber_disulfide_pair_passes_grompp(tmp_path, force_field):
     )
     result = subprocess.run(
         [
-            gmx, "grompp", "-f", "disulfide.mdp", "-c", "disulfide.gro",
-            "-p", "disulfide.top", "-o", "disulfide.tpr",
+            gmx,
+            "grompp",
+            "-f",
+            "disulfide.mdp",
+            "-c",
+            "disulfide.gro",
+            "-p",
+            "disulfide.top",
+            "-o",
+            "disulfide.tpr",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=60,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
@@ -397,13 +504,17 @@ def test_amber_disulfide_pair_passes_grompp(tmp_path, force_field):
 def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path):
     """A newly enabled, charged PTM must survive persistence and real dynamics."""
     gmx = _find_gmx()
-    system = StructureProcessor().run(
-        _three_residue_modification_system("charmm36m", "LYS"),
-        {
-            "skip_protonation": True,
-            "modifications": [{"index": 1, "patch_id": "KME3_LYS"}],
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _three_residue_modification_system("charmm36m", "LYS"),
+            {
+                "skip_protonation": True,
+                "modifications": [{"index": 1, "patch_id": "KME3_LYS"}],
+            },
+        )
+        .system
+    )
     checkpoint = tmp_path / "checkpoint"
     system.save_checkpoint(checkpoint)
     restored = System.load_checkpoint(checkpoint)
@@ -427,18 +538,40 @@ def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path):
     )
     grompp = subprocess.run(
         [
-            gmx, "grompp", "-f", "ptm.mdp", "-c", "ptm.gro",
-            "-p", "ptm.top", "-o", "ptm.tpr",
+            gmx,
+            "grompp",
+            "-f",
+            "ptm.mdp",
+            "-c",
+            "ptm.gro",
+            "-p",
+            "ptm.top",
+            "-o",
+            "ptm.tpr",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=60,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=60,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
     mdrun = subprocess.run(
         [
-            gmx, "mdrun", "-s", "ptm.tpr", "-deffnm", "ptm-em",
-            "-ntmpi", "1", "-ntomp", "1",
+            gmx,
+            "mdrun",
+            "-s",
+            "ptm.tpr",
+            "-deffnm",
+            "ptm-em",
+            "-ntmpi",
+            "1",
+            "-ntomp",
+            "1",
         ],
-        cwd=tmp_path, text=True, capture_output=True, timeout=90,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=90,
     )
     output = mdrun.stdout + "\n" + mdrun.stderr
     assert mdrun.returncode == 0, output
@@ -447,9 +580,11 @@ def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path):
 
 
 def test_amber14sb_uses_water_specific_ion_parameters(tmp_path):
-    system = StructureProcessor().run(
-        _two_residue_system("amber14sb"), {"skip_protonation": True}
-    ).system
+    system = (
+        StructureProcessor()
+        .run(_two_residue_system("amber14sb"), {"skip_protonation": True})
+        .system
+    )
     top_path = tmp_path / "topol.top"
     TopologyWriter("amber14sb").write_top(system.structure, top_path)
     topology = top_path.read_text()
@@ -463,9 +598,25 @@ def test_one_step_mdrun_can_use_gpu(tmp_path):
     gmx, tpr_path = _build_gromacs_input(tmp_path, "charmm36m")
     result = subprocess.run(
         [
-            gmx, "mdrun", "-s", str(tpr_path), "-deffnm", "gpu-smoke",
-            "-ntmpi", "1", "-ntomp", "1", "-nb", "gpu", "-pme", "cpu",
-            "-bonded", "cpu", "-update", "cpu", "-noconfout",
+            gmx,
+            "mdrun",
+            "-s",
+            str(tpr_path),
+            "-deffnm",
+            "gpu-smoke",
+            "-ntmpi",
+            "1",
+            "-ntomp",
+            "1",
+            "-nb",
+            "gpu",
+            "-pme",
+            "cpu",
+            "-bonded",
+            "cpu",
+            "-update",
+            "cpu",
+            "-noconfout",
         ],
         cwd=tmp_path,
         text=True,

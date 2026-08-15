@@ -17,18 +17,18 @@ import re
 # description, elemental composition and formal charge in the bundled
 # CHARMM36 lipid RTP.  Do not add "nearest" analogues here.
 _CHARMM_RTP_IDENTITIES = {
-    "BSM": "LSM",       # d18:1/24:0 sphingomyelin (CHARMM BSM is 22:0)
+    "BSM": "LSM",  # d18:1/24:0 sphingomyelin (CHARMM BSM is 22:0)
     "CER16": "CER160",  # ceramide d18:1/16:0
     "CER18": "CER180",  # ceramide d18:1/18:0
     "CER24": "CER240",  # ceramide d18:1/24:0
     "CHOL": "CHL1",
-    "DPEPE": "DYPE",    # dipalmitoleoyl PE
-    "POP2": "POPI25",   # POPI(4,5)P2, protonated on P5, net -4
-    "POP3": "POPI35",   # POPI(3,4,5)P3, protonated on P5, net -6
-    "PUPC": "PDOPC",    # 1-palmitoyl-2-docosahexaenoyl PC
-    "SAPI": "SAPI25",   # SAPI(4,5)P2, protonated on P5, net -4
-    "TMCL": "TMCL2",    # tetramyristoyl cardiolipin, net -2
-    "TOCL": "TOCL2",    # tetraoleoyl cardiolipin, net -2
+    "DPEPE": "DYPE",  # dipalmitoleoyl PE
+    "POP2": "POPI25",  # POPI(4,5)P2, protonated on P5, net -4
+    "POP3": "POPI35",  # POPI(3,4,5)P3, protonated on P5, net -6
+    "PUPC": "PDOPC",  # 1-palmitoyl-2-docosahexaenoyl PC
+    "SAPI": "SAPI25",  # SAPI(4,5)P2, protonated on P5, net -4
+    "TMCL": "TMCL2",  # tetramyristoyl cardiolipin, net -2
+    "TOCL": "TOCL2",  # tetraoleoyl cardiolipin, net -2
 }
 
 # Modular CHARMM lipid residues use the same glycerol/ester atom naming and
@@ -61,9 +61,19 @@ _CHARMM_RTP_TAIL_COMBINATIONS = {
 # audited set from the current lipid namespace and still require real grompp
 # parameter resolution.  This is not a cross-family force-field substitution.
 _CHARMM_CURRENT_LIPIDS_FOR_CLASSIC = {
-    "DLIPA", "DLIPC", "DLIPE", "DLIPG", "DLIPS",
-    "ERG", "LPC16", "LPC18", "LPE16", "LYSPG",
-    "PUPC", "SITO", "STIG",
+    "DLIPA",
+    "DLIPC",
+    "DLIPE",
+    "DLIPG",
+    "DLIPS",
+    "ERG",
+    "LPC16",
+    "LPC18",
+    "LPE16",
+    "LYSPG",
+    "PUPC",
+    "SITO",
+    "STIG",
 }
 # When a custom lipid requires GAFF2, keep the whole topology in the current
 # recommended Amber family instead of silently falling back to ff99SB-ILDN.
@@ -118,9 +128,7 @@ _CHARMM_LIBRARY_UNAVAILABLE: dict[tuple[str, str], str] = {
 }
 
 
-def charmm_lipid_capability(
-    lipid_name: str, force_field: str
-) -> tuple[bool, str]:
+def charmm_lipid_capability(lipid_name: str, force_field: str) -> tuple[bool, str]:
     """Return release-specific CHARMM lipid support including NPT quality."""
     name = str(lipid_name).strip().upper()
     selected = str(force_field).strip().lower()
@@ -151,14 +159,14 @@ def gaff_lipid_capability(lipid_name: str) -> tuple[bool, str]:
     if not reason:
         return True, ""
     alternatives = [
-        label for force_field, label in (
-            ("charmm36m", "CHARMM36m"), ("charmm36", "CHARMM36")
-        )
+        label
+        for force_field, label in (("charmm36m", "CHARMM36m"), ("charmm36", "CHARMM36"))
         if lipid_has_rtp(name, force_field)
     ]
     suffix = (
         f"; use {' or '.join(alternatives)} for this lipid"
-        if alternatives else "; no validated bundled alternative is currently available"
+        if alternatives
+        else "; no validated bundled alternative is currently available"
     )
     return False, f"Amber/GAFF2 unavailable: {reason}{suffix}"
 
@@ -170,16 +178,12 @@ def amber_lipid_backend_candidates(
     from gmxbuilder.modules.forcefield.gaff_backend import gaff_available
     from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
 
-    names = sorted({
-        str(value).strip().upper() for value in lipid_names if str(value).strip()
-    })
+    names = sorted({str(value).strip().upper() for value in lipid_names if str(value).strip()})
     if not names:
         return ("none",)
     candidates = []
     if all(
-        lipid21_capability(name)[0]
-        and name not in _LIPID21_LIBRARY_UNAVAILABLE
-        for name in names
+        lipid21_capability(name)[0] and name not in _LIPID21_LIBRARY_UNAVAILABLE for name in names
     ):
         candidates.append("lipid21")
     if gaff_available() and all(gaff_lipid_capability(name)[0] for name in names):
@@ -237,10 +241,7 @@ def amber_lipid_backend(lipid_names: list[str] | tuple[str, ...]) -> tuple[str |
         reasons.insert(
             0,
             "Exact Lipid21 topology exists but its validated NPT library is "
-            "unavailable: "
-            + "; ".join(
-                f"{name} ({reason})" for name, reason in failed_libraries
-            ),
+            "unavailable: " + "; ".join(f"{name} ({reason})" for name, reason in failed_libraries),
         )
     if lipid21_missing:
         reasons.insert(
@@ -250,8 +251,7 @@ def amber_lipid_backend(lipid_names: list[str] | tuple[str, ...]) -> tuple[str |
     if not gaff_available():
         reasons.append("AmberTools/ACPYPE is unavailable")
     return None, (
-        "No coherent Amber lipid backend covers the complete membrane. "
-        + "; ".join(reasons)
+        "No coherent Amber lipid backend covers the complete membrane. " + "; ".join(reasons)
     )
 
 
@@ -278,9 +278,7 @@ def lipid_rtp_name(lipid_name: str, force_field: str) -> str:
 
 
 def _tail_subtree(template: dict, root: str, bridge: str) -> set[str]:
-    adjacency: dict[str, set[str]] = {
-        atom[0]: set() for atom in template["atoms"]
-    }
+    adjacency: dict[str, set[str]] = {atom[0]: set() for atom in template["atoms"]}
     for left, right in template["bonds"]:
         if left in adjacency and right in adjacency:
             adjacency[left].add(right)
@@ -299,7 +297,10 @@ def _tail_subtree(template: dict, root: str, bridge: str) -> set[str]:
 
 
 def _compose_charmm_lipid_template(
-    parser, base_name: str, tail1_name: str | None, tail2_name: str | None,
+    parser,
+    base_name: str,
+    tail1_name: str | None,
+    tail2_name: str | None,
 ) -> dict | None:
     base = parser.get_residue(base_name)
     if base is None:
@@ -322,36 +323,37 @@ def _compose_charmm_lipid_template(
     if len(atom_names) != len(set(atom_names)):
         raise ValueError("Composed CHARMM lipid template has duplicate atom names")
     atom_set = set(atom_names)
-    if any(
-        left not in atom_set or right not in atom_set
-        for left, right in result["bonds"]
-    ):
+    if any(left not in atom_set or right not in atom_set for left, right in result["bonds"]):
         raise ValueError("Composed CHARMM lipid template has dangling bonds")
     return result
 
 
 def _replace_charmm_subtree(
-    base: dict, donor: dict, root: str, bridge: str,
+    base: dict,
+    donor: dict,
+    root: str,
+    bridge: str,
 ) -> dict:
     """Replace one covalent branch while retaining the shared bridge atom."""
     result = copy.deepcopy(base)
     removed = _tail_subtree(result, root, bridge)
     inserted = _tail_subtree(donor, root, bridge)
-    result["atoms"] = [
-        atom for atom in result["atoms"] if atom[0] not in removed
-    ] + [
+    result["atoms"] = [atom for atom in result["atoms"] if atom[0] not in removed] + [
         copy.deepcopy(atom) for atom in donor["atoms"] if atom[0] in inserted
     ]
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     donor_scope = inserted | {bridge}
     for section, size in term_sizes.items():
         result[section] = [
-            term for term in result[section]
-            if not any(atom in removed for atom in term[:size])
+            term for term in result[section] if not any(atom in removed for atom in term[:size])
         ] + [
-            copy.deepcopy(term) for term in donor[section]
+            copy.deepcopy(term)
+            for term in donor[section]
             if all(atom in donor_scope for atom in term[:size])
             and any(atom in inserted for atom in term[:size])
         ]
@@ -366,13 +368,15 @@ def _make_decanoyl_sphingomyelin(parser) -> dict | None:
     result = copy.deepcopy(base)
     removed = _tail_subtree(result, "C11F", "C10F")
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     result["atoms"] = [atom for atom in result["atoms"] if atom[0] not in removed]
     for section, size in term_sizes.items():
         result[section] = [
-            term for term in result[section]
-            if not any(atom in removed for atom in term[:size])
+            term for term in result[section] if not any(atom in removed for atom in term[:size])
         ]
 
     terminal_c = next(atom for atom in base["atoms"] if atom[0] == "C16F")
@@ -406,16 +410,16 @@ def _make_charmm_diacylglycerol(parser, phosphatidic_acid: str) -> dict | None:
         return None
     result = copy.deepcopy(base)
     removed = {"P", "O12", "H12", "O13", "O14"}
-    result["atoms"] = [
-        atom for atom in result["atoms"] if atom[0] not in removed
-    ]
+    result["atoms"] = [atom for atom in result["atoms"] if atom[0] not in removed]
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     for section, size in term_sizes.items():
         result[section] = [
-            term for term in result[section]
-            if not any(atom in removed for atom in term[:size])
+            term for term in result[section] if not any(atom in removed for atom in term[:size])
         ]
 
     converted = []
@@ -446,16 +450,16 @@ def _make_charmm_plasmalogen(parser, headgroup: str) -> dict | None:
         return None
     result = copy.deepcopy(base)
     removed = {"O32", "H2Y"}
-    result["atoms"] = [
-        atom for atom in result["atoms"] if atom[0] not in removed
-    ]
+    result["atoms"] = [atom for atom in result["atoms"] if atom[0] not in removed]
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     for section, size in term_sizes.items():
         result[section] = [
-            term for term in result[section]
-            if not any(atom in removed for atom in term[:size])
+            term for term in result[section] if not any(atom in removed for atom in term[:size])
         ]
 
     # SOLE/PLA18 is P-18:0/18:1.  Its C31-C318 vinyl-ether branch uses the
@@ -503,12 +507,14 @@ def _remove_charmm_atoms(template: dict, removed: set[str]) -> dict:
     result = copy.deepcopy(template)
     result["atoms"] = [atom for atom in result["atoms"] if atom[0] not in removed]
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     for section, size in term_sizes.items():
         result[section] = [
-            term for term in result[section]
-            if not any(atom in removed for atom in term[:size])
+            term for term in result[section] if not any(atom in removed for atom in term[:size])
         ]
     return result
 
@@ -540,7 +546,10 @@ def _copy_sn2_tail_to_sn1(template: dict) -> dict:
         if name in source
     )
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     scope = source | {"O21"}
     for section, size in term_sizes.items():
@@ -562,7 +571,10 @@ def _suffix_charmm_template(template: dict, suffix: str) -> dict:
         for name, atom_type, charge, group in result["atoms"]
     ]
     term_sizes = {
-        "bonds": 2, "angles": 3, "dihedrals": 4, "impropers": 4,
+        "bonds": 2,
+        "angles": 3,
+        "dihedrals": 4,
+        "impropers": 4,
     }
     for section, size in term_sizes.items():
         result[section] = [
@@ -668,8 +680,7 @@ def _make_charmm_gm1(parser) -> dict | None:
     no CGenFF atom typing or nearest-lipid substitution is used.
     """
     required = {
-        name: parser.get_residue(name)
-        for name in ("CER180", "BGLC", "BGAL", "BGALNA", "ANE5AC")
+        name: parser.get_residue(name) for name in ("CER180", "BGLC", "BGAL", "BGALNA", "ANE5AC")
     }
     if any(template is None for template in required.values()):
         return None
@@ -699,7 +710,10 @@ def _make_charmm_gm1(parser) -> dict | None:
     result["bonds"].append(("O1X", "C1S"))
 
     def add_beta_sugar(
-        template: dict, donor_suffix: str, acceptor_suffix: str, position: int,
+        template: dict,
+        donor_suffix: str,
+        acceptor_suffix: str,
+        position: int,
     ) -> None:
         """Apply the native 13bb/14bb equatorial-equatorial linkage."""
         nonlocal result
@@ -714,12 +728,8 @@ def _make_charmm_gm1(parser) -> dict | None:
             },
         )
         donor = _suffix_charmm_template(template, donor_suffix)
-        donor = _remove_charmm_atoms(
-            donor, {f"HO1{donor_suffix}", f"O1{donor_suffix}"}
-        )
-        _set_charmm_atoms(
-            donor, {f"C1{donor_suffix}": ("CC3162", 0.29)}
-        )
+        donor = _remove_charmm_atoms(donor, {f"HO1{donor_suffix}", f"O1{donor_suffix}"})
+        _set_charmm_atoms(donor, {f"C1{donor_suffix}": ("CC3162", 0.29)})
         _merge_charmm_templates(result, donor)
         result["bonds"].append((acceptor_o, f"C1{donor_suffix}"))
 
@@ -781,9 +791,7 @@ def lipid_rtp_template(lipid_name: str, force_field: str) -> tuple[str, dict | N
         source_parser = parser
         if force_field.strip().lower() == "charmm36":
             source_parser = load_force_field_rtp("charmm36m")
-        generated = _make_charmm_galactolipid(
-            source_parser, digalactosyl=name == "DGDG"
-        )
+        generated = _make_charmm_galactolipid(source_parser, digalactosyl=name == "DGDG")
     elif name == "CAMP":
         source_parser = parser
         if force_field.strip().lower() == "charmm36":
@@ -791,10 +799,7 @@ def lipid_rtp_template(lipid_name: str, force_field: str) -> tuple[str, dict | N
         generated = _make_charmm_campesterol(source_parser)
     elif name == "GM1":
         generated = _make_charmm_gm1(parser)
-    elif (
-        force_field.strip().lower() == "charmm36"
-        and name in _CHARMM_CURRENT_LIPIDS_FOR_CLASSIC
-    ):
+    elif force_field.strip().lower() == "charmm36" and name in _CHARMM_CURRENT_LIPIDS_FOR_CLASSIC:
         modern_name, modern_template = lipid_rtp_template(name, "charmm36m")
         template_name = modern_name
         generated = copy.deepcopy(modern_template)
@@ -812,10 +817,9 @@ def lipid_rtp_template(lipid_name: str, force_field: str) -> tuple[str, dict | N
 
 
 def _formula_elements(formula: str) -> Counter[str]:
-    return Counter({
-        element: int(count or 1)
-        for element, count in re.findall(r"([A-Z][a-z]?)(\d*)", formula)
-    })
+    return Counter(
+        {element: int(count or 1) for element, count in re.findall(r"([A-Z][a-z]?)(\d*)", formula)}
+    )
 
 
 def lipid_rtp_identity_issues(lipid_name: str, force_field: str) -> tuple[str, ...]:
@@ -845,14 +849,10 @@ def lipid_rtp_identity_issues(lipid_name: str, force_field: str) -> tuple[str, .
             if element in {"C", "H", "N", "O", "P", "S"}:
                 observed[element] += 1
         if observed != expected:
-            issues.append(
-                f"elemental composition {dict(observed)} != {lipid.formula}"
-            )
+            issues.append(f"elemental composition {dict(observed)} != {lipid.formula}")
     template_charge = sum(atom[2] for atom in template["atoms"])
     if abs(template_charge - lipid.charge) > 0.05:
-        issues.append(
-            f"net charge {template_charge:+.3f} != registry {lipid.charge:+d}"
-        )
+        issues.append(f"net charge {template_charge:+.3f} != registry {lipid.charge:+d}")
     return tuple(issues)
 
 
@@ -884,7 +884,11 @@ def resolve_lipid_force_field(
     missing = tuple(name for name in names if not lipid_has_rtp(name, requested))
     if not missing:
         return LipidForceFieldResolution(
-            requested, requested, requested, names, (),
+            requested,
+            requested,
+            requested,
+            names,
+            (),
         )
     if not gaff_available():
         raise RuntimeError(
@@ -895,5 +899,9 @@ def resolve_lipid_force_field(
     # rules. All membrane lipids use GAFF2 when this policy is active; mixing
     # CHARMM lipid RTPs with GAFF in one topology is intentionally forbidden.
     return LipidForceFieldResolution(
-        requested, GAFF_PROTEIN_FORCE_FIELD, "gaff2", names, names,
+        requested,
+        GAFF_PROTEIN_FORCE_FIELD,
+        "gaff2",
+        names,
+        names,
     )

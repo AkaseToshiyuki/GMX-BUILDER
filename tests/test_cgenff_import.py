@@ -71,12 +71,23 @@ def _ligand_system():
     structure = Structure(
         coordinates=np.array([[0.5, 0.5, 0.5]]),
         box_vectors=np.diag([3.0, 3.0, 3.0]),
-        atom_names=["C1"], resnames=["LIG"], resids=[1],
-        chain_ids=["L"], elements=["C"],
+        atom_names=["C1"],
+        resnames=["LIG"],
+        resids=[1],
+        chain_ids=["L"],
+        elements=["C"],
     )
-    return System(structure, components=[Component(
-        "UNKNOWN", ComponentKind.UNKNOWN, np.array([0]), {},
-    )])
+    return System(
+        structure,
+        components=[
+            Component(
+                "UNKNOWN",
+                ComponentKind.UNKNOWN,
+                np.array([0]),
+                {},
+            )
+        ],
+    )
 
 
 def test_charmm_ligands_offer_external_cgenff_import():
@@ -89,23 +100,39 @@ def test_charmm_ligands_offer_external_cgenff_import():
 def test_cgenff_package_is_imported_and_hydrogens_are_added(tmp_path):
     mol2, stream = _write_package(tmp_path)
     template = prepare_cgenff_molecule(
-        "LIG", mol2, stream, "charmm36m", tmp_path / "generated",
+        "LIG",
+        mol2,
+        stream,
+        "charmm36m",
+        tmp_path / "generated",
     )
     assert template.atom_names == ("C1", "H1")
     assert template.net_charge == 0
     assert template.cgenff_version == "4.6"
     assert template.maximum_penalty == 12.0
 
-    result = ForceFieldSelector().run(_ligand_system(), {
-        "name": "charmm36m", "lipid_names": [], "lipid_ff": "none",
-        "ligand_ff": "cgenff", "water_model": "tip3p",
-        "cgenff_parameters": {
-            "LIG": {"mol2_path": str(mol2), "str_path": str(stream)},
-        },
-    }).system
+    result = (
+        ForceFieldSelector()
+        .run(
+            _ligand_system(),
+            {
+                "name": "charmm36m",
+                "lipid_names": [],
+                "lipid_ff": "none",
+                "ligand_ff": "cgenff",
+                "water_model": "tip3p",
+                "cgenff_parameters": {
+                    "LIG": {"mol2_path": str(mol2), "str_path": str(stream)},
+                },
+            },
+        )
+        .system
+    )
     assert result.structure.atom_names == ["C1", "H1"]
     assert result.metadata["ligand_parameters"]["LIG"]["source"] == "cgenff"
-    assert result.component_by_kind(ComponentKind.LIGAND)[0].metadata["molecule_charges"] == {"LIG": 0}
+    assert result.component_by_kind(ComponentKind.LIGAND)[0].metadata["molecule_charges"] == {
+        "LIG": 0
+    }
 
 
 def test_cgenff_nbfix_uses_pair_rmin_not_atom_rmin_half(tmp_path):
@@ -113,13 +140,10 @@ def test_cgenff_nbfix_uses_pair_rmin_not_atom_rmin_half(tmp_path):
     stream.write_text(
         STREAM.replace(
             "HGX1 0.0 -0.0200 1.2000\nEND\n",
-            "HGX1 0.0 -0.0200 1.2000\n"
-            "NBFIX\nCGX1 HGX1 -0.0500 3.5000\nEND\n",
+            "HGX1 0.0 -0.0200 1.2000\nNBFIX\nCGX1 HGX1 -0.0500 3.5000\nEND\n",
         )
     )
-    template = prepare_cgenff_molecule(
-        "LIG", mol2, stream, "charmm36m", tmp_path / "nbfix"
-    )
+    template = prepare_cgenff_molecule("LIG", mol2, stream, "charmm36m", tmp_path / "nbfix")
     record = next(
         line.split()
         for line in template.atomtypes_path.read_text().splitlines()
@@ -132,13 +156,23 @@ def test_cgenff_nbfix_uses_pair_rmin_not_atom_rmin_half(tmp_path):
 
 def test_imported_cgenff_topology_passes_grompp(tmp_path):
     mol2, stream = _write_package(tmp_path)
-    system = ForceFieldSelector().run(_ligand_system(), {
-        "name": "charmm36m", "lipid_names": [], "lipid_ff": "none",
-        "ligand_ff": "cgenff", "water_model": "tip3p",
-        "cgenff_parameters": {
-            "LIG": {"mol2_path": str(mol2), "str_path": str(stream)},
-        },
-    }).system
+    system = (
+        ForceFieldSelector()
+        .run(
+            _ligand_system(),
+            {
+                "name": "charmm36m",
+                "lipid_names": [],
+                "lipid_ff": "none",
+                "ligand_ff": "cgenff",
+                "water_model": "tip3p",
+                "cgenff_parameters": {
+                    "LIG": {"mol2_path": str(mol2), "str_path": str(stream)},
+                },
+            },
+        )
+        .system
+    )
     ff_config = {
         "water_model": "tip3p",
         "ligand_parameters": system.metadata["ligand_parameters"],
@@ -147,8 +181,21 @@ def test_imported_cgenff_topology_passes_grompp(tmp_path):
     TopologyWriter("charmm36m", ff_config).write_top(system.structure, tmp_path / "topol.top")
     _write_smoke_mdp(tmp_path / "smoke.mdp")
     proc = subprocess.run(
-        [_find_gmx(), "grompp", "-f", "smoke.mdp", "-c", "input.gro", "-p", "topol.top", "-o", "smoke.tpr"],
-        cwd=tmp_path, capture_output=True, text=True,
+        [
+            _find_gmx(),
+            "grompp",
+            "-f",
+            "smoke.mdp",
+            "-c",
+            "input.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "smoke.tpr",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
 
@@ -162,10 +209,7 @@ def test_cgenff_frontend_requires_web_output_upload():
     assert "Choose returned STR" in source
     assert "No file selected" in source
     assert "'/api/cgenff-upload/' + state.taskId" in source
-    assert (
-        "cgenff_parameters: isPureMembrane ? {} : collectCGenFFParameters()"
-        in source
-    )
+    assert "cgenff_parameters: isPureMembrane ? {} : collectCGenFFParameters()" in source
 
 
 def test_cgenff_upload_validates_and_persists_package(tmp_path, monkeypatch):

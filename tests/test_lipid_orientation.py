@@ -18,17 +18,19 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
 
 def _amphiphile():
     names = ["P", "O1", "N", "C1", "C2", "C3", "C4", "C5", "H1"]
-    coordinates = np.asarray([
-        [0.0, 0.0, -0.9],
-        [0.1, 0.0, -0.8],
-        [-0.1, 0.0, -0.7],
-        [0.0, 0.0, -0.2],
-        [0.1, 0.0, 0.2],
-        [0.2, 0.0, 0.6],
-        [0.1, 0.0, 1.0],
-        [0.0, 0.0, 1.4],
-        [0.0, 0.1, -0.9],
-    ])
+    coordinates = np.asarray(
+        [
+            [0.0, 0.0, -0.9],
+            [0.1, 0.0, -0.8],
+            [-0.1, 0.0, -0.7],
+            [0.0, 0.0, -0.2],
+            [0.1, 0.0, 0.2],
+            [0.2, 0.0, 0.6],
+            [0.1, 0.0, 1.0],
+            [0.0, 0.0, 1.4],
+            [0.0, 0.1, -0.9],
+        ]
+    )
     return coordinates, names
 
 
@@ -38,42 +40,38 @@ def _signed_tetrahedron(coordinates):
 
 
 def test_opposite_leaflet_rotation_preserves_handedness_and_distances():
-    coordinates = np.asarray([
-        [0.0, 0.0, 0.0],
-        [0.2, 0.0, 0.0],
-        [0.0, 0.3, 0.0],
-        [0.0, 0.0, 0.4],
-    ])
-    before = np.linalg.norm(
-        coordinates[:, None, :] - coordinates[None, :, :], axis=2
+    coordinates = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [0.2, 0.0, 0.0],
+            [0.0, 0.3, 0.0],
+            [0.0, 0.0, 0.4],
+        ]
     )
+    before = np.linalg.norm(coordinates[:, None, :] - coordinates[None, :, :], axis=2)
 
     rotated = rotate_to_opposite_leaflet(coordinates)
     after = np.linalg.norm(rotated[:, None, :] - rotated[None, :, :], axis=2)
 
     assert np.allclose(after, before)
-    assert _signed_tetrahedron(rotated) == pytest.approx(
-        _signed_tetrahedron(coordinates)
-    )
+    assert _signed_tetrahedron(rotated) == pytest.approx(_signed_tetrahedron(coordinates))
     assert rotated[3, 2] == pytest.approx(-coordinates[3, 2])
 
 
 @pytest.mark.parametrize("upper", [True, False])
 def test_orientation_is_a_rigid_body_correction_with_heads_outward(upper):
     coordinates, names = _amphiphile()
-    distances_before = np.linalg.norm(
-        coordinates[:, None, :] - coordinates[None, :, :], axis=2
-    )
+    distances_before = np.linalg.norm(coordinates[:, None, :] - coordinates[None, :, :], axis=2)
 
     oriented = orient_lipid_to_outward_normal(
-        coordinates, names, upper=upper,
+        coordinates,
+        names,
+        upper=upper,
     )
     profile = infer_lipid_orientation(oriented, names)
     projection, cosine = outward_orientation(profile, upper=upper)
 
-    distances_after = np.linalg.norm(
-        oriented[:, None, :] - oriented[None, :, :], axis=2
-    )
+    distances_after = np.linalg.norm(oriented[:, None, :] - oriented[None, :, :], axis=2)
     assert projection > 0.1
     assert cosine == pytest.approx(1.0)
     assert np.allclose(distances_after, distances_before)
@@ -112,6 +110,42 @@ def test_final_bilayer_gate_rejects_one_solvent_facing_tail():
         _validate_bilayer_structure(leaflet(upper), leaflet(lower), [])
 
 
+def test_open_core_is_relaxed_only_for_offline_repair_workflow():
+    coordinates, names = _amphiphile()
+    upper = orient_lipid_to_outward_normal(coordinates, names, upper=True)
+    lower = orient_lipid_to_outward_normal(coordinates, names, upper=False)
+    upper[:, 2] += 3.0
+    lower[:, 2] -= 3.0
+
+    def leaflet(values):
+        return System(
+            Structure(
+                coordinates=values,
+                box_vectors=np.eye(3) * 10.0,
+                atom_names=names,
+            ),
+            metadata={
+                "n_lipids": 1,
+                "lipid_sizes": [len(names)],
+                "headgroup_anchor_local_indices": [0],
+            },
+        )
+
+    with pytest.raises(ModuleConfigError, match="hydrophobic core is not sealed"):
+        _validate_bilayer_structure(leaflet(upper), leaflet(lower), [])
+
+    log = []
+    quality = _validate_bilayer_structure(
+        leaflet(upper),
+        leaflet(lower),
+        log,
+        allow_repairable_core_gap=True,
+    )
+    assert quality["passed"] is False
+    assert quality["repair_required"] is True
+    assert any("offline bootstrap core gap" in line for line in log)
+
+
 def test_bilayer_quality_gate_is_identical_with_parallel_kdtree_workers(
     monkeypatch,
 ):
@@ -139,15 +173,11 @@ def test_bilayer_quality_gate_is_identical_with_parallel_kdtree_workers(
         "gmxbuilder.modules.membrane.builder.configured_task_threads",
         lambda: 1,
     )
-    serial = _validate_bilayer_structure(
-        leaflet(upper.copy()), leaflet(lower.copy()), []
-    )
+    serial = _validate_bilayer_structure(leaflet(upper.copy()), leaflet(lower.copy()), [])
     monkeypatch.setattr(
         "gmxbuilder.modules.membrane.builder.configured_task_threads",
         lambda: 4,
     )
-    parallel = _validate_bilayer_structure(
-        leaflet(upper.copy()), leaflet(lower.copy()), []
-    )
+    parallel = _validate_bilayer_structure(leaflet(upper.copy()), leaflet(lower.copy()), [])
 
     assert parallel == serial

@@ -79,9 +79,8 @@ class HDBHydrogenAdder:
                 i = 2
                 while i < len(parts):
                     name = parts[i]
-                    is_h = (
-                        name.upper().startswith("H")
-                        or (len(name) >= 2 and name[0].isdigit() and name[1] == "H")
+                    is_h = name.upper().startswith("H") or (
+                        len(name) >= 2 and name[0].isdigit() and name[1] == "H"
                     )
                     if not is_h:
                         break
@@ -100,13 +99,15 @@ class HDBHydrogenAdder:
                 i += 1
                 bonded_atoms = parts[i:] if i < len(parts) else []
 
-                self._rules[current_res].append({
-                    "control": control_atom,
-                    "n_h": n_h_line,
-                    "method": method,
-                    "h_names": h_names,
-                    "bonded_atoms": bonded_atoms,
-                })
+                self._rules[current_res].append(
+                    {
+                        "control": control_atom,
+                        "n_h": n_h_line,
+                        "method": method,
+                        "h_names": h_names,
+                        "bonded_atoms": bonded_atoms,
+                    }
+                )
 
     def add_hydrogens(
         self,
@@ -150,7 +151,9 @@ class HDBHydrogenAdder:
         new_resnames = list(resnames)
         new_resids = list(resids)
         new_chains = list(chain_ids)
-        new_coords = atom_coords.copy() if isinstance(atom_coords, np.ndarray) else np.array(atom_coords)
+        new_coords = (
+            atom_coords.copy() if isinstance(atom_coords, np.ndarray) else np.array(atom_coords)
+        )
 
         for key, indices in residue_atoms.items():
             _chain, rn, rid = key
@@ -199,7 +202,9 @@ class HDBHydrogenAdder:
 
                 # Compute hydrogen positions (bond length depends on control atom element)
                 h_positions = _compute_h_positions(
-                    ctrl_pos, bonded_positions, len(missing),
+                    ctrl_pos,
+                    bonded_positions,
+                    len(missing),
                     atom_name=new_names[ctrl_idx],
                     method=rule.get("method"),
                 )
@@ -220,10 +225,10 @@ class HDBHydrogenAdder:
 
 # Approximate X-H bond lengths (nm) by element — CHARMM36 force field
 _H_BOND_LENGTHS: dict[str, float] = {
-    "C": 0.109,   # C-H
-    "N": 0.101,   # N-H (amine/amide)
-    "O": 0.096,   # O-H (hydroxyl)
-    "S": 0.134,   # S-H (thiol)
+    "C": 0.109,  # C-H
+    "N": 0.101,  # N-H (amine/amide)
+    "O": 0.096,  # O-H (hydroxyl)
+    "S": 0.134,  # S-H (thiol)
 }
 
 
@@ -280,9 +285,7 @@ def _compute_h_positions(
         axis = units[0]
         reference = None
         if len(vectors) >= 2:
-            reference = _perpendicular_reference(
-                axis, vectors[1] - vectors[0]
-            )
+            reference = _perpendicular_reference(axis, vectors[1] - vectors[0])
         if reference is None:
             trial = np.array([0.0, 0.0, 1.0])
             if abs(float(np.dot(axis, trial))) > 0.9:
@@ -319,8 +322,7 @@ def _compute_h_positions(
         if reference is not None:
             base = np.cos(tetrahedral) * axis - np.sin(tetrahedral) * reference
             directions = [
-                _rotate_about_axis(base, axis, 2.0 * np.pi * index / 3.0)
-                for index in range(n_h)
+                _rotate_about_axis(base, axis, 2.0 * np.pi * index / 3.0) for index in range(n_h)
             ]
             positions = [ctrl_pos + direction * bond_length for direction in directions]
 
@@ -339,9 +341,7 @@ def _compute_h_positions(
                 np.sqrt(1.0 / 3.0) * bisector + sign * np.sqrt(2.0 / 3.0) * normal
                 for sign in (1.0, -1.0)
             ]
-            positions = [
-                ctrl_pos + direction * bond_length for direction in directions[:n_h]
-            ]
+            positions = [ctrl_pos + direction * bond_length for direction in directions[:n_h]]
 
     elif method is None and n_h == 1 and units:
         direction = _unit(-np.sum(units, axis=0))
@@ -357,7 +357,8 @@ def _compute_h_positions(
         if bonded_positions:
             vectors = [position - ctrl_pos for position in bonded_positions]
             unit_vectors = [
-                vector / np.linalg.norm(vector) for vector in vectors
+                vector / np.linalg.norm(vector)
+                for vector in vectors
                 if np.linalg.norm(vector) > 1e-8
             ]
             opposite = -np.sum(unit_vectors, axis=0) if unit_vectors else np.array([1.0, 0.0, 0.0])

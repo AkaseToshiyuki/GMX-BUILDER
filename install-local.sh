@@ -5,17 +5,91 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DEFAULT_HOST=127.0.0.1
 DEFAULT_PORT=7788
+INTERACTIVE=0
+CLI_BIND_HOST=""
+CLI_DEPLOYMENT_MODE=""
+CLI_PORT=""
+CLI_CPU_CORES=""
+CLI_QUEUE_SLOTS=""
 
 fail() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
 }
 
+usage() {
+  cat <<'EOF'
+Usage: ./install-local.sh [options]
+
+With no options, installation is unattended and uses safe local defaults.
+Environment variables with the corresponding GMXBUILDER_* names are also
+accepted. Command-line options take precedence over environment variables.
+
+  --bind-host ADDRESS       Listener address (default: 127.0.0.1)
+  --deployment-mode MODE    local or trusted-lan
+  --port PORT               Web port (default: 7788)
+  --cpu-cores COUNT         CPU cores exposed to GMXBUILDER (default: half)
+  --queue-slots COUNT       Concurrent task slots (default: divisor near cores/4)
+  --interactive             Ask for each deployment value
+  -h, --help                Show this help
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --bind-host)
+      (($# >= 2)) || fail "--bind-host requires a value."
+      CLI_BIND_HOST="$2"
+      shift 2
+      ;;
+    --deployment-mode)
+      (($# >= 2)) || fail "--deployment-mode requires a value."
+      CLI_DEPLOYMENT_MODE="$2"
+      shift 2
+      ;;
+    --port)
+      (($# >= 2)) || fail "--port requires a value."
+      CLI_PORT="$2"
+      shift 2
+      ;;
+    --cpu-cores)
+      (($# >= 2)) || fail "--cpu-cores requires a value."
+      CLI_CPU_CORES="$2"
+      shift 2
+      ;;
+    --queue-slots)
+      (($# >= 2)) || fail "--queue-slots requires a value."
+      CLI_QUEUE_SLOTS="$2"
+      shift 2
+      ;;
+    --interactive)
+      INTERACTIVE=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "Unknown installer option: $1"
+      ;;
+  esac
+done
+
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || fail "Python 3 was not found."
 "$PYTHON_BIN" - <<'PY' || fail "Python 3.10 or newer is required."
 import sys
 raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
+
+printf '\nInstalling separately distributed force-field assets from official sources\n'
+"$PYTHON_BIN" "$ROOT_DIR/scripts/install_external_assets.py" \
+  --target "$ROOT_DIR/src/gmxbuilder/data/forcefields" || \
+  fail "Required external force-field assets could not be installed."
+
+printf '\nHydrating the verified prebuilt lipid library\n'
+"$PYTHON_BIN" "$ROOT_DIR/scripts/fetch_prebuilt_assets.py" || \
+  fail "The prebuilt lipid library could not be downloaded or verified."
 
 AVAILABLE_CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1')"
 [[ "$AVAILABLE_CORES" =~ ^[1-9][0-9]*$ ]] || AVAILABLE_CORES=1
@@ -40,22 +114,24 @@ prompt_value() {
   local label="$1"
   local default_value="$2"
   local value=""
-  if [[ -t 0 ]]; then
+  if (( INTERACTIVE )) && [[ -t 0 ]]; then
     read -r -p "$label [$default_value]: " value
   fi
   printf '%s\n' "${value:-$default_value}"
 }
 
-BIND_HOST="$(prompt_value 'Bind IP address' "${GMXBUILDER_BIND_HOST:-$DEFAULT_HOST}")"
+BIND_HOST="$(prompt_value 'Bind IP address' "${CLI_BIND_HOST:-${GMXBUILDER_BIND_HOST:-$DEFAULT_HOST}}")"
 DEFAULT_DEPLOYMENT_MODE=local
 if [[ "$BIND_HOST" != "127.0.0.1" && "$BIND_HOST" != "::1" ]]; then
   DEFAULT_DEPLOYMENT_MODE=trusted-lan
 fi
-DEPLOYMENT_MODE="$(prompt_value 'Deployment mode (local or trusted-lan)' "${GMXBUILDER_DEPLOYMENT_MODE:-$DEFAULT_DEPLOYMENT_MODE}")"
-PORT="$(prompt_value 'Web port' "${GMXBUILDER_PORT:-$DEFAULT_PORT}")"
-CPU_CORES="$(prompt_value 'CPU cores exposed to GMXBUILDER' "${GMXBUILDER_CPU_CORES:-$DEFAULT_CPU_CORES}")"
+DEPLOYMENT_MODE="$(prompt_value 'Deployment mode (local or trusted-lan)' "${CLI_DEPLOYMENT_MODE:-${GMXBUILDER_DEPLOYMENT_MODE:-$DEFAULT_DEPLOYMENT_MODE}}")"
+PORT="$(prompt_value 'Web port' "${CLI_PORT:-${GMXBUILDER_PORT:-$DEFAULT_PORT}}")"
+CPU_CORES="$(prompt_value 'CPU cores exposed to GMXBUILDER' "${CLI_CPU_CORES:-${GMXBUILDER_CPU_CORES:-$DEFAULT_CPU_CORES}}")"
+[[ "$CPU_CORES" =~ ^[1-9][0-9]*$ ]] || fail "CPU core count must be a positive integer."
+(( CPU_CORES <= AVAILABLE_CORES )) || fail "Only $AVAILABLE_CORES CPU cores are available."
 DEFAULT_QUEUE_SLOTS="$(choose_default_slots "$CPU_CORES")"
-QUEUE_SLOTS="$(prompt_value 'Concurrent task slots' "${GMXBUILDER_MAX_BUILDS:-$DEFAULT_QUEUE_SLOTS}")"
+QUEUE_SLOTS="$(prompt_value 'Concurrent task slots' "${CLI_QUEUE_SLOTS:-${GMXBUILDER_MAX_BUILDS:-$DEFAULT_QUEUE_SLOTS}}")"
 
 "$PYTHON_BIN" - "$BIND_HOST" <<'PY' || fail "Bind address must be a valid IPv4 or IPv6 address."
 import ipaddress
@@ -68,8 +144,6 @@ if [[ "$DEPLOYMENT_MODE" == "local" && "$BIND_HOST" != "127.0.0.1" && "$BIND_HOS
   fail "Local mode is loopback-only. Select trusted-lan for an explicitly firewalled private network."
 fi
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) || fail "Port must be 1-65535."
-[[ "$CPU_CORES" =~ ^[1-9][0-9]*$ ]] || fail "CPU core count must be a positive integer."
-(( CPU_CORES <= AVAILABLE_CORES )) || fail "Only $AVAILABLE_CORES CPU cores are available."
 [[ "$QUEUE_SLOTS" =~ ^[1-9][0-9]*$ ]] || fail "Concurrent task slots must be a positive integer."
 (( QUEUE_SLOTS <= CPU_CORES )) || fail "Concurrent task slots cannot exceed allocated CPU cores."
 (( CPU_CORES % QUEUE_SLOTS == 0 )) || fail "Concurrent task slots must divide allocated CPU cores exactly."
@@ -77,22 +151,28 @@ TASK_THREADS=$((CPU_CORES / QUEUE_SLOTS))
 
 VENV_DIR="$ROOT_DIR/.venv"
 printf '\nCreating/updating Python environment at %s\n' "$VENV_DIR"
-if command -v uv >/dev/null 2>&1; then
-  uv sync --project "$ROOT_DIR" --frozen --no-dev --python "$PYTHON_BIN"
-else
-  printf 'Warning: uv is unavailable; falling back to an unlocked pip install.\n' >&2
-  printf 'Install uv and rerun this installer to reproduce the checked uv.lock environment exactly.\n' >&2
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
-  "$VENV_DIR/bin/python" -m pip install -e "$ROOT_DIR"
-fi
-
-if command -v git >/dev/null 2>&1 && git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  if git lfs version >/dev/null 2>&1; then
-    git -C "$ROOT_DIR" lfs pull
-  else
-    printf 'Warning: Git LFS is not installed; large prebuilt assets may be unavailable.\n' >&2
+UV_BIN="$(command -v uv || true)"
+BOOTSTRAP_DIR=""
+cleanup_bootstrap() {
+  if [[ -n "$BOOTSTRAP_DIR" ]]; then
+    rm -rf "$BOOTSTRAP_DIR"
   fi
+}
+trap cleanup_bootstrap EXIT
+if [[ -z "$UV_BIN" ]]; then
+  BOOTSTRAP_DIR="$ROOT_DIR/.gmxbuilder-installer-tools"
+  rm -rf "$BOOTSTRAP_DIR"
+  "$PYTHON_BIN" -m venv "$BOOTSTRAP_DIR" || \
+    fail "Python's venv module is required to bootstrap the locked installer."
+  "$BOOTSTRAP_DIR/bin/python" -m pip install \
+    --disable-pip-version-check --no-input "uv==0.11.22" || \
+    fail "The locked uv installer could not be bootstrapped from PyPI."
+  UV_BIN="$BOOTSTRAP_DIR/bin/uv"
+fi
+"$UV_BIN" sync --project "$ROOT_DIR" --frozen --no-dev --python "$PYTHON_BIN"
+if [[ -n "$BOOTSTRAP_DIR" ]]; then
+  rm -rf "$BOOTSTRAP_DIR"
+  BOOTSTRAP_DIR=""
 fi
 
 "$VENV_DIR/bin/gmxbuilder" prebuilt-assets install

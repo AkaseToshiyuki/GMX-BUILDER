@@ -47,8 +47,7 @@ def _build_ptr(coordinates):
         force_field="charmm36m",
         template=template,
         retained_coordinates={
-            name: np.asarray(position, dtype=float)
-            for name, position in coordinates.items()
+            name: np.asarray(position, dtype=float) for name, position in coordinates.items()
         },
     )
 
@@ -77,11 +76,13 @@ def test_ptr_uses_force_field_tetrahedral_geometry():
 def test_modified_geometry_is_rotation_and_translation_covariant():
     original, original_quality = _build_ptr(_TYR_HEAVY_COORDINATES)
     angle = np.deg2rad(63.0)
-    rotation = np.array([
-        [np.cos(angle), -np.sin(angle), 0.0],
-        [np.sin(angle), np.cos(angle), 0.0],
-        [0.0, 0.0, 1.0],
-    ])
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
     translation = np.array([2.1, -0.7, 1.3])
     transformed_input = {
         name: rotation @ np.asarray(position) + translation
@@ -91,11 +92,9 @@ def test_modified_geometry_is_rotation_and_translation_covariant():
 
     local_group = ("OH", "P", "O1P", "O2P", "O3P")
     for first_index, first in enumerate(local_group):
-        for second in local_group[first_index + 1:]:
+        for second in local_group[first_index + 1 :]:
             original_distance = np.linalg.norm(original[first] - original[second])
-            transformed_distance = np.linalg.norm(
-                transformed[first] - transformed[second]
-            )
+            transformed_distance = np.linalg.norm(transformed[first] - transformed[second])
             assert transformed_distance == pytest.approx(original_distance, abs=2e-3)
     assert transformed_quality.max_bond_error_nm == pytest.approx(
         original_quality.max_bond_error_nm, abs=1e-7
@@ -111,11 +110,13 @@ def test_modified_geometry_rejects_an_unavoidable_external_overlap():
     golden_angle = np.pi * (3.0 - np.sqrt(5.0))
     z = 1.0 - 2.0 * (indices + 0.5) / count
     radius = np.sqrt(1.0 - z * z)
-    directions = np.column_stack((
-        radius * np.cos(golden_angle * indices),
-        radius * np.sin(golden_angle * indices),
-        z,
-    ))
+    directions = np.column_stack(
+        (
+            radius * np.cos(golden_angle * indices),
+            radius * np.sin(golden_angle * indices),
+            z,
+        )
+    )
     attachment = np.asarray(_TYR_HEAVY_COORDINATES["OH"])
     blocked_environment = attachment + 0.161 * directions
     template = load_force_field_rtp("charmm36m").get_residue("PTR")
@@ -133,13 +134,9 @@ def test_modified_geometry_rejects_an_unavoidable_external_overlap():
 
 
 @pytest.mark.parametrize("force_field,patch_id", _SUPPORTED_NATIVE_CASES)
-def test_every_enabled_native_template_passes_geometry_validation(
-    force_field, patch_id
-):
+def test_every_enabled_native_template_passes_geometry_validation(force_field, patch_id):
     patch = ALL_PATCHES[patch_id]
-    system = _three_residue_modification_system(
-        force_field, patch.target_residues[0]
-    )
+    system = _three_residue_modification_system(force_field, patch.target_residues[0])
     result = StructureProcessor().run(
         system,
         {
@@ -160,28 +157,31 @@ def test_every_enabled_native_template_passes_geometry_validation(
     ]
 
     target_indices = [
-        index for index, residue_name in enumerate(result.system.structure.resnames)
+        index
+        for index, residue_name in enumerate(result.system.structure.resnames)
         if residue_name == patch.product_name
     ]
     target_coordinates = {
-        result.system.structure.atom_names[index].strip():
-            result.system.structure.coordinates[index]
+        result.system.structure.atom_names[index].strip(): result.system.structure.coordinates[
+            index
+        ]
         for index in target_indices
     }
     for constraint in patch.stereo_constraints:
         selectors = (constraint.center, *constraint.ordered_neighbors)
         center, first, second, third = [
-            next(name for name in selector if name in target_coordinates)
-            for selector in selectors
+            next(name for name in selector if name in target_coordinates) for selector in selectors
         ]
         origin = target_coordinates[center]
-        signed_volume = float(np.dot(
-            np.cross(
-                target_coordinates[first] - origin,
-                target_coordinates[second] - origin,
-            ),
-            target_coordinates[third] - origin,
-        ))
+        signed_volume = float(
+            np.dot(
+                np.cross(
+                    target_coordinates[first] - origin,
+                    target_coordinates[second] - origin,
+                ),
+                target_coordinates[third] - origin,
+            )
+        )
         assert constraint.expected_sign * signed_volume > 2.0e-4
 
 
@@ -205,7 +205,7 @@ def test_multiple_native_modifications_across_chains_are_independent():
 
     assert result.success
     assert {"PTR", "M3L"}.issubset(set(result.system.structure.resnames))
-    assert [
-        record["patch_id"]
-        for record in result.system.metadata["modification_geometry"]
-    ] == ["PHOS_TYR", "KME3_LYS"]
+    assert [record["patch_id"] for record in result.system.metadata["modification_geometry"]] == [
+        "PHOS_TYR",
+        "KME3_LYS",
+    ]

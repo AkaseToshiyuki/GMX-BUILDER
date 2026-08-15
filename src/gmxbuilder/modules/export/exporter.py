@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 import shutil
 import zipfile
@@ -36,8 +37,12 @@ class ExportModule(BaseModule):
         self.validate_config_keys(
             config,
             {
-                "output_dir", "system_name", "write_mdp", "mdp_params",
-                "simparams", "seed",
+                "output_dir",
+                "system_name",
+                "write_mdp",
+                "mdp_params",
+                "simparams",
+                "seed",
             },
         )
         if "write_mdp" in config and not isinstance(config["write_mdp"], bool):
@@ -48,13 +53,8 @@ class ExportModule(BaseModule):
         system_name = config.get("system_name")
         if system_name is not None:
             if not isinstance(system_name, str) or not system_name.strip():
-                raise ModuleConfigError(
-                    "export.system_name must be a non-empty string"
-                )
-            if not all(
-                character.isalnum() or character in "_-"
-                for character in system_name
-            ):
+                raise ModuleConfigError("export.system_name must be a non-empty string")
+            if not all(character.isalnum() or character in "_-" for character in system_name):
                 raise ModuleConfigError(
                     "export.system_name may contain only letters, numbers, '_' and '-'"
                 )
@@ -84,11 +84,14 @@ class ExportModule(BaseModule):
         # Write PDB for visual reference (skip if >99,999 atoms — PDB format limit)
         if system.num_atoms <= 99999:
             from gmxbuilder.io.pdb import PDBWriter
+
             pdb_path = output_dir / "input.pdb"
             PDBWriter.write(system.structure, pdb_path, title=f"GMXBUILDER: {system_name}")
             log.append("Wrote input.pdb")
         else:
-            log.append(f"Skipped input.pdb ({system.num_atoms} atoms exceeds PDB 99999-atom serial limit; use input.gro instead)")
+            log.append(
+                f"Skipped input.pdb ({system.num_atoms} atoms exceeds PDB 99999-atom serial limit; use input.gro instead)"
+            )
 
         # ---- 2. Write topology and flat root-level parameter files ----
         top_path = output_dir / "topol.top"
@@ -101,9 +104,7 @@ class ExportModule(BaseModule):
                 "water_model", system.metadata.get("ff_water_model", "tip3p")
             ),
             "ligand_parameters": system.metadata.get("ligand_parameters", {}),
-            "native_nucleic_topologies": system.metadata.get(
-                "native_nucleic_topologies", []
-            ),
+            "native_nucleic_topologies": system.metadata.get("native_nucleic_topologies", []),
         }
         tw = TopologyWriter(force_field=ff_name, ff_config=ff_config)
         tw.write_top(system.structure, top_path, system_name=system_name, topology=system.topology)
@@ -120,23 +121,22 @@ class ExportModule(BaseModule):
             sim = system.metadata.get("simparams", config.get("simparams", {}))
             requested = dict(config.get("mdp_params", {}))
             from gmxbuilder.core.enums import ComponentKind
+
             has_membrane = bool(system.component_by_kind(ComponentKind.MEMBRANE))
             has_protein = bool(system.component_by_kind(ComponentKind.PROTEIN))
-            has_nucleic = bool(
-                system.component_by_kind(ComponentKind.NUCLEIC_ACID)
-            )
+            has_nucleic = bool(system.component_by_kind(ComponentKind.NUCLEIC_ACID))
             lipid_ff = str(system.metadata.get("lipid_ff", "")).lower()
-            has_lipid_dihedral_restraints = has_membrane and lipid_ff not in {
-                "gaff2", "lipid21"
-            }
+            has_lipid_dihedral_restraints = has_membrane and lipid_ff not in {"gaff2", "lipid21"}
             # Workflow metadata, execution hardware, and per-stage MDP values
             # are separate contracts.  The completed system supplies only the
             # scientific context that a browser must not be allowed to forge.
             mdp_context = {
                 "force_field": ff_name,
                 "force_field_family": (
-                    "charmm" if str(ff_name).lower().startswith("charmm")
-                    else "opls" if str(ff_name).lower().startswith("opls")
+                    "charmm"
+                    if str(ff_name).lower().startswith("charmm")
+                    else "opls"
+                    if str(ff_name).lower().startswith("opls")
                     else "amber"
                 ),
                 "has_membrane": has_membrane,
@@ -148,17 +148,14 @@ class ExportModule(BaseModule):
                 "lipid_dihedral_restraints": has_lipid_dihedral_restraints,
             }
             raw_sim = {**requested, **dict(sim or {})}
-            normalized_sim = mdp_writer.normalize_simulation_config(
-                raw_sim, mdp_context
-            )
+            normalized_sim = mdp_writer.normalize_simulation_config(raw_sim, mdp_context)
             minimization = normalized_sim["minimization"]
             eq_stages = normalized_sim["eq_stages"]
             prod_iters = normalized_sim["prod_iters"]
             requested_dih = eq_stages or []
             if eq_stages:
                 enabled_indices = [
-                    index for index, stage in enumerate(eq_stages)
-                    if stage.get("enabled", True)
+                    index for index, stage in enumerate(eq_stages) if stage.get("enabled", True)
                 ]
                 if enabled_indices and enabled_indices[-1] < len(eq_stages) - 1:
                     last_enabled = eq_stages[enabled_indices[-1]]
@@ -193,9 +190,7 @@ class ExportModule(BaseModule):
             log.append(f"Wrote {len(written)} .mdp files to mdp/")
             from gmxbuilder.runtime.hardware import normalize_simulation_hardware
 
-            execution_hardware = normalize_simulation_hardware(
-                normalized_sim.get("hardware")
-            )
+            execution_hardware = normalize_simulation_hardware(normalized_sim.get("hardware"))
 
         # ---- 3.5 Write run script + README (one-click launcher) ----
         readme_path = output_dir / "README.txt"
@@ -209,6 +204,14 @@ class ExportModule(BaseModule):
             execution_hardware,
         )
         log.append("Wrote README.txt")
+        from gmxbuilder.runtime.citations import atomistic_citations
+
+        citations_path = output_dir / "CITATIONS.json"
+        citations_path.write_text(
+            json.dumps(atomistic_citations(system.metadata), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        log.append("Wrote CITATIONS.json")
         if write_mdp:
             run_script_path = output_dir / "run_md.sh"
             self._write_run_script(
@@ -233,7 +236,8 @@ class ExportModule(BaseModule):
         return ModuleResult(
             success=True,
             system=system,
-            log=log + [
+            log=log
+            + [
                 f"  input.gro — {system.num_atoms} atoms",
                 "  topol.top — simulation-ready topology",
                 "  index.ndx — index groups (System/SOLU/MEMB/SOLV)",
@@ -279,15 +283,14 @@ class ExportModule(BaseModule):
             output_dir / "input.pdb",
             output_dir / "index.ndx",
             output_dir / "README.txt",
+            output_dir / "CITATIONS.json",
             *cls._topology_members(output_dir),
             *written_mdp,
         }
         if include_run_script:
             candidates.add(output_dir / "run_md.sh")
         members = sorted(
-            path.resolve()
-            for path in candidates
-            if path.is_file() and not path.is_symlink()
+            path.resolve() for path in candidates if path.is_file() and not path.is_symlink()
         )
         zip_path.unlink(missing_ok=True)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -341,7 +344,7 @@ class ExportModule(BaseModule):
             for name, indices in groups.items():
                 fh.write(f"\n[ {name} ]\n")
                 for j in range(0, len(indices), 15):
-                    fh.write(" ".join(str(x) for x in indices[j:j+15]) + "\n")
+                    fh.write(" ".join(str(x) for x in indices[j : j + 15]) + "\n")
 
     @staticmethod
     def _write_readme(
@@ -354,10 +357,12 @@ class ExportModule(BaseModule):
         execution_hardware: dict[str, object] | None = None,
     ) -> None:
         """Generate a README with usage instructions and file descriptions."""
-        mdp_listing = "\n".join(
-            f"    {mdp_path.name:<20s} — generated simulation stage"
-            for mdp_path in mdp_paths
-        ) or "    (MDP generation was disabled)"
+        mdp_listing = (
+            "\n".join(
+                f"    {mdp_path.name:<20s} — generated simulation stage" for mdp_path in mdp_paths
+            )
+            or "    (MDP generation was disabled)"
+        )
         coordinate_listing = [
             "    input.gro             — starting coordinates",
         ]
@@ -365,24 +370,32 @@ class ExportModule(BaseModule):
             coordinate_listing.append(
                 "    input.pdb             — optional visualization coordinates"
             )
-        coordinate_listing.extend([
-            "    topol.top             — master topology",
-            "    index.ndx             — index groups referenced by the MDP files",
-        ])
+        coordinate_listing.extend(
+            [
+                "    topol.top             — master topology",
+                "    index.ndx             — index groups referenced by the MDP files",
+            ]
+        )
         parameter_suffixes = {
-            ".arn", ".atp", ".hdb", ".itp", ".r2b", ".rtp", ".tdb",
+            ".arn",
+            ".atp",
+            ".hdb",
+            ".itp",
+            ".r2b",
+            ".rtp",
+            ".tdb",
         }
         parameter_files = sorted(
             candidate.name
             for candidate in path.parent.iterdir()
             if candidate.is_file() and candidate.suffix.lower() in parameter_suffixes
         )
-        parameter_listing = "\n".join(
-            f"    {name}" for name in parameter_files
-        ) or "    (no separate parameter files were generated)"
+        parameter_listing = (
+            "\n".join(f"    {name}" for name in parameter_files)
+            or "    (no separate parameter files were generated)"
+        )
         production_names = [
-            mdp_path.stem for mdp_path in mdp_paths
-            if mdp_path.stem.startswith("production")
+            mdp_path.stem for mdp_path in mdp_paths if mdp_path.stem.startswith("production")
         ]
         final_production = production_names[-1] if production_names else "production"
         hardware = execution_hardware or {}
@@ -392,7 +405,7 @@ class ExportModule(BaseModule):
         mpi_mode = str(hardware.get("mode", "thread-mpi"))
         gpu_ids = ",".join(str(value) for value in hardware.get("gpu_ids", []))
         gpu_description = gpu_ids if hardware.get("use_gpu") else "disabled"
-        readme = f'''==================================================================
+        readme = f"""==================================================================
   GMXBUILDER — GROMACS Simulation Package
 ==================================================================
 
@@ -472,7 +485,7 @@ class ExportModule(BaseModule):
   use a GROMACS executable compiled with external MPI (usually gmx_mpi).
 
 ==================================================================
-'''
+"""
         path.write_text(readme)
 
     @staticmethod
@@ -501,7 +514,7 @@ class ExportModule(BaseModule):
         top = "topol.top"
         ndx = "index.ndx"
 
-        script = f'''#!/usr/bin/env bash
+        script = f"""#!/usr/bin/env bash
 # =============================================================================
 #  GMXBUILDER — One-click MD simulation script
 #  System:  {system_name}
@@ -695,7 +708,7 @@ echo ""
 echo " To restart from a checkpoint:"
 echo "   gmx mdrun -s ${{STAGE}}.tpr -cpi ${{STAGE}}.cpt -append"
 echo "============================================"
-'''
+"""
         path.write_text(script)
         # Make executable
         path.chmod(0o755)

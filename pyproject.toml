@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gmxbuilder"
-version = "0.9.0"
+version = "0.9.9"
 description = "Build GROMACS membrane protein simulation systems with automated topology and MD parameter generation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ dependencies = [
     "scipy>=1.10",
     "rdkit>=2024.3",
     "openmm>=8.2",
-    "pdbfixer @ git+https://github.com/openmm/pdbfixer.git@94cfa4c0ca551cdc5f13320f9a658efd59f2b881",
+    "pdbfixer @ https://github.com/openmm/pdbfixer/archive/94cfa4c0ca551cdc5f13320f9a658efd59f2b881.tar.gz",
     "pydantic>=2.0",
     "click>=8.0",
     "PyYAML>=6.0",

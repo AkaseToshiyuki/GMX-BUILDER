@@ -42,9 +42,7 @@ class BaseModule(ABC):
         """Reject unconsumed inputs instead of silently ignoring them."""
         unknown = sorted(set(config) - set(allowed))
         if unknown:
-            raise ModuleConfigError(
-                f"Unsupported {self.name} option(s): {', '.join(unknown)}"
-            )
+            raise ModuleConfigError(f"Unsupported {self.name} option(s): {', '.join(unknown)}")
 
     @abstractmethod
     def validate_config(self, config: dict) -> bool:

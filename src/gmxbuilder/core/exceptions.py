@@ -3,46 +3,55 @@
 
 class GMXBuilderError(Exception):
     """Base exception for all GMXBUILDER errors."""
+
     pass
 
 
 class ParseError(GMXBuilderError):
     """Failure to parse an input file."""
+
     pass
 
 
 class ValidationError(GMXBuilderError):
     """Input validation failure."""
+
     pass
 
 
 class ModuleError(GMXBuilderError):
     """Module execution failure."""
+
     pass
 
 
 class ModuleConfigError(ValidationError):
     """Invalid module configuration."""
+
     pass
 
 
 class TopologyError(GMXBuilderError):
     """Topology building failure."""
+
     pass
 
 
 class GeometryError(GMXBuilderError):
     """Geometric operation failure."""
+
     pass
 
 
 class ForceFieldError(GMXBuilderError):
     """Force field parameter not found or invalid."""
+
     pass
 
 
 class OverlapError(GMXBuilderError):
     """Irresolvable atomic overlap."""
+
     pass
 
 

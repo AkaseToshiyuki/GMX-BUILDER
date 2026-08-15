@@ -30,14 +30,18 @@ _MANIFEST_PATH = _DATA_DIR / "manifest.json"
 
 
 def _configured_roots() -> tuple[Path, Path]:
-    lipid_root = Path(os.environ.get(
-        "GMXBUILDER_LIPID_LIBRARY",
-        Path.home() / ".cache" / "gmxbuilder" / "lipid_equilibrated",
-    )).expanduser()
-    gaff_root = Path(os.environ.get(
-        "GMXBUILDER_GAFF_CACHE",
-        Path.home() / ".cache" / "gmxbuilder" / "gaff2",
-    )).expanduser()
+    lipid_root = Path(
+        os.environ.get(
+            "GMXBUILDER_LIPID_LIBRARY",
+            Path.home() / ".cache" / "gmxbuilder" / "lipid_equilibrated",
+        )
+    ).expanduser()
+    gaff_root = Path(
+        os.environ.get(
+            "GMXBUILDER_GAFF_CACHE",
+            Path.home() / ".cache" / "gmxbuilder" / "gaff2",
+        )
+    ).expanduser()
     return lipid_root, gaff_root
 
 
@@ -53,9 +57,7 @@ def _read_manifest(path: Path = _MANIFEST_PATH) -> dict:
     if manifest.get("schema_version") != ASSET_SCHEMA_VERSION:
         raise RuntimeError("Unsupported prebuilt lipid asset manifest schema")
     if manifest.get("library_schema_version") != LIBRARY_SCHEMA_VERSION:
-        raise RuntimeError(
-            "Prebuilt lipid assets do not match the current strict-library schema"
-        )
+        raise RuntimeError("Prebuilt lipid assets do not match the current strict-library schema")
     filename = str(manifest.get("archive", "")).strip()
     digest = str(manifest.get("archive_sha256", "")).strip().lower()
     if not filename or Path(filename).name != filename:
@@ -80,15 +82,15 @@ def _sha256(path: Path) -> str:
 def _verify_archive(path: Path, manifest: dict) -> None:
     if not path.is_file():
         raise RuntimeError(
-            "Prebuilt lipid assets are absent. If this is a Git checkout, "
-            "install Git LFS and run `git lfs pull`."
+            "Prebuilt lipid assets are absent. From a source checkout, run "
+            "`python3 scripts/fetch_prebuilt_assets.py` before installation."
         )
     with path.open("rb") as handle:
         prefix = handle.read(80)
     if prefix.startswith(b"version https://git-lfs.github.com/spec/"):
         raise RuntimeError(
-            "Prebuilt lipid assets are still a Git LFS pointer. Install Git "
-            "LFS, run `git lfs pull`, then retry."
+            "Prebuilt lipid assets are still a Git LFS pointer. Run "
+            "`python3 scripts/fetch_prebuilt_assets.py`, then retry."
         )
     expected_size = int(manifest.get("archive_bytes", -1))
     if expected_size >= 0 and path.stat().st_size != expected_size:
@@ -128,10 +130,14 @@ def _write_marker(root: Path, manifest: dict, installed_files: int) -> None:
 
 @contextmanager
 def _installation_lock(lipid_root: Path, gaff_root: Path) -> Iterator[None]:
-    common = Path(os.path.commonpath([
-        str(lipid_root.resolve(strict=False)),
-        str(gaff_root.resolve(strict=False)),
-    ]))
+    common = Path(
+        os.path.commonpath(
+            [
+                str(lipid_root.resolve(strict=False)),
+                str(gaff_root.resolve(strict=False)),
+            ]
+        )
+    )
     if str(common) == os.path.sep:
         common = Path.home() / ".cache" / "gmxbuilder"
     common.mkdir(parents=True, exist_ok=True)
@@ -184,9 +190,7 @@ def _validate_staging(staging: Path, manifest: dict) -> None:
     metadata_files = sorted(lipid_root.glob("*/*/metadata.json"))
     expected_lipids = int(manifest["contents"]["strict_library_entries"])
     if len(metadata_files) != expected_lipids:
-        raise RuntimeError(
-            "Prebuilt lipid asset entry count does not match its manifest"
-        )
+        raise RuntimeError("Prebuilt lipid asset entry count does not match its manifest")
 
     library = EquilibratedLipidLibrary([lipid_root])
     for metadata_path in metadata_files:
@@ -210,18 +214,14 @@ def _validate_staging(staging: Path, manifest: dict) -> None:
     gaff_entries = [path for path in gaff_root.iterdir()] if gaff_root.is_dir() else []
     expected_gaff = int(manifest["contents"]["gaff2_cache_entries"])
     if len([path for path in gaff_entries if path.is_dir()]) != expected_gaff:
-        raise RuntimeError(
-            "Prebuilt GAFF2 cache entry count does not match its manifest"
-        )
+        raise RuntimeError("Prebuilt GAFF2 cache entry count does not match its manifest")
 
 
 def _remove_stale_lipid_entries(staging: Path, destination: Path) -> int:
     """Replace only existing strict entries that the current runtime rejects."""
     removed = 0
     library = EquilibratedLipidLibrary([destination])
-    for metadata_path in sorted(
-        (staging / "lipid_equilibrated").glob("*/*/metadata.json")
-    ):
+    for metadata_path in sorted((staging / "lipid_equilibrated").glob("*/*/metadata.json")):
         source_entry = metadata_path.parent
         relative = source_entry.relative_to(staging / "lipid_equilibrated")
         target = destination / relative
@@ -229,11 +229,14 @@ def _remove_stale_lipid_entries(staging: Path, destination: Path) -> int:
             continue
         try:
             metadata = json.loads(metadata_path.read_text())
-            valid = library.inspect(
-                source_entry.name,
-                str(metadata["force_field"]),
-                str(metadata["lipid_ff"]),
-            ) is not None
+            valid = (
+                library.inspect(
+                    source_entry.name,
+                    str(metadata["force_field"]),
+                    str(metadata["lipid_ff"]),
+                )
+                is not None
+            )
         except (OSError, ValueError, KeyError, TypeError):
             valid = False
         if valid:
@@ -260,9 +263,8 @@ def install_prebuilt_assets(
     lipid_destination = Path(lipid_root).expanduser() if lipid_root else default_lipid
     gaff_destination = Path(gaff_root).expanduser() if gaff_root else default_gaff
     with _installation_lock(lipid_destination, gaff_destination):
-        if (
-            _marker_matches(lipid_destination, manifest)
-            and _marker_matches(gaff_destination, manifest)
+        if _marker_matches(lipid_destination, manifest) and _marker_matches(
+            gaff_destination, manifest
         ):
             return {
                 "status": "ready",
@@ -284,23 +286,21 @@ def install_prebuilt_assets(
                         target.mkdir(parents=True, exist_ok=True)
                         continue
                     if not member.isfile():
-                        raise RuntimeError(
-                            f"Unsupported prebuilt asset entry: {member.name}"
-                        )
+                        raise RuntimeError(f"Unsupported prebuilt asset entry: {member.name}")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     source = bundle.extractfile(member)
                     if source is None:
-                        raise RuntimeError(
-                            f"Could not read prebuilt asset entry: {member.name}"
-                        )
+                        raise RuntimeError(f"Could not read prebuilt asset entry: {member.name}")
                     with source, target.open("wb") as destination:
                         shutil.copyfileobj(source, destination)
             _validate_staging(staging, manifest)
             replaced_lipids = _remove_stale_lipid_entries(
-                staging, lipid_destination,
+                staging,
+                lipid_destination,
             )
             installed_lipid = _merge_tree(
-                staging / "lipid_equilibrated", lipid_destination,
+                staging / "lipid_equilibrated",
+                lipid_destination,
             )
             installed_gaff = _merge_tree(staging / "gaff2", gaff_destination)
         _write_marker(lipid_destination, manifest, installed_lipid)
@@ -341,9 +341,7 @@ def prebuilt_asset_status(
         with archive.open("rb") as handle:
             archive_state = (
                 "lfs-pointer"
-                if handle.read(80).startswith(
-                    b"version https://git-lfs.github.com/spec/"
-                )
+                if handle.read(80).startswith(b"version https://git-lfs.github.com/spec/")
                 else "present"
             )
     return {

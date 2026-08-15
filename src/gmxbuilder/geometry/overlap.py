@@ -9,11 +9,23 @@ from gmxbuilder.geometry.periodic import wrap_periodic_coordinates
 
 # Approximate vdW radii (nm) for common elements
 _DEFAULT_VDW_RADII: dict[str, float] = {
-    "H": 0.110,  "HE": 0.140,
-    "C": 0.170,  "N": 0.155,  "O": 0.152,  "F": 0.147,
-    "P": 0.180,  "S": 0.180,  "CL": 0.175,
-    "NA": 0.227, "K": 0.275,  "CA": 0.231, "MG": 0.173,
-    "ZN": 0.139, "FE": 0.200, "BR": 0.185, "I": 0.198,
+    "H": 0.110,
+    "HE": 0.140,
+    "C": 0.170,
+    "N": 0.155,
+    "O": 0.152,
+    "F": 0.147,
+    "P": 0.180,
+    "S": 0.180,
+    "CL": 0.175,
+    "NA": 0.227,
+    "K": 0.275,
+    "CA": 0.231,
+    "MG": 0.173,
+    "ZN": 0.139,
+    "FE": 0.200,
+    "BR": 0.185,
+    "I": 0.198,
 }
 
 

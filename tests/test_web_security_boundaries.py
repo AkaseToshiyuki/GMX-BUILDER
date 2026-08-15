@@ -12,31 +12,35 @@ def _task(tmp_path, monkeypatch, name: str) -> str:
     monkeypatch.setattr(task_manager, "root", tmp_path)
     created = task_manager.create_task(f"{name}.pdb")
     task_id = created["task_id"]
-    task_manager.update_state(task_id, {
-        "task_type_id": "membrane-bilayer",
-        "task_type": {
-            "id": "membrane-bilayer",
-            "route_slug": "BilayerBuilder",
-            "visible_modules": [
-                "input", "forcefield", "structure", "orient", "membrane",
-                "solvation", "ions", "simparams",
-            ],
+    task_manager.update_state(
+        task_id,
+        {
+            "task_type_id": "membrane-bilayer",
+            "task_type": {
+                "id": "membrane-bilayer",
+                "route_slug": "BilayerBuilder",
+                "visible_modules": [
+                    "input",
+                    "forcefield",
+                    "structure",
+                    "orient",
+                    "membrane",
+                    "solvation",
+                    "ions",
+                    "simparams",
+                ],
+            },
         },
-    })
+    )
     task_manager.save_uploaded_pdb(
         task_id,
         f"{name}.pdb",
-        (
-            b"ATOM      1  CA  ALA A   1       0.000   0.000   0.000"
-            b"  1.00  0.00           C\nEND\n"
-        ),
+        (b"ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\nEND\n"),
     )
     return task_id
 
 
-def test_client_supplied_paths_are_rejected_even_inside_another_task(
-    tmp_path, monkeypatch
-):
+def test_client_supplied_paths_are_rejected_even_inside_another_task(tmp_path, monkeypatch):
     task_a = _task(tmp_path, monkeypatch, "a")
     task_b = _task(tmp_path, monkeypatch, "b")
     other_path = str(task_manager.get_pdb_path(task_b))
@@ -84,29 +88,28 @@ def test_task_resource_validator_rejects_cross_task_path(tmp_path, monkeypatch):
 def test_viewer_route_rejects_non_pipeline_step(tmp_path, monkeypatch):
     task_id = _task(tmp_path, monkeypatch, "viewer")
     with TestClient(app) as client:
-        response = client.get(
-            f"/api/step/{task_id}/not-a-real-step/viewer.pdb"
-        )
+        response = client.get(f"/api/step/{task_id}/not-a-real-step/viewer.pdb")
     assert response.status_code == 400
     assert response.json()["error"] == "Unknown pipeline step"
 
 
-def test_public_task_state_and_filter_response_do_not_expose_server_paths(
-    tmp_path, monkeypatch
-):
+def test_public_task_state_and_filter_response_do_not_expose_server_paths(tmp_path, monkeypatch):
     task_id = _task(tmp_path, monkeypatch, "private")
     task_dir = task_manager.get_task_dir(task_id)
-    task_manager.update_state(task_id, {
-        "preview_pdb_path": str(task_dir / "preview.pdb"),
-        "cgenff_uploads": {
-            "LIG": {
-                "mol2_path": str(task_dir / "cgenff" / "LIG" / "LIG.mol2"),
-                "str_path": str(task_dir / "cgenff" / "LIG" / "LIG.str"),
-                "force_field": "charmm36m",
-                "cgenff_version": "4.6",
-            }
+    task_manager.update_state(
+        task_id,
+        {
+            "preview_pdb_path": str(task_dir / "preview.pdb"),
+            "cgenff_uploads": {
+                "LIG": {
+                    "mol2_path": str(task_dir / "cgenff" / "LIG" / "LIG.mol2"),
+                    "str_path": str(task_dir / "cgenff" / "LIG" / "LIG.str"),
+                    "force_field": "charmm36m",
+                    "cgenff_version": "4.6",
+                }
+            },
         },
-    })
+    )
 
     with TestClient(app) as client:
         status = client.get(f"/api/task/{task_id}")
@@ -130,9 +133,7 @@ def test_public_task_state_and_filter_response_do_not_expose_server_paths(
     assert filtered.json()["filtered_resource"] == "filtered.pdb"
 
 
-def test_save_step_only_accepts_visible_ui_steps_and_cannot_complete_science(
-    tmp_path, monkeypatch
-):
+def test_save_step_only_accepts_visible_ui_steps_and_cannot_complete_science(tmp_path, monkeypatch):
     task_id = _task(tmp_path, monkeypatch, "state")
 
     with TestClient(app) as client:
@@ -176,15 +177,16 @@ def test_save_step_rejects_oversized_ui_state(tmp_path, monkeypatch):
 
 
 def test_step_results_expose_resource_urls_instead_of_host_paths(tmp_path):
-    result = server._public_step_result("a" * 32, {
-        "status": "ok",
-        "step": "ions",
-        "viewer_pdb_path": str(tmp_path / "viewer.pdb"),
-        "index_path": str(tmp_path / "index.ndx"),
-    })
+    result = server._public_step_result(
+        "a" * 32,
+        {
+            "status": "ok",
+            "step": "ions",
+            "viewer_pdb_path": str(tmp_path / "viewer.pdb"),
+            "index_path": str(tmp_path / "index.ndx"),
+        },
+    )
 
     assert str(tmp_path) not in str(result)
-    assert result["viewer_pdb_url"] == (
-        f"/api/step/{'a' * 32}/ions/viewer.pdb"
-    )
+    assert result["viewer_pdb_url"] == (f"/api/step/{'a' * 32}/ions/viewer.pdb")
     assert result["index_available"] is True

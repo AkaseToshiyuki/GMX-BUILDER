@@ -28,16 +28,20 @@ def _distance_matrix(coords):
 
 
 def test_xy_scaling_moves_whole_lipids_without_distorting_geometry():
-    lipid_a = np.array([
-        [-2.1, -1.0, 0.3],
-        [-1.9, -1.0, 0.3],
-        [-2.0, -0.8, -0.2],
-    ])
-    lipid_b = np.array([
-        [1.9, 1.0, 0.4],
-        [2.1, 1.0, 0.4],
-        [2.0, 1.2, -0.1],
-    ])
+    lipid_a = np.array(
+        [
+            [-2.1, -1.0, 0.3],
+            [-1.9, -1.0, 0.3],
+            [-2.0, -0.8, -0.2],
+        ]
+    )
+    lipid_b = np.array(
+        [
+            [1.9, 1.0, 0.4],
+            [2.1, 1.0, 0.4],
+            [2.0, 1.2, -0.1],
+        ]
+    )
     coords = np.vstack([lipid_a, lipid_b])
     before_a = _distance_matrix(coords[:3].copy())
     before_b = _distance_matrix(coords[3:].copy())
@@ -65,9 +69,7 @@ def test_cross_leaflet_relaxation_preserves_z_coordinates():
     upper_z = upper[:, 2].copy()
     lower_z = lower[:, 2].copy()
 
-    relax_interleaflet_clashes_xy(
-        upper, lower, [2], [2]
-    )
+    relax_interleaflet_clashes_xy(upper, lower, [2], [2])
 
     assert np.array_equal(upper[:, 2], upper_z)
     assert np.array_equal(lower[:, 2], lower_z)
@@ -75,20 +77,29 @@ def test_cross_leaflet_relaxation_preserves_z_coordinates():
 
 
 def test_cross_leaflet_relaxation_preserves_each_leaflet_lattice():
-    upper = np.array([
-        [0.0, 0.0, 0.05],
-        [0.8, 0.0, 0.05],
-    ])
-    lower = np.array([
-        [0.0, 0.0, -0.05],
-        [0.8, 0.0, -0.05],
-    ])
+    upper = np.array(
+        [
+            [0.0, 0.0, 0.05],
+            [0.8, 0.0, 0.05],
+        ]
+    )
+    lower = np.array(
+        [
+            [0.0, 0.0, -0.05],
+            [0.8, 0.0, -0.05],
+        ]
+    )
     upper_before = upper.copy()
     lower_vector = lower[1] - lower[0]
 
     relax_interleaflet_clashes_xy(
-        upper, lower, [1, 1], [1, 1], cutoff=0.20,
-        displacement=0.05, n_iterations=20,
+        upper,
+        lower,
+        [1, 1],
+        [1, 1],
+        cutoff=0.20,
+        displacement=0.05,
+        n_iterations=20,
         box_xy=4.0,
     )
 
@@ -97,15 +108,22 @@ def test_cross_leaflet_relaxation_preserves_each_leaflet_lattice():
 
 
 def test_same_leaflet_relaxation_detects_periodic_face_clashes():
-    coordinates = np.array([
-        [0.01, 1.0, 0.0],
-        [5.99, 1.0, 0.0],
-    ])
+    coordinates = np.array(
+        [
+            [0.01, 1.0, 0.0],
+            [5.99, 1.0, 0.0],
+        ]
+    )
 
     relaxed = relax_lipid_clashes(
-        coordinates, ["C1", "C1"],
-        lipid_sizes=[1, 1], vdw_cutoff=0.12, displacement=0.03,
-        n_iterations=20, rng=np.random.default_rng(5), box_xy=6.0,
+        coordinates,
+        ["C1", "C1"],
+        lipid_sizes=[1, 1],
+        vdw_cutoff=0.12,
+        displacement=0.03,
+        n_iterations=20,
+        rng=np.random.default_rng(5),
+        box_xy=6.0,
     )
 
     delta = relaxed[0] - relaxed[1]
@@ -128,8 +146,14 @@ def test_cross_leaflet_relaxation_detects_periodic_face_clashes():
     lower = np.array([[5.99, 1.0, -0.05]])
 
     relax_interleaflet_clashes_xy(
-        upper, lower, [1], [1], cutoff=0.20, displacement=0.05,
-        n_iterations=10, box_xy=6.0,
+        upper,
+        lower,
+        [1],
+        [1],
+        cutoff=0.20,
+        displacement=0.05,
+        n_iterations=10,
+        box_xy=6.0,
     )
 
     delta = upper[0] - lower[0]
@@ -145,7 +169,9 @@ def test_azimuthal_declashing_preserves_centres_and_internal_geometry():
     internal_before = _distance_matrix(second)
 
     rotated, clearance = rotate_lipids_away_from_clashes(
-        coordinates, [3, 3], min_distance=0.035,
+        coordinates,
+        [3, 3],
+        min_distance=0.035,
     )
 
     centres_after = np.asarray([rotated[:3].mean(axis=0), rotated[3:].mean(axis=0)])
@@ -155,18 +181,24 @@ def test_azimuthal_declashing_preserves_centres_and_internal_geometry():
 
 
 def test_external_azimuthal_declashing_preserves_centre_and_geometry():
-    lipid = np.asarray([
-        [-0.20, 0.0, 0.0],
-        [0.00, 0.0, 0.0],
-        [0.20, 0.0, 0.0],
-    ])
+    lipid = np.asarray(
+        [
+            [-0.20, 0.0, 0.0],
+            [0.00, 0.0, 0.0],
+            [0.20, 0.0, 0.0],
+        ]
+    )
     external = np.asarray([[0.20, 0.01, 0.0]])
     centre_before = lipid.mean(axis=0)
     internal_before = _distance_matrix(lipid)
 
     rotated, clearance = rotate_lipids_away_from_external_clashes(
-        lipid.copy(), [3], external, min_distance=0.05,
-        angle_samples=24, max_rounds=2,
+        lipid.copy(),
+        [3],
+        external,
+        min_distance=0.05,
+        angle_samples=24,
+        max_rounds=2,
     )
 
     assert np.allclose(rotated.mean(axis=0), centre_before)
@@ -200,8 +232,14 @@ def test_lipid_trimming_retains_whole_molecules_and_aligned_atom_fields():
     assert leaflet.metadata["n_lipids"] == 2
     assert sum(leaflet.metadata["lipid_sizes"]) == leaflet.num_atoms
     for field_name in (
-        "atom_names", "resnames", "resids", "chain_ids", "segids",
-        "elements", "occupancies", "tempfactors",
+        "atom_names",
+        "resnames",
+        "resids",
+        "chain_ids",
+        "segids",
+        "elements",
+        "occupancies",
+        "tempfactors",
     ):
         assert len(getattr(leaflet.structure, field_name)) == leaflet.num_atoms
 
@@ -238,9 +276,7 @@ def test_popc_headgroup_spacing_matches_registered_bilayer_thickness(empty_syste
     assert result.success
     assert len(upper) == len(lower) == 64
     assert measured_dhh == pytest.approx(3.8, abs=0.25)
-    assert membrane.metadata["bilayer_thickness"] == pytest.approx(
-        measured_dhh, abs=1e-8
-    )
+    assert membrane.metadata["bilayer_thickness"] == pytest.approx(measured_dhh, abs=1e-8)
 
 
 def test_explicit_lipid_count_preserves_apl_derived_periodic_box(empty_system):
@@ -259,6 +295,53 @@ def test_explicit_lipid_count_preserves_apl_derived_periodic_box(empty_system):
     assert membrane.metadata["box_xy"] == pytest.approx(expected_xy)
     assert any("Box XY retained at APL target" in line for line in result.log)
     assert all("protein extent dominates" not in line for line in result.log)
+
+
+def test_bootstrap_geometry_retries_a_compact_rdkit_conformer(monkeypatch):
+    calls = []
+
+    def fake_geometry(*args, seed, **kwargs):
+        calls.append(seed)
+        names = ["N", "C1", "C2", "C3"]
+        if len(calls) == 1:
+            # The polar and carbon centroids nearly coincide, so the first
+            # conformer is not a usable amphiphile axis.
+            coordinates = np.asarray(
+                [
+                    [0.0, 0.0, 0.05],
+                    [-0.05, 0.0, 0.0],
+                    [0.00, 0.0, 0.0],
+                    [0.05, 0.0, 0.0],
+                ]
+            )
+        else:
+            coordinates = np.asarray(
+                [
+                    [0.0, 0.0, 0.60],
+                    [-0.10, 0.0, 0.0],
+                    [0.00, 0.0, 0.0],
+                    [0.10, 0.0, 0.0],
+                ]
+            )
+        return coordinates, names
+
+    monkeypatch.setattr(
+        "gmxbuilder.modules.membrane.builder.build_rdkit_lipid_geometry",
+        fake_geometry,
+    )
+    leaflet = MembraneBuilder(use_equilibrated_library=False)._build_mixed_leaflet(
+        np.asarray([[0.0, 0.0]]),
+        1.9,
+        ["DAPE"],
+        np.random.default_rng(20260713),
+        force_field="charmm36m",
+        lipid_ff="charmm36m",
+        box_xy=4.0,
+    )
+
+    assert len(calls) == 2
+    assert leaflet.metadata["bootstrap_conformer_retries"] == 1
+    assert leaflet.num_atoms == 4
 
 
 def test_mixed_gaff2_bilayer_has_inward_tails_and_a_sealed_core(empty_system):
@@ -280,9 +363,7 @@ def test_mixed_gaff2_bilayer_has_inward_tails_and_a_sealed_core(empty_system):
         },
     )
 
-    membrane = result.system.component_by_name(
-        "MEMBRANE_POPC(50%)+POPE(50%)_asym"
-    )
+    membrane = result.system.component_by_name("MEMBRANE_POPC(50%)+POPE(50%)_asym")
     assert result.success
     assert membrane is not None
     quality = membrane.metadata["orientation_quality"]
@@ -292,7 +373,7 @@ def test_mixed_gaff2_bilayer_has_inward_tails_and_a_sealed_core(empty_system):
     assert quality["minimum_inward_cosine"] >= 0.10
     assert quality["tail_core_gap_nm"] <= quality["maximum_tail_core_gap_nm"]
     sizes = membrane.metadata["lipid_sizes"]
-    split = sum(sizes[:membrane.metadata["n_lipids_upper"]])
+    split = sum(sizes[: membrane.metadata["n_lipids_upper"]])
     coordinates = result.system.coordinates[membrane.atom_indices]
     box = result.system.structure.dimensions()
     z_origin = float(coordinates[:, 2].min()) - 1.0
@@ -303,9 +384,9 @@ def test_mixed_gaff2_bilayer_has_inward_tails_and_a_sealed_core(empty_system):
     lower[:, :2] = np.mod(lower[:, :2], box[:2])
     upper[:, 2] -= z_origin
     lower[:, 2] -= z_origin
-    clearance = cKDTree(
-        upper, boxsize=np.asarray([box[0], box[1], z_box])
-    ).query(lower, k=1)[0].min()
+    clearance = (
+        cKDTree(upper, boxsize=np.asarray([box[0], box[1], z_box])).query(lower, k=1)[0].min()
+    )
     # The geometric pre-relaxation need only avoid singular contacts; the
     # exported minimization performs force-field-specific VDW relaxation.
     assert clearance >= 0.05
@@ -320,11 +401,13 @@ def test_asymmetric_box_uses_the_larger_leaflet_natural_area():
 
 
 def test_nonphospholipid_anchor_uses_outer_polar_geometry_not_gaff_o3():
-    coordinates = np.asarray([
-        [0.0, 0.0, -1.0],
-        [0.0, 0.0, 0.8],
-        [0.0, 0.0, 0.2],
-    ])
+    coordinates = np.asarray(
+        [
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, 0.8],
+            [0.0, 0.0, 0.2],
+        ]
+    )
 
     index = _headgroup_anchor_index(coordinates, ["C17", "O14", "O3"])
 
@@ -334,11 +417,13 @@ def test_nonphospholipid_anchor_uses_outer_polar_geometry_not_gaff_o3():
 def test_headgroup_plane_reuses_recorded_nonphospholipid_anchor():
     leaflet = System(
         structure=Structure(
-            coordinates=np.asarray([
-                [0.0, 0.0, -1.0],
-                [0.0, 0.0, 0.8],
-                [0.0, 0.0, 0.2],
-            ]),
+            coordinates=np.asarray(
+                [
+                    [0.0, 0.0, -1.0],
+                    [0.0, 0.0, 0.8],
+                    [0.0, 0.0, 0.2],
+                ]
+            ),
             box_vectors=np.eye(3) * 4.0,
             atom_names=["C17", "O14", "O3"],
         ),

@@ -71,7 +71,10 @@ def atom_element(atom_name: str) -> str:
 
 
 def _sterol_head_polar_indices(
-    coordinates: np.ndarray, elements: np.ndarray, polar: np.ndarray, carbons: np.ndarray,
+    coordinates: np.ndarray,
+    elements: np.ndarray,
+    polar: np.ndarray,
+    carbons: np.ndarray,
 ) -> np.ndarray:
     """Select the ring hydroxyl that defines a multiply oxygenated sterol head."""
     if (
@@ -95,7 +98,7 @@ def _sterol_head_polar_indices(
     for cutoff in np.arange(0.175, 0.206, 0.0025):
         adjacency = {int(index): set() for index in carbons}
         for position, left in enumerate(carbons):
-            for right in carbons[position + 1:]:
+            for right in carbons[position + 1 :]:
                 if float(np.linalg.norm(coordinates[left] - coordinates[right])) <= cutoff:
                     adjacency[int(left)].add(int(right))
                     adjacency[int(right)].add(int(left))
@@ -115,10 +118,10 @@ def _sterol_head_polar_indices(
                     degrees[neighbor] -= 1
                     if degrees[neighbor] < 2:
                         leaves.append(neighbor)
-        ring_polar = np.asarray([
-            oxygen for oxygen, neighbour in oxygen_neighbour.items()
-            if neighbour in cyclic_core
-        ], dtype=int)
+        ring_polar = np.asarray(
+            [oxygen for oxygen, neighbour in oxygen_neighbour.items() if neighbour in cyclic_core],
+            dtype=int,
+        )
         if len(ring_polar):
             return ring_polar
     return polar
@@ -146,9 +149,7 @@ def infer_lipid_orientation(
     polar = np.flatnonzero(np.isin(elements, tuple(POLAR_ELEMENTS)))
     carbons = np.flatnonzero(elements == "C")
     if len(polar) == 0:
-        raise LipidOrientationError(
-            "Membrane lipid has no polar N/O/P/S headgroup atoms"
-        )
+        raise LipidOrientationError("Membrane lipid has no polar N/O/P/S headgroup atoms")
     if len(carbons) < 3:
         raise LipidOrientationError(
             "Membrane lipid has fewer than three carbon atoms for a hydrophobic region"

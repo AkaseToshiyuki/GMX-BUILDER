@@ -44,11 +44,22 @@ class IonBuilder(BaseModule):
     description = "Neutralize system charge and add salt ions"
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {
-            "cations", "anions", "cation", "anion", "concentration",
-            "neutralize", "neutralize_cation", "neutralize_anion",
-            "ion_method", "exclusion_radius", "seed",
-        })
+        self.validate_config_keys(
+            config,
+            {
+                "cations",
+                "anions",
+                "cation",
+                "anion",
+                "concentration",
+                "neutralize",
+                "neutralize_cation",
+                "neutralize_anion",
+                "ion_method",
+                "exclusion_radius",
+                "seed",
+            },
+        )
         cations, anions, concentrations, neutralize, neut_cat, neut_ani = self._parse(config)
         if not cations or not anions:
             raise ModuleConfigError("At least one cation and one anion are required")
@@ -67,8 +78,12 @@ class IonBuilder(BaseModule):
         for name in cations + anions:
             value = concentrations.get(name)
             if value is None or not math.isfinite(value) or value < 0 or value > 2.0:
-                raise ModuleConfigError(f"Concentration for {name} must be finite and between 0 and 2 M")
-        continuous_charge = sum(concentrations[name] * ion_charge(name) for name in cations + anions)
+                raise ModuleConfigError(
+                    f"Concentration for {name} must be finite and between 0 and 2 M"
+                )
+        continuous_charge = sum(
+            concentrations[name] * ion_charge(name) for name in cations + anions
+        )
         if abs(continuous_charge) > 1e-8:
             raise ModuleConfigError(
                 "Salt concentrations are not charge-balanced: "
@@ -147,7 +162,9 @@ class IonBuilder(BaseModule):
             )
         sites, water_model = self._water_sites(system, water_model_name)
         if not sites:
-            raise ModuleConfigError("No complete solvent water molecules are available for ion replacement")
+            raise ModuleConfigError(
+                "No complete solvent water molecules are available for ion replacement"
+            )
         n_water = len(sites)
         water_volume = n_water * WATER_VOLUME_NM3
         salt_counts = {
@@ -174,15 +191,24 @@ class IonBuilder(BaseModule):
         if total_ions == 0:
             result = system.copy()
             result.metadata["ions"] = self._ion_metrics(
-                salt_counts, neutralizing_counts, counts, concentrations,
-                solute_charge, 0, 0, config,
+                salt_counts,
+                neutralizing_counts,
+                counts,
+                concentrations,
+                solute_charge,
+                0,
+                0,
+                config,
             )
             return ModuleResult(
-                True, result,
+                True,
+                result,
                 pre_topology_log + ["No ions requested; system left unchanged"],
             )
         if total_ions > n_water:
-            raise ModuleConfigError(f"Requested {total_ions} ions but only {n_water} waters are available")
+            raise ModuleConfigError(
+                f"Requested {total_ions} ions but only {n_water} waters are available"
+            )
 
         exclusion = float(config.get("exclusion_radius", 0.35))
         z_regions = self._water_regions(system, sites)
@@ -199,12 +225,8 @@ class IonBuilder(BaseModule):
         # Preserve the same order when assigning chemical identities, including
         # a neutralizing species that was not part of the salt selection.
         ion_names = [
-            name for name, count in counts.items() if ion_charge(name) > 0
-            for _ in range(count)
-        ] + [
-            name for name, count in counts.items() if ion_charge(name) < 0
-            for _ in range(count)
-        ]
+            name for name, count in counts.items() if ion_charge(name) > 0 for _ in range(count)
+        ] + [name for name, count in counts.items() if ion_charge(name) < 0 for _ in range(count)]
         if len(chosen) != len(ion_names):
             raise ModuleConfigError("Ion placement did not produce every requested ion site")
 
@@ -221,15 +243,23 @@ class IonBuilder(BaseModule):
         merged = stripped.merge(System(structure=ion_structure))
         ion_start = stripped.num_atoms
         metrics = self._ion_metrics(
-            salt_counts, neutralizing_counts, counts, concentrations,
-            solute_charge, len(chosen), len(remove_indices), config,
+            salt_counts,
+            neutralizing_counts,
+            counts,
+            concentrations,
+            solute_charge,
+            len(chosen),
+            len(remove_indices),
+            config,
         )
-        merged.add_component(Component(
-            name="IONS_ADDED",
-            kind=ComponentKind.IONS,
-            atom_indices=np.arange(ion_start, merged.num_atoms, dtype=int),
-            metadata=metrics,
-        ))
+        merged.add_component(
+            Component(
+                name="IONS_ADDED",
+                kind=ComponentKind.IONS,
+                atom_indices=np.arange(ion_start, merged.num_atoms, dtype=int),
+                metadata=metrics,
+            )
+        )
         merged.metadata["ions"] = metrics
         ion_charge_total = sum(count * ion_charge(name) for name, count in counts.items())
         if neutralize and abs(solute_charge + ion_charge_total) > 1e-6:
@@ -256,20 +286,20 @@ class IonBuilder(BaseModule):
         topology = system.topology
         if topology is None:
             return system, []
-        has_non_stub_terms = any((
-            topology.atom_types,
-            topology.angles,
-            topology.dihedrals,
-            topology.impropers,
-            topology.pairs,
-            topology.exclusions,
-            topology.molecule_blocks,
-        ))
+        has_non_stub_terms = any(
+            (
+                topology.atom_types,
+                topology.angles,
+                topology.dihedrals,
+                topology.impropers,
+                topology.pairs,
+                topology.exclusions,
+                topology.molecule_blocks,
+            )
+        )
         crosslinks = system.metadata.get("crosslinks")
         if has_non_stub_terms or not topology.bonds or not isinstance(crosslinks, list):
-            raise ModuleConfigError(
-                "Ions must be added before final topology assignment"
-            )
+            raise ModuleConfigError("Ions must be added before final topology assignment")
 
         expected_pairs: set[tuple[int, int]] = set()
         structure = system.structure
@@ -279,16 +309,12 @@ class IonBuilder(BaseModule):
                 or record.get("type") != "disulfide"
                 or record.get("status") != "passed"
             ):
-                raise ModuleConfigError(
-                    "Ion placement found an unvalidated crosslink topology"
-                )
+                raise ModuleConfigError("Ion placement found an unvalidated crosslink topology")
             endpoints: list[int] = []
             for label in ("first", "second"):
                 endpoint = record.get(label)
                 if not isinstance(endpoint, dict):
-                    raise ModuleConfigError(
-                        "Ion placement found incomplete disulfide metadata"
-                    )
+                    raise ModuleConfigError("Ion placement found incomplete disulfide metadata")
                 try:
                     resid = int(endpoint["resid"])
                 except (KeyError, TypeError, ValueError) as exc:
@@ -297,9 +323,10 @@ class IonBuilder(BaseModule):
                     ) from exc
                 chain = str(endpoint.get("chain", ""))
                 matches = [
-                    index for index, (atom_chain, atom_resid, atom_name) in enumerate(zip(
-                        structure.chain_ids, structure.resids, structure.atom_names
-                    ))
+                    index
+                    for index, (atom_chain, atom_resid, atom_name) in enumerate(
+                        zip(structure.chain_ids, structure.resids, structure.atom_names)
+                    )
                     if str(atom_chain) == chain
                     and int(atom_resid) == resid
                     and str(atom_name).strip().upper() == "SG"
@@ -325,7 +352,9 @@ class IonBuilder(BaseModule):
         ]
 
     @staticmethod
-    def _balance_rounded_salt(counts: dict[str, int], cations: list[str], anions: list[str]) -> None:
+    def _balance_rounded_salt(
+        counts: dict[str, int], cations: list[str], anions: list[str]
+    ) -> None:
         charge = sum(count * ion_charge(name) for name, count in counts.items())
         if charge > 0:
             counts[anions[0]] += charge  # supported anions are monovalent
@@ -352,13 +381,19 @@ class IonBuilder(BaseModule):
                     f"declares {n_molecules} {water_model.full_name} waters"
                 )
             for offset in range(0, len(indices), water_model.n_atoms):
-                molecule = tuple(indices[offset:offset + water_model.n_atoms])
+                molecule = tuple(indices[offset : offset + water_model.n_atoms])
                 oxygen = next(
-                    (idx for idx in molecule if system.structure.atom_names[idx].strip().upper().startswith("O")),
+                    (
+                        idx
+                        for idx in molecule
+                        if system.structure.atom_names[idx].strip().upper().startswith("O")
+                    ),
                     None,
                 )
                 if oxygen is None:
-                    raise ModuleConfigError(f"Water molecule at solvent offset {offset} has no oxygen atom")
+                    raise ModuleConfigError(
+                        f"Water molecule at solvent offset {offset} has no oxygen atom"
+                    )
                 sites.append(_WaterSite(oxygen, molecule, system.coordinates[oxygen].copy()))
         return sites, water_model
 
@@ -399,15 +434,21 @@ class IonBuilder(BaseModule):
                 wrap_periodic_coordinates(system.coordinates[solute_indices], box),
                 boxsize=box,
             )
-            if solute_indices else None
+            if solute_indices
+            else None
         )
         eligible: list[_WaterSite] = []
         for site in sites:
             if regions and not any(lo <= site.coordinate[2] <= hi for lo, hi in regions):
                 continue
-            if tree is not None and tree.query(
-                wrap_periodic_coordinates(site.coordinate, box), k=1,
-            )[0] < exclusion:
+            if (
+                tree is not None
+                and tree.query(
+                    wrap_periodic_coordinates(site.coordinate, box),
+                    k=1,
+                )[0]
+                < exclusion
+            ):
                 continue
             eligible.append(site)
         return eligible
@@ -424,10 +465,14 @@ class IonBuilder(BaseModule):
         total_cations = sum(count for name, count in counts.items() if ion_charge(name) > 0)
         total_anions = sum(count for name, count in counts.items() if ion_charge(name) < 0)
         placement_charges = [
-            ion_charge(name) for name, count in counts.items() if ion_charge(name) > 0
+            ion_charge(name)
+            for name, count in counts.items()
+            if ion_charge(name) > 0
             for _ in range(count)
         ] + [
-            ion_charge(name) for name, count in counts.items() if ion_charge(name) < 0
+            ion_charge(name)
+            for name, count in counts.items()
+            if ion_charge(name) < 0
             for _ in range(count)
         ]
         potentials = None
@@ -445,12 +490,15 @@ class IonBuilder(BaseModule):
 
         def distances_to_chosen(index: int, ignored_position: int | None = None) -> np.ndarray:
             retained = [
-                chosen for position, chosen in enumerate(chosen_indices)
+                chosen
+                for position, chosen in enumerate(chosen_indices)
                 if position != ignored_position
             ]
             if not retained:
                 return np.empty(0, dtype=float)
-            delta = np.asarray([sites[item].coordinate for item in retained]) - sites[index].coordinate
+            delta = (
+                np.asarray([sites[item].coordinate for item in retained]) - sites[index].coordinate
+            )
             delta -= box * np.round(delta / box)
             return np.linalg.norm(delta, axis=1)
 
@@ -505,9 +553,9 @@ class IonBuilder(BaseModule):
                     other_charges = np.asarray(
                         [placement_charges[other] for other in other_positions], dtype=float
                     )
-                    energy += 0.05 * float(np.sum(
-                        charge * other_charges * np.exp(-distances) / distances
-                    ))
+                    energy += 0.05 * float(
+                        np.sum(charge * other_charges * np.exp(-distances) / distances)
+                    )
                 return energy
 
             for _step in range(n_steps):
@@ -519,9 +567,7 @@ class IonBuilder(BaseModule):
                 if len(distances) and float(distances.min()) < exclusion:
                     continue
                 current = chosen_indices[position]
-                delta_energy = (
-                    local_energy(position, candidate) - local_energy(position, current)
-                )
+                delta_energy = local_energy(position, candidate) - local_energy(position, current)
                 if delta_energy <= 0.0 or float(rng.random()) < math.exp(-delta_energy):
                     used.remove(current)
                     used.add(candidate)
@@ -541,18 +587,27 @@ class IonBuilder(BaseModule):
                 for index in comp.atom_indices:
                     i = int(index)
                     key = (
-                        system.structure.resnames[i], system.structure.resids[i],
+                        system.structure.resnames[i],
+                        system.structure.resids[i],
                         system.structure.chain_ids[i],
                     )
                     if key in seen:
                         continue
                     seen.add(key)
                     atom_indices = [
-                        int(j) for j in comp.atom_indices
-                        if (system.structure.resnames[int(j)], system.structure.resids[int(j)],
-                            system.structure.chain_ids[int(j)]) == key
+                        int(j)
+                        for j in comp.atom_indices
+                        if (
+                            system.structure.resnames[int(j)],
+                            system.structure.resids[int(j)],
+                            system.structure.chain_ids[int(j)],
+                        )
+                        == key
                     ]
-                    ca = next((j for j in atom_indices if system.structure.atom_names[j].strip() == "CA"), atom_indices[0])
+                    ca = next(
+                        (j for j in atom_indices if system.structure.atom_names[j].strip() == "CA"),
+                        atom_indices[0],
+                    )
                     charge = system.residue_formal_charge(key[0])
                     if charge:
                         centers.append(system.coordinates[ca])
@@ -561,7 +616,11 @@ class IonBuilder(BaseModule):
                 grouped: dict[tuple[str, int, str], list[int]] = {}
                 for index in comp.atom_indices:
                     i = int(index)
-                    key = (system.structure.resnames[i], system.structure.resids[i], system.structure.chain_ids[i])
+                    key = (
+                        system.structure.resnames[i],
+                        system.structure.resids[i],
+                        system.structure.chain_ids[i],
+                    )
                     grouped.setdefault(key, []).append(i)
                 for (name, _rid, _chain), indices in grouped.items():
                     try:
@@ -569,14 +628,20 @@ class IonBuilder(BaseModule):
                     except (KeyError, ValueError):
                         charge = 0.0
                     if charge:
-                        heads = [i for i in indices if system.structure.atom_names[i].strip() in {"P", "N"}]
+                        heads = [
+                            i
+                            for i in indices
+                            if system.structure.atom_names[i].strip() in {"P", "N"}
+                        ]
                         centers.append(system.coordinates[heads or indices].mean(axis=0))
                         charges.append(charge)
             elif comp.kind == ComponentKind.NUCLEIC_ACID:
                 net_charge = comp.metadata.get("net_charge")
-                if not comp.metadata.get("prepared") or not isinstance(
-                    net_charge, (int, float)
-                ) or isinstance(net_charge, bool):
+                if (
+                    not comp.metadata.get("prepared")
+                    or not isinstance(net_charge, (int, float))
+                    or isinstance(net_charge, bool)
+                ):
                     raise ModuleConfigError(
                         "Monte Carlo ion placement requires an exact prepared "
                         "nucleic-acid topology and net charge"
@@ -595,7 +660,8 @@ class IonBuilder(BaseModule):
                 for indices in grouped.values():
                     marker = next(
                         (
-                            index for index in indices
+                            index
+                            for index in indices
                             if system.structure.atom_names[index].strip() == "P"
                         ),
                         None,
@@ -654,17 +720,25 @@ class IonBuilder(BaseModule):
             metadata = dict(comp.metadata)
             if comp.kind == ComponentKind.SOLVENT:
                 removed_here = len(comp.atom_indices) - len(retained)
-                site_count = WaterRegistry.get(str(metadata.get("water_model", system.metadata.get("water_model", "tip3p"))).lower()).n_atoms
+                site_count = WaterRegistry.get(
+                    str(
+                        metadata.get("water_model", system.metadata.get("water_model", "tip3p"))
+                    ).lower()
+                ).n_atoms
                 if removed_here % site_count:
                     raise ModuleConfigError("Ion replacement would leave a partial water molecule")
-                metadata["n_molecules"] = int(metadata.get("n_molecules", 0)) - removed_here // site_count
+                metadata["n_molecules"] = (
+                    int(metadata.get("n_molecules", 0)) - removed_here // site_count
+                )
                 remaining -= removed_here // site_count
-            components.append(Component(
-                name=comp.name,
-                kind=comp.kind,
-                atom_indices=old_to_new[retained],
-                metadata=metadata,
-            ))
+            components.append(
+                Component(
+                    name=comp.name,
+                    kind=comp.kind,
+                    atom_indices=old_to_new[retained],
+                    metadata=metadata,
+                )
+            )
         if remaining != 0:
             raise ModuleConfigError("Water-removal accounting mismatch")
         return System(structure=structure, components=components, metadata=dict(system.metadata))

@@ -12,9 +12,7 @@ class PureMembraneForceFieldSelector(ForceFieldSelector):
     def validate_config(self, config: dict) -> bool:
         super().validate_config(config)
         if not config.get("lipid_names"):
-            raise ModuleConfigError(
-                "Pure Bilayer System requires at least one selected lipid"
-            )
+            raise ModuleConfigError("Pure Bilayer System requires at least one selected lipid")
         ligand_ff = str(config.get("ligand_ff", "none")).strip().lower()
         if ligand_ff not in {"", "none"}:
             raise ModuleConfigError(

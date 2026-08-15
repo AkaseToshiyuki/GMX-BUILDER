@@ -44,9 +44,12 @@ _HISTIDINE_ALIASES: dict[str, dict[str, str]] = {
     "amber": {"HSD": "HID", "HSE": "HIE", "HSP": "HIP"},
     "charmm": {"HID": "HSD", "HIE": "HSE", "HIP": "HSP"},
     "opls": {
-        "HID": "HISD", "HSD": "HISD",
-        "HIE": "HISE", "HSE": "HISE",
-        "HIP": "HISH", "HSP": "HISH",
+        "HID": "HISD",
+        "HSD": "HISD",
+        "HIE": "HISE",
+        "HSE": "HISE",
+        "HIP": "HISH",
+        "HSP": "HISH",
     },
 }
 
@@ -89,9 +92,11 @@ def _normalise_protein_names(system: System, force_field: str) -> list[str]:
 
     rtp = load_force_field_rtp(force_field)
     ile_template = rtp.get_residue("ILE")
-    ile_names = {
-        str(atom[0]).strip().upper() for atom in ile_template.get("atoms", [])
-    } if ile_template else set()
+    ile_names = (
+        {str(atom[0]).strip().upper() for atom in ile_template.get("atoms", [])}
+        if ile_template
+        else set()
+    )
     if "CD" in ile_names and "CD1" not in ile_names:
         ile_alias = ("CD1", "CD")
     elif "CD1" in ile_names and "CD" not in ile_names:
@@ -128,9 +133,7 @@ def _normalise_protein_names(system: System, force_field: str) -> list[str]:
 
     messages = []
     if renamed_residues:
-        messages.append(
-            f"Force-field naming: translated {renamed_residues} histidine atom labels"
-        )
+        messages.append(f"Force-field naming: translated {renamed_residues} histidine atom labels")
     if renamed_atoms and ile_alias is not None:
         messages.append(
             f"Force-field naming: translated {renamed_atoms} ILE "
@@ -144,12 +147,14 @@ def _validate_protein_heavy_atoms(system: System, force_field: str) -> None:
     from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 
     rtp = load_force_field_rtp(force_field)
-    protein_indices = sorted({
-        int(index)
-        for component in system.components
-        if component.kind == ComponentKind.PROTEIN
-        for index in component.atom_indices
-    })
+    protein_indices = sorted(
+        {
+            int(index)
+            for component in system.components
+            if component.kind == ComponentKind.PROTEIN
+            for index in component.atom_indices
+        }
+    )
     residues: dict[tuple[str, int], list[int]] = {}
     for index in protein_indices:
         key = (str(system.structure.chain_ids[index]), int(system.structure.resids[index]))
@@ -180,9 +185,7 @@ def _validate_protein_heavy_atoms(system: System, force_field: str) -> None:
         }
         missing = sorted(expected - observed)
         if missing:
-            incomplete.append(
-                f"{chain or '?'}:{resid} {resname} missing {','.join(missing)}"
-            )
+            incomplete.append(f"{chain or '?'}:{resid} {resname} missing {','.join(missing)}")
     if incomplete:
         preview = "; ".join(incomplete[:10])
         suffix = f"; and {len(incomplete) - 10} more" if len(incomplete) > 10 else ""
@@ -203,8 +206,14 @@ def _remap_system_atoms(system: System, keep: list[int]) -> None:
     structure = system.structure
     structure.coordinates = structure.coordinates[keep]
     for attribute in (
-        "atom_names", "resnames", "resids", "chain_ids", "segids",
-        "elements", "occupancies", "tempfactors",
+        "atom_names",
+        "resnames",
+        "resids",
+        "chain_ids",
+        "segids",
+        "elements",
+        "occupancies",
+        "tempfactors",
     ):
         values = getattr(structure, attribute)
         setattr(structure, attribute, [values[index] for index in keep])
@@ -286,12 +295,8 @@ def _group_protein_chains_before_other_molecules(system: System) -> bool:
         # Cap atoms are appended during processing.  Put ACE before the first
         # amino acid and NME after the last one so topology residue order and
         # the physical cross-residue bonds agree.
-        residue_order.sort(
-            key=lambda key: 0 if key[1] == "ACE" else (2 if key[1] == "NME" else 1)
-        )
-        ordered_protein.extend(
-            index for key in residue_order for index in residue_groups[key]
-        )
+        residue_order.sort(key=lambda key: 0 if key[1] == "ACE" else (2 if key[1] == "NME" else 1))
+        ordered_protein.extend(index for key in residue_order for index in residue_groups[key])
     other = [index for index in range(system.num_atoms) if index not in protein_indices]
     order = ordered_protein + other
     if order == list(range(system.num_atoms)):
@@ -334,16 +339,14 @@ def _append_cap_residue(
     """Build an explicit ACE or NME residue bonded to one protein terminus."""
     structure = system.structure
     terminal_indices = [
-        index for index, (atom_chain, atom_resid) in enumerate(
-            zip(structure.chain_ids, structure.resids)
-        )
+        index
+        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
         if str(atom_chain) == terminal_key[0] and int(atom_resid) == terminal_key[1]
     ]
-    terminal_atoms = {
-        str(structure.atom_names[index]).strip(): index for index in terminal_indices
-    }
+    terminal_atoms = {str(structure.atom_names[index]).strip(): index for index in terminal_indices}
     parent_component = next(
-        component for component in system.components
+        component
+        for component in system.components
         if component.kind == ComponentKind.PROTEIN
         and any(index in set(map(int, component.atom_indices)) for index in terminal_indices)
     )
@@ -365,8 +368,7 @@ def _append_cap_residue(
         return unit(np.cross(vector, trial))
 
     heavy_names = [
-        str(atom[0]).strip() for atom in template["atoms"]
-        if not _is_hydrogen_name(str(atom[0]))
+        str(atom[0]).strip() for atom in template["atoms"] if not _is_hydrogen_name(str(atom[0]))
     ]
     coordinates: dict[str, np.ndarray] = {}
     external_neighbours: dict[str, list[np.ndarray]] = {}
@@ -378,14 +380,16 @@ def _append_cap_residue(
         coordinates["C"] = n + 0.133 * direction
         coordinates["O"] = coordinates["C"] + 0.123 * unit(-direction + np.sqrt(3.0) * side)
         methyl_name = next(name for name in heavy_names if name not in {"C", "O"})
-        coordinates[methyl_name] = (
-            coordinates["C"] + 0.152 * unit(-direction - np.sqrt(3.0) * side)
-        )
+        coordinates[methyl_name] = coordinates["C"] + 0.152 * unit(-direction - np.sqrt(3.0) * side)
         external_neighbours["C"] = [n]
-        new_resid = min(
-            int(resid) for atom_chain, resid in zip(structure.chain_ids, structure.resids)
-            if str(atom_chain) == chain
-        ) - 1
+        new_resid = (
+            min(
+                int(resid)
+                for atom_chain, resid in zip(structure.chain_ids, structure.resids)
+                if str(atom_chain) == chain
+            )
+            - 1
+        )
     else:
         c = structure.coordinates[terminal_atoms["C"]]
         ca = structure.coordinates[terminal_atoms["CA"]]
@@ -393,20 +397,20 @@ def _append_cap_residue(
         side = perpendicular(direction)
         coordinates["N"] = c + 0.133 * direction
         methyl_name = next(name for name in heavy_names if name != "N")
-        coordinates[methyl_name] = (
-            coordinates["N"] + 0.145 * unit(direction + np.sqrt(3.0) * side)
-        )
+        coordinates[methyl_name] = coordinates["N"] + 0.145 * unit(direction + np.sqrt(3.0) * side)
         external_neighbours["N"] = [c]
-        new_resid = max(
-            int(resid) for atom_chain, resid in zip(structure.chain_ids, structure.resids)
-            if str(atom_chain) == chain
-        ) + 1
+        new_resid = (
+            max(
+                int(resid)
+                for atom_chain, resid in zip(structure.chain_ids, structure.resids)
+                if str(atom_chain) == chain
+            )
+            + 1
+        )
 
     prototype = terminal_indices[0]
     name_to_index: dict[str, int] = {}
-    element_by_name = {
-        str(atom[0]).strip(): str(atom[0]).strip()[0] for atom in template["atoms"]
-    }
+    element_by_name = {str(atom[0]).strip(): str(atom[0]).strip()[0] for atom in template["atoms"]}
     for name in heavy_names:
         index = _append_atom(
             system, coordinates[name], name, element_by_name[name], prototype, parent_component
@@ -419,17 +423,19 @@ def _append_cap_residue(
     from gmxbuilder.modules.forcefield.hdb import _compute_h_positions
 
     hydrogen_names = [
-        str(atom[0]).strip() for atom in template["atoms"]
-        if _is_hydrogen_name(str(atom[0]))
+        str(atom[0]).strip() for atom in template["atoms"] if _is_hydrogen_name(str(atom[0]))
     ]
     by_control: dict[str, list[str]] = {}
     for hydrogen in hydrogen_names:
-        control = next((
-            atom2 if atom1 == hydrogen else atom1
-            for atom1, atom2 in template.get("bonds", [])
-            if (atom1 == hydrogen and atom2 in name_to_index)
-            or (atom2 == hydrogen and atom1 in name_to_index)
-        ), None)
+        control = next(
+            (
+                atom2 if atom1 == hydrogen else atom1
+                for atom1, atom2 in template.get("bonds", [])
+                if (atom1 == hydrogen and atom2 in name_to_index)
+                or (atom2 == hydrogen and atom1 in name_to_index)
+            ),
+            None,
+        )
         if control is None:
             raise ModuleConfigError(f"Cannot identify {cap}:{hydrogen} parent atom")
         by_control.setdefault(control, []).append(hydrogen)
@@ -441,7 +447,10 @@ def _append_cap_residue(
             if neighbour in name_to_index and not _is_hydrogen_name(neighbour):
                 neighbours.append(structure.coordinates[name_to_index[neighbour]])
         positions = _compute_h_positions(
-            structure.coordinates[name_to_index[control]], neighbours, len(hydrogens), atom_name=control
+            structure.coordinates[name_to_index[control]],
+            neighbours,
+            len(hydrogens),
+            atom_name=control,
         )
         for hydrogen, position in zip(hydrogens, positions):
             index = _append_atom(system, position, hydrogen, "H", prototype, parent_component)
@@ -471,9 +480,9 @@ def _append_atom(
     structure.elements.append(element)
     structure.occupancies.append(1.0)
     structure.tempfactors.append(0.0)
-    component.atom_indices = np.concatenate([
-        component.atom_indices, np.asarray([new_index], dtype=np.int64)
-    ])
+    component.atom_indices = np.concatenate(
+        [component.atom_indices, np.asarray([new_index], dtype=np.int64)]
+    )
     return new_index
 
 
@@ -502,24 +511,26 @@ def _synchronise_modified_residue(
     chain, resid = key
     structure = system.structure
     indices = [
-        index for index, (atom_chain, atom_resid) in enumerate(
-            zip(structure.chain_ids, structure.resids)
-        )
+        index
+        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     if not indices:
         raise ModuleConfigError(f"Modification target {chain}:{resid} has no atoms")
-    component = next((
-        item for item in system.components
-        if item.kind == ComponentKind.PROTEIN
-        and any(index in set(map(int, item.atom_indices)) for index in indices)
-    ), None)
+    component = next(
+        (
+            item
+            for item in system.components
+            if item.kind == ComponentKind.PROTEIN
+            and any(index in set(map(int, item.atom_indices)) for index in indices)
+        ),
+        None,
+    )
     if component is None:
         raise ModuleConfigError(f"Modification target {chain}:{resid} is not protein")
 
     heavy_order = [
-        str(atom[0]).strip() for atom in template["atoms"]
-        if not _is_hydrogen_name(str(atom[0]))
+        str(atom[0]).strip() for atom in template["atoms"] if not _is_hydrogen_name(str(atom[0]))
     ]
     heavy_set = set(heavy_order)
     atom_aliases = _PRODUCT_HEAVY_ATOM_ALIASES.get(product_name, {})
@@ -531,7 +542,8 @@ def _synchronise_modified_residue(
         if replacement:
             structure.atom_names[index] = replacement
     remove = [
-        index for index in indices
+        index
+        for index in indices
         if str(structure.atom_names[index]).strip() not in heavy_set
         or str(structure.elements[index]).strip().upper() == "H"
         or _is_hydrogen_name(str(structure.atom_names[index]))
@@ -544,16 +556,13 @@ def _synchronise_modified_residue(
         structure = system.structure
 
     indices = [
-        index for index, (atom_chain, atom_resid) in enumerate(
-            zip(structure.chain_ids, structure.resids)
-        )
+        index
+        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     for index in indices:
         structure.resnames[index] = product_name
-    name_to_index = {
-        str(structure.atom_names[index]).strip(): index for index in indices
-    }
+    name_to_index = {str(structure.atom_names[index]).strip(): index for index in indices}
     prototype = indices[0]
 
     retained_coordinates = {
@@ -563,7 +572,8 @@ def _synchronise_modified_residue(
     }
     residue_index_set = set(indices)
     environment_indices = [
-        index for index in range(structure.num_atoms)
+        index
+        for index in range(structure.num_atoms)
         if index not in residue_index_set
         and str(structure.elements[index]).strip().upper() != "H"
         and not _is_hydrogen_name(str(structure.atom_names[index]))
@@ -572,10 +582,13 @@ def _synchronise_modified_residue(
     if environment_indices and retained_coordinates:
         candidates = structure.coordinates[environment_indices]
         retained_array = np.vstack(list(retained_coordinates.values()))
-        nearby = np.min(
-            np.linalg.norm(candidates[:, None, :] - retained_array[None, :, :], axis=2),
-            axis=1,
-        ) <= 0.8
+        nearby = (
+            np.min(
+                np.linalg.norm(candidates[:, None, :] - retained_array[None, :, :], axis=2),
+                axis=1,
+            )
+            <= 0.8
+        )
         environment = candidates[nearby]
     try:
         built_coordinates, geometry_quality = build_modified_heavy_atom_geometry(
@@ -612,21 +625,21 @@ def _synchronise_modified_residue(
             f"expected {sorted(heavy_set)}, got {sorted(observed)}"
         )
     hydrogen_order = [
-        str(atom[0]).strip() for atom in template["atoms"]
-        if _is_hydrogen_name(str(atom[0]))
+        str(atom[0]).strip() for atom in template["atoms"] if _is_hydrogen_name(str(atom[0]))
     ]
     by_control: dict[str, list[str]] = {}
     for hydrogen in hydrogen_order:
-        control = next((
-            atom2 if atom1 == hydrogen else atom1
-            for atom1, atom2 in template.get("bonds", [])
-            if (atom1 == hydrogen and atom2 in name_to_index)
-            or (atom2 == hydrogen and atom1 in name_to_index)
-        ), None)
+        control = next(
+            (
+                atom2 if atom1 == hydrogen else atom1
+                for atom1, atom2 in template.get("bonds", [])
+                if (atom1 == hydrogen and atom2 in name_to_index)
+                or (atom2 == hydrogen and atom1 in name_to_index)
+            ),
+            None,
+        )
         if control is None:
-            raise ModuleConfigError(
-                f"Cannot identify {product_name}:{hydrogen} parent atom"
-            )
+            raise ModuleConfigError(f"Cannot identify {product_name}:{hydrogen} parent atom")
         by_control.setdefault(control, []).append(hydrogen)
 
     from gmxbuilder.modules.forcefield.hdb import _compute_h_positions
@@ -635,23 +648,21 @@ def _synchronise_modified_residue(
     for control, hydrogens in by_control.items():
         neighbours = []
         for atom1, atom2 in template.get("bonds", []):
-            neighbour = atom2 if atom1 == control else (
-                atom1 if atom2 == control else ""
-            )
+            neighbour = atom2 if atom1 == control else (atom1 if atom2 == control else "")
             if neighbour in name_to_index and not _is_hydrogen_name(neighbour):
                 neighbours.append(structure.coordinates[name_to_index[neighbour]])
         positions = _compute_h_positions(
-            structure.coordinates[name_to_index[control]], neighbours,
-            len(hydrogens), atom_name=control,
+            structure.coordinates[name_to_index[control]],
+            neighbours,
+            len(hydrogens),
+            atom_name=control,
         )
         if len(positions) != len(hydrogens):
             raise ModuleConfigError(
                 f"Cannot construct {product_name} hydrogen geometry at {chain}:{resid}"
             )
         for hydrogen, position in zip(hydrogens, positions):
-            index = _append_atom(
-                system, position, hydrogen, "H", prototype, component
-            )
+            index = _append_atom(system, position, hydrogen, "H", prototype, component)
             structure.resnames[index] = product_name
             name_to_index[hydrogen] = index
             n_hydrogens += 1
@@ -674,16 +685,16 @@ def _prepare_terminal_residue(
     chain, resid = key
     structure = system.structure
     indices = [
-        index for index, (atom_chain, atom_resid) in enumerate(
-            zip(structure.chain_ids, structure.resids)
-        )
+        index
+        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     if not indices:
         raise ModuleConfigError(f"Terminal residue {chain}:{resid} has no atoms")
     parent_component = next(
         (
-            component for component in system.components
+            component
+            for component in system.components
             if component.kind == ComponentKind.PROTEIN
             and any(index in set(map(int, component.atom_indices)) for index in indices)
         ),
@@ -729,9 +740,8 @@ def _prepare_terminal_residue(
         structure = system.structure
 
     indices = [
-        index for index, (atom_chain, atom_resid) in enumerate(
-            zip(structure.chain_ids, structure.resids)
-        )
+        index
+        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     prototype = indices[0]
@@ -764,7 +774,9 @@ def _prepare_terminal_residue(
         )
         name_to_index[name] = new_index
 
-    missing_hydrogens = [name for name in target_order if name not in name_to_index and _is_hydrogen_name(name)]
+    missing_hydrogens = [
+        name for name in target_order if name not in name_to_index and _is_hydrogen_name(name)
+    ]
     hydrogen_controls: dict[str, list[str]] = {}
     for hydrogen in missing_hydrogens:
         for atom1, atom2 in template.get("bonds", []):
@@ -776,6 +788,7 @@ def _prepare_terminal_residue(
                 break
 
     from gmxbuilder.modules.forcefield.hdb import _compute_h_positions
+
     for control, hydrogen_names in hydrogen_controls.items():
         if control not in name_to_index:
             raise ModuleConfigError(
@@ -801,9 +814,7 @@ def _prepare_terminal_residue(
                 f"Cannot construct terminal hydrogen geometry at {chain}:{resid}"
             )
         for hydrogen, position in zip(hydrogen_names, positions):
-            new_index = _append_atom(
-                system, position, hydrogen, "H", prototype, parent_component
-            )
+            new_index = _append_atom(system, position, hydrogen, "H", prototype, parent_component)
             name_to_index[hydrogen] = new_index
 
     still_missing = [name for name in target_order if name not in name_to_index]
@@ -846,8 +857,16 @@ class StructureProcessor(BaseModule):
     def validate_config(self, config: dict) -> bool:
         self.validate_config_keys(
             config,
-            {"protonation", "modifications", "termini", "pH", "skip_protonation",
-             "prepare_standard_termini", "crosslinks", "seed"},
+            {
+                "protonation",
+                "modifications",
+                "termini",
+                "pH",
+                "skip_protonation",
+                "prepare_standard_termini",
+                "crosslinks",
+                "seed",
+            },
         )
         try:
             pH = float(config.get("pH", 7.0))
@@ -856,8 +875,10 @@ class StructureProcessor(BaseModule):
         if not np.isfinite(pH) or not 1.0 <= pH <= 13.0:
             raise ModuleConfigError(f"pH must be between 1.0 and 13.0, got {pH}")
         for key, expected in (
-            ("protonation", list), ("modifications", list),
-            ("crosslinks", list), ("termini", dict),
+            ("protonation", list),
+            ("modifications", list),
+            ("crosslinks", list),
+            ("termini", dict),
         ):
             if not isinstance(config.get(key, expected()), expected):
                 raise ModuleConfigError(f"{key} must be a {expected.__name__}")
@@ -895,9 +916,7 @@ class StructureProcessor(BaseModule):
                     "Unknown crosslink option(s): " + ", ".join(sorted(unknown))
                 )
             if entry.get("type") != "disulfide":
-                raise ModuleConfigError(
-                    f"Unsupported crosslink type: {entry.get('type')!r}"
-                )
+                raise ModuleConfigError(f"Unsupported crosslink type: {entry.get('type')!r}")
             for key in ("first_index", "second_index"):
                 value = entry.get(key)
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -910,8 +929,7 @@ class StructureProcessor(BaseModule):
             unknown = set(caps) - {"nter", "cter"}
             if unknown:
                 raise ModuleConfigError(
-                    f"Unknown termini option(s) for chain {chain!r}: "
-                    + ", ".join(sorted(unknown))
+                    f"Unknown termini option(s) for chain {chain!r}: " + ", ".join(sorted(unknown))
                 )
             for end in ("nter", "cter"):
                 if end in caps and not isinstance(caps[end], str):
@@ -936,8 +954,7 @@ class StructureProcessor(BaseModule):
         n_atoms = system.structure.num_atoms
 
         if n_atoms == 0:
-            return ModuleResult(success=True, system=system,
-                              log=["No atoms to process"])
+            return ModuleResult(success=True, system=system, log=["No atoms to process"])
 
         # Work on a copy so any late chemistry/template error leaves the input
         # checkpoint untouched.
@@ -995,7 +1012,11 @@ class StructureProcessor(BaseModule):
         for mod in modifications:
             idx = mod.get("index")
             patch_id = str(mod.get("patch_id", ""))
-            if isinstance(idx, bool) or not isinstance(idx, int) or not 0 <= idx < len(_residue_order):
+            if (
+                isinstance(idx, bool)
+                or not isinstance(idx, int)
+                or not 0 <= idx < len(_residue_order)
+            ):
                 raise ModuleConfigError(f"Invalid modification residue index: {idx!r}")
             if idx in modified_indices:
                 raise ModuleConfigError(f"Multiple modifications target residue index {idx}")
@@ -1023,14 +1044,18 @@ class StructureProcessor(BaseModule):
 
             if patch_id in _SUPPORTED_ATOM_TRANSFORMS:
                 old_atom, new_atom, _ = _SUPPORTED_ATOM_TRANSFORMS[patch_id]
-                residue_atom_names = [str(system.structure.atom_names[i]).strip() for i in atom_indices]
+                residue_atom_names = [
+                    str(system.structure.atom_names[i]).strip() for i in atom_indices
+                ]
                 if residue_atom_names.count(old_atom) != 1:
                     raise ModuleConfigError(
                         f"Patch {patch_id} requires exactly one {old_atom} atom; "
                         f"found {residue_atom_names.count(old_atom)}"
                     )
                 if new_atom in residue_atom_names:
-                    raise ModuleConfigError(f"Patch {patch_id} cannot create duplicate atom {new_atom}")
+                    raise ModuleConfigError(
+                        f"Patch {patch_id} cannot create duplicate atom {new_atom}"
+                    )
             modified_indices.add(idx)
             validated_modifications.append((key, patch_id, patch))
 
@@ -1041,7 +1066,9 @@ class StructureProcessor(BaseModule):
             second_index = entry["second_index"]
             if first_index == second_index:
                 raise ModuleConfigError("A disulfide requires two distinct cysteine residues")
-            if not 0 <= first_index < len(_residue_order) or not 0 <= second_index < len(_residue_order):
+            if not 0 <= first_index < len(_residue_order) or not 0 <= second_index < len(
+                _residue_order
+            ):
                 raise ModuleConfigError(
                     f"Disulfide indices {first_index}, {second_index} are outside the "
                     f"{len(_residue_order)}-residue structure"
@@ -1071,7 +1098,8 @@ class StructureProcessor(BaseModule):
                         f"Disulfide residue index {index} must be CYS, got {residue_name}"
                     )
                 matches = [
-                    atom_index for atom_index in atom_indices
+                    atom_index
+                    for atom_index in atom_indices
                     if str(system.structure.atom_names[atom_index]).strip() == "SG"
                 ]
                 if len(matches) != 1:
@@ -1079,10 +1107,12 @@ class StructureProcessor(BaseModule):
                         f"Disulfide CYS at {key[0] or '?'}:{key[1]} requires exactly one SG atom"
                     )
                 sulphurs.append(matches[0])
-            observed_distance = float(np.linalg.norm(
-                system.structure.coordinates[sulphurs[0]]
-                - system.structure.coordinates[sulphurs[1]]
-            ))
+            observed_distance = float(
+                np.linalg.norm(
+                    system.structure.coordinates[sulphurs[0]]
+                    - system.structure.coordinates[sulphurs[1]]
+                )
+            )
             if abs(observed_distance - target_distance) > 0.04:
                 raise ModuleConfigError(
                     f"Disulfide SG-SG distance is {observed_distance:.3f} nm, outside the "
@@ -1148,9 +1178,7 @@ class StructureProcessor(BaseModule):
                     raise ModuleConfigError(
                         f"Protonation assignment targets non-titratable protein residue index {idx}"
                     )
-                allowed_names = {
-                    state.residue_name for state in titratable_states[original]
-                }
+                allowed_names = {state.residue_name for state in titratable_states[original]}
                 assigned_name = entry["assigned_name"].strip().upper()
                 if assigned_name not in allowed_names:
                     raise ModuleConfigError(
@@ -1187,9 +1215,7 @@ class StructureProcessor(BaseModule):
                 if cap:
                     supported, reason = _cap_capability(ff_name, cap)
                     if not supported:
-                        raise ModuleConfigError(
-                            f"{cap} cap is unavailable for {ff_name}: {reason}"
-                        )
+                        raise ModuleConfigError(f"{cap} cap is unavailable for {ff_name}: {reason}")
 
         # ---- 1. Protonation renaming ----
         renamed_residues: set[tuple[str, int]] = set()
@@ -1221,7 +1247,8 @@ class StructureProcessor(BaseModule):
             geometry_reports: list[tuple[str, tuple[str, int], GeometryQuality]] = []
             for key, patch_id, patch in validated_modifications:
                 current_indices = [
-                    index for index, (chain, resid) in enumerate(
+                    index
+                    for index, (chain, resid) in enumerate(
                         zip(system.structure.chain_ids, system.structure.resids)
                     )
                     if (str(chain), int(resid)) == key
@@ -1236,34 +1263,43 @@ class StructureProcessor(BaseModule):
                             system.structure.elements[atom_idx] = new_element
                 else:
                     from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+
                     template = load_force_field_rtp(ff_name).get_residue(patch.product_name)
                     if template is None:
                         raise ModuleConfigError(
                             f"{ff_name} has no {patch.product_name} residue topology"
                         )
                     _changes, quality = _synchronise_modified_residue(
-                        system, key, patch.product_name, template,
+                        system,
+                        key,
+                        patch.product_name,
+                        template,
                         patch.stereo_constraints,
                     )
                     geometry_reports.append((patch_id, key, quality))
                 applied.append(f"{old}→{patch.product_name}")
             if applied:
-                log.append(f"Modifications: {len(applied)} applied ({', '.join(applied[:5])}{'...' if len(applied) > 5 else ''})")
+                log.append(
+                    f"Modifications: {len(applied)} applied ({', '.join(applied[:5])}{'...' if len(applied) > 5 else ''})"
+                )
             for patch_id, (chain, resid), quality in geometry_reports:
-                geometry_metadata.append({
-                    "patch_id": patch_id,
-                    "chain": chain or "?",
-                    "resid": resid,
-                    "added_atoms": list(quality.added_atoms),
-                    "max_bond_error_nm": quality.max_bond_error_nm,
-                    "max_angle_error_deg": quality.max_angle_error_deg,
-                    "min_nonbonded_distance_nm": quality.min_nonbonded_distance_nm,
-                    "stereo_centres": list(quality.stereo_centres),
-                    "status": "passed",
-                })
+                geometry_metadata.append(
+                    {
+                        "patch_id": patch_id,
+                        "chain": chain or "?",
+                        "resid": resid,
+                        "added_atoms": list(quality.added_atoms),
+                        "max_bond_error_nm": quality.max_bond_error_nm,
+                        "max_angle_error_deg": quality.max_angle_error_deg,
+                        "min_nonbonded_distance_nm": quality.min_nonbonded_distance_nm,
+                        "stereo_centres": list(quality.stereo_centres),
+                        "status": "passed",
+                    }
+                )
                 clash = (
                     f", minimum non-bonded distance {quality.min_nonbonded_distance_nm:.3f} nm"
-                    if quality.min_nonbonded_distance_nm is not None else ""
+                    if quality.min_nonbonded_distance_nm is not None
+                    else ""
                 )
                 log.append(
                     f"Modification geometry {patch_id} at {chain or '?'}:{resid}: "
@@ -1285,21 +1321,21 @@ class StructureProcessor(BaseModule):
             if cyx_template is None:
                 raise ModuleConfigError(f"{ff_name} has no CYX residue topology")
             for first_key, second_key, target_distance in validated_disulfides:
-                _synchronise_modified_residue(
-                    system, first_key, "CYX", cyx_template
-                )
-                _synchronise_modified_residue(
-                    system, second_key, "CYX", cyx_template
-                )
+                _synchronise_modified_residue(system, first_key, "CYX", cyx_template)
+                _synchronise_modified_residue(system, second_key, "CYX", cyx_template)
                 sulphur_indices = []
                 for chain, resid in (first_key, second_key):
                     matches = [
-                        index for index, (atom_chain, atom_resid, atom_name) in enumerate(zip(
-                            system.structure.chain_ids,
-                            system.structure.resids,
-                            system.structure.atom_names,
-                        ))
-                        if str(atom_chain) == chain and int(atom_resid) == resid
+                        index
+                        for index, (atom_chain, atom_resid, atom_name) in enumerate(
+                            zip(
+                                system.structure.chain_ids,
+                                system.structure.resids,
+                                system.structure.atom_names,
+                            )
+                        )
+                        if str(atom_chain) == chain
+                        and int(atom_resid) == resid
                         and str(atom_name).strip() == "SG"
                     ]
                     if len(matches) != 1:
@@ -1308,12 +1344,16 @@ class StructureProcessor(BaseModule):
                         )
                     sulphur_indices.append(matches[0])
                 pair = tuple(sorted(sulphur_indices))
-                if not any(tuple(sorted((bond.i, bond.j))) == pair for bond in system.topology.bonds):
+                if not any(
+                    tuple(sorted((bond.i, bond.j))) == pair for bond in system.topology.bonds
+                ):
                     system.topology.bonds.append(Bond(pair[0], pair[1]))
-                observed = float(np.linalg.norm(
-                    system.structure.coordinates[pair[0]]
-                    - system.structure.coordinates[pair[1]]
-                ))
+                observed = float(
+                    np.linalg.norm(
+                        system.structure.coordinates[pair[0]]
+                        - system.structure.coordinates[pair[1]]
+                    )
+                )
                 record = {
                     "type": "disulfide",
                     "first": {"chain": first_key[0], "resid": first_key[1]},
@@ -1341,6 +1381,7 @@ class StructureProcessor(BaseModule):
 
         # ---- 4. Add missing hydrogens using HDB rules ----
         from gmxbuilder.modules.forcefield.hdb import HDBHydrogenAdder
+
         hdb_path = _find_hdb(ff_name)
         if hdb_path is not None:
             adder = HDBHydrogenAdder(hdb_path)
@@ -1374,19 +1415,25 @@ class StructureProcessor(BaseModule):
                 ]
                 for comp in protein_components:
                     parent_residues = {
-                        (str(system.structure.chain_ids[int(idx)]), int(system.structure.resids[int(idx)]))
+                        (
+                            str(system.structure.chain_ids[int(idx)]),
+                            int(system.structure.resids[int(idx)]),
+                        )
                         for idx in comp.atom_indices
                         if int(idx) < n_old
                     }
                     component_h = sorted(
-                        idx for idx in new_h_indices
+                        idx
+                        for idx in new_h_indices
                         if (str(new_chains[idx]), int(new_resids[idx])) in parent_residues
                     )
                     if component_h:
-                        comp.atom_indices = np.concatenate([
-                            comp.atom_indices,
-                            np.array(component_h, dtype=np.int64),
-                        ])
+                        comp.atom_indices = np.concatenate(
+                            [
+                                comp.atom_indices,
+                                np.array(component_h, dtype=np.int64),
+                            ]
+                        )
                         assigned_h_indices.update(component_h)
 
                 # HDB rules should only add protein hydrogens.  If an unusual
@@ -1394,10 +1441,12 @@ class StructureProcessor(BaseModule):
                 # assigning the remaining H atoms to the sole/first component.
                 unassigned_h = sorted(new_h_indices - assigned_h_indices)
                 if unassigned_h and protein_components:
-                    protein_components[0].atom_indices = np.concatenate([
-                        protein_components[0].atom_indices,
-                        np.array(unassigned_h, dtype=np.int64),
-                    ])
+                    protein_components[0].atom_indices = np.concatenate(
+                        [
+                            protein_components[0].atom_indices,
+                            np.array(unassigned_h, dtype=np.int64),
+                        ]
+                    )
                     log.append(
                         f"HDB: assigned {len(unassigned_h)} unmatched hydrogen atoms "
                         "to the primary protein component"
@@ -1412,13 +1461,15 @@ class StructureProcessor(BaseModule):
 
         chain_residues: dict[str, list[tuple[str, int]]] = {}
         seen_residues: set[tuple[str, int]] = set()
-        protein_indices = sorted({
-            int(index)
-            for component in system.components
-            if component.kind == ComponentKind.PROTEIN
-            for index in component.atom_indices
-            if int(index) < system.structure.num_atoms
-        })
+        protein_indices = sorted(
+            {
+                int(index)
+                for component in system.components
+                if component.kind == ComponentKind.PROTEIN
+                for index in component.atom_indices
+                if int(index) < system.structure.num_atoms
+            }
+        )
         for index in protein_indices:
             key = (
                 str(system.structure.chain_ids[index]),
@@ -1444,13 +1495,15 @@ class StructureProcessor(BaseModule):
                 )
             first_key, last_key = residues[0], residues[-1]
             first_index = next(
-                index for index in range(system.structure.num_atoms)
+                index
+                for index in range(system.structure.num_atoms)
                 if str(system.structure.chain_ids[index]) == first_key[0]
                 and int(system.structure.resids[index]) == first_key[1]
             )
             first_resname = str(system.structure.resnames[first_index]).strip().upper()
             if n_cap:
                 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+
                 base_template = load_force_field_rtp(ff_name).get_residue(first_resname)
                 cap_template = load_force_field_rtp(ff_name).get_residue(n_cap)
                 if base_template is None or cap_template is None:
@@ -1466,13 +1519,15 @@ class StructureProcessor(BaseModule):
                 prepared_termini += 1
 
             last_index = next(
-                index for index in range(system.structure.num_atoms)
+                index
+                for index in range(system.structure.num_atoms)
                 if str(system.structure.chain_ids[index]) == last_key[0]
                 and int(system.structure.resids[index]) == last_key[1]
             )
             last_resname = str(system.structure.resnames[last_index]).strip().upper()
             if c_cap:
                 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+
                 base_template = load_force_field_rtp(ff_name).get_residue(last_resname)
                 cap_template = load_force_field_rtp(ff_name).get_residue(c_cap)
                 if base_template is None or cap_template is None:
@@ -1488,9 +1543,7 @@ class StructureProcessor(BaseModule):
                 prepared_termini += 1
 
         if prepared_termini:
-            log.append(
-                f"Standard termini: prepared {prepared_termini} NH3+/COO- residue templates"
-            )
+            log.append(f"Standard termini: prepared {prepared_termini} NH3+/COO- residue templates")
         if built_caps:
             log.append("Terminal caps: built explicit " + ", ".join(built_caps))
 
@@ -1503,8 +1556,8 @@ class StructureProcessor(BaseModule):
         # Store processing metadata for downstream modules
         system.metadata["protonation_pH"] = pH
         system.metadata["n_residues_renamed"] = len(renamed_residues)
-        system.metadata["n_modifications"] = (
-            len(validated_modifications) + 2 * len(validated_disulfides)
+        system.metadata["n_modifications"] = len(validated_modifications) + 2 * len(
+            validated_disulfides
         )
         system.metadata["modification_geometry"] = geometry_metadata
         system.metadata["crosslinks"] = disulfide_metadata

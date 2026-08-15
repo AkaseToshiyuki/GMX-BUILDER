@@ -32,14 +32,7 @@ class PureMembraneExportModule(ExportModule):
             encoding="utf-8",
         )
         zip_path = output_dir / f"{system_name}.zip"
-        self._write_archive(
-            output_dir, zip_path, [], include_run_script=False
-        )
-        result.log = [
-            line for line in result.log
-            if "run_md.sh" not in line and "mdp/" not in line
-        ]
-        result.log.append(
-            "Dry bilayer export: omitted solvent, ions, MDP files, and run_md.sh"
-        )
+        self._write_archive(output_dir, zip_path, [], include_run_script=False)
+        result.log = [line for line in result.log if "run_md.sh" not in line and "mdp/" not in line]
+        result.log.append("Dry bilayer export: omitted solvent, ions, MDP files, and run_md.sh")
         return result

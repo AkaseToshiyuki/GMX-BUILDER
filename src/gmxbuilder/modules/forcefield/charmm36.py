@@ -20,15 +20,15 @@ from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
 # Approximate CHARMM36 atom type parameters for common elements
 # Used as fallback when no .rtp file is available
 _CHARMM36_DEFAULTS: dict[str, dict] = {
-    "C":  {"mass": 12.011, "sigma": 0.356359, "epsilon": 0.46024},
-    "N":  {"mass": 14.007, "sigma": 0.329632, "epsilon": 0.83680},
-    "O":  {"mass": 15.999, "sigma": 0.302905, "epsilon": 0.50208},
-    "H":  {"mass": 1.008,  "sigma": 0.040001, "epsilon": 0.19246},
-    "S":  {"mass": 32.065, "sigma": 0.356359, "epsilon": 1.04600},
-    "P":  {"mass": 30.974, "sigma": 0.374177, "epsilon": 0.83680},
+    "C": {"mass": 12.011, "sigma": 0.356359, "epsilon": 0.46024},
+    "N": {"mass": 14.007, "sigma": 0.329632, "epsilon": 0.83680},
+    "O": {"mass": 15.999, "sigma": 0.302905, "epsilon": 0.50208},
+    "H": {"mass": 1.008, "sigma": 0.040001, "epsilon": 0.19246},
+    "S": {"mass": 32.065, "sigma": 0.356359, "epsilon": 1.04600},
+    "P": {"mass": 30.974, "sigma": 0.374177, "epsilon": 0.83680},
     "NA": {"mass": 22.990, "sigma": 0.242992, "epsilon": 0.19623},
     "CL": {"mass": 35.453, "sigma": 0.404468, "epsilon": 0.62760},
-    "K":  {"mass": 39.098, "sigma": 0.314264, "epsilon": 0.36468},
+    "K": {"mass": 39.098, "sigma": 0.314264, "epsilon": 0.36468},
     "CA": {"mass": 40.078, "sigma": 0.241199, "epsilon": 0.25620},
     "ZN": {"mass": 65.380, "sigma": 0.195998, "epsilon": 0.52300},
     "MG": {"mass": 24.305, "sigma": 0.141445, "epsilon": 0.10836},
@@ -50,6 +50,7 @@ class CHARMM36ForceField(ForceField):
         # Load the RTP files for this exact force field.  CHARMM36m must not
         # silently receive atom types and charges from CHARMM36's singleton.
         from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+
         rtp = load_force_field_rtp(self.name)
 
         n_resnames = len(system.structure.resnames)
@@ -57,9 +58,18 @@ class CHARMM36ForceField(ForceField):
 
         # Generic fallback atom types by element (when RTP lookup fails)
         _ELEM_GENERIC_TYPE: dict[str, str] = {
-            "C": "CT3", "N": "NH1", "O": "O", "H": "H",
-            "S": "S", "P": "P", "NA": "NA", "CL": "CL",
-            "K": "K", "CA": "CA", "ZN": "ZN", "MG": "MG",
+            "C": "CT3",
+            "N": "NH1",
+            "O": "O",
+            "H": "H",
+            "S": "S",
+            "P": "P",
+            "NA": "NA",
+            "CL": "CL",
+            "K": "K",
+            "CA": "CA",
+            "ZN": "ZN",
+            "MG": "MG",
         }
 
         atom_types = []
@@ -123,12 +133,14 @@ class CHARMM36ForceField(ForceField):
                                 raise ForceFieldError(
                                     "A membrane molecule block contains mixed residue names"
                                 )
-                            topology.molecule_blocks.append(MoleculeBlock(
-                                atom_indices=lipid_indices,
-                                nrexcl=nrexcl,
-                                type_name=residue_names.pop(),
-                                num_molecules=1,
-                            ))
+                            topology.molecule_blocks.append(
+                                MoleculeBlock(
+                                    atom_indices=lipid_indices,
+                                    nrexcl=nrexcl,
+                                    type_name=residue_names.pop(),
+                                    num_molecules=1,
+                                )
+                            )
                         continue  # skip default block creation
                 # Fallback: single block if splitting fails
                 n_mol = 1
@@ -140,12 +152,14 @@ class CHARMM36ForceField(ForceField):
             elif comp.kind == ComponentKind.PROTEIN:
                 type_name = "Protein"
 
-            topology.molecule_blocks.append(MoleculeBlock(
-                atom_indices=list(comp.atom_indices),
-                nrexcl=nrexcl,
-                type_name=type_name,
-                num_molecules=n_mol,
-            ))
+            topology.molecule_blocks.append(
+                MoleculeBlock(
+                    atom_indices=list(comp.atom_indices),
+                    nrexcl=nrexcl,
+                    type_name=type_name,
+                    num_molecules=n_mol,
+                )
+            )
 
         return topology
 
@@ -169,5 +183,15 @@ class CHARMM36mForceField(CHARMM36ForceField):
     name = "charmm36m"
     version = "jul2022"
     water_model = "tip3p"
-    supported_lipids = ["POPC", "DPPC", "DMPC", "DOPC", "POPE", "DOPE",
-                        "POPG", "POPS", "POPA", "CHOL"]
+    supported_lipids = [
+        "POPC",
+        "DPPC",
+        "DMPC",
+        "DOPC",
+        "POPE",
+        "DOPE",
+        "POPG",
+        "POPS",
+        "POPA",
+        "CHOL",
+    ]

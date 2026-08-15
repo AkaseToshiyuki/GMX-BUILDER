@@ -43,12 +43,16 @@ _PHYSIOLOGICAL_SCENARIOS = {
 }
 
 
-@pytest.mark.parametrize("composition", _PHYSIOLOGICAL_SCENARIOS.values(), ids=_PHYSIOLOGICAL_SCENARIOS)
+@pytest.mark.parametrize(
+    "composition", _PHYSIOLOGICAL_SCENARIOS.values(), ids=_PHYSIOLOGICAL_SCENARIOS
+)
 def test_hidden_physiological_compositions_satisfy_step5_contract(composition):
-    assert MembraneBuilder().validate_config({
-        "lipid_composition": composition,
-        "n_lipids_per_leaflet": 64,
-    })
+    assert MembraneBuilder().validate_config(
+        {
+            "lipid_composition": composition,
+            "n_lipids_per_leaflet": 64,
+        }
+    )
     for leaflet in (composition["upper"], composition.get("lower")):
         if leaflet:
             assert sum(entry["ratio"] for entry in leaflet) == 100

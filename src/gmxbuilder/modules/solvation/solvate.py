@@ -31,14 +31,21 @@ class SolvationBuilder(BaseModule):
     name = "solvation"
     description = "Add water box around system with overlap removal"
 
-    _DEFAULT_PADDING = 1.2   # nm
-    _WATER_SPACING = 0.31    # nm, approximate spacing between waters
+    _DEFAULT_PADDING = 1.5  # nm; consistent with the Solvator task default
+    _WATER_SPACING = 0.31  # nm, approximate spacing between waters
 
     def validate_config(self, config: dict) -> bool:
         self.validate_config_keys(
             config,
-            {"water_model", "box_padding", "overlap_scale", "box_size",
-             "remove_overlap", "use_prebuilt_water", "seed"},
+            {
+                "water_model",
+                "box_padding",
+                "overlap_scale",
+                "box_size",
+                "remove_overlap",
+                "use_prebuilt_water",
+                "seed",
+            },
         )
         water_model = str(config.get("water_model", "tip3p")).strip().lower()
         try:
@@ -82,9 +89,9 @@ class SolvationBuilder(BaseModule):
                 "Water model is locked by Step 2 force-field selection; "
                 "return to Step 2 to change it"
             )
-        water_model_name = str(
-            locked_water_model or requested_water_model or "tip3p"
-        ).strip().lower()
+        water_model_name = (
+            str(locked_water_model or requested_water_model or "tip3p").strip().lower()
+        )
         water_model = WaterRegistry.get(water_model_name)
         box_padding = float(config.get("box_padding", self._DEFAULT_PADDING))
         remove_overlap = bool(config.get("remove_overlap", True))
@@ -114,9 +121,9 @@ class SolvationBuilder(BaseModule):
                 raise ModuleConfigError("Membrane checkpoint has invalid box dimensions")
             box_x, box_y = map(float, existing_dims[:2])
 
-            membrane_coords = np.concatenate([
-                coords[component.atom_indices] for component in membrane_comps
-            ])
+            membrane_coords = np.concatenate(
+                [coords[component.atom_indices] for component in membrane_comps]
+            )
             membrane_mid_z = float(
                 (membrane_coords[:, 2].min() + membrane_coords[:, 2].max()) / 2.0
             )
@@ -151,19 +158,23 @@ class SolvationBuilder(BaseModule):
             # Shift the membrane midplane to the box centre.  Protein
             # asymmetry must never change the two requested solvent layers.
             if len(coords) > 0:
-                shift = np.array([
-                    box_x / 2.0 - (cmax[0] + cmin[0]) / 2.0,
-                    box_y / 2.0 - (cmax[1] + cmin[1]) / 2.0,
-                    box_z / 2.0 - membrane_mid_z,
-                ])
+                shift = np.array(
+                    [
+                        box_x / 2.0 - (cmax[0] + cmin[0]) / 2.0,
+                        box_y / 2.0 - (cmax[1] + cmin[1]) / 2.0,
+                        box_z / 2.0 - membrane_mid_z,
+                    ]
+                )
                 if np.any(np.abs(shift) > 0.01):
                     system.structure.translate(shift)
                     coords = system.coordinates
             min_coords = np.zeros(3)
             max_coords = box_dims
-            log.append(f"Solvation box: {box_x:.1f}×{box_y:.1f}×{box_z:.1f} nm "
-                       f"(XY from membrane, lipid Z span {interface_thickness:.2f} "
-                       f"+ 2×{box_padding:.1f} nm interface padding)")
+            log.append(
+                f"Solvation box: {box_x:.1f}×{box_y:.1f}×{box_z:.1f} nm "
+                f"(XY from membrane, lipid Z span {interface_thickness:.2f} "
+                f"+ 2×{box_padding:.1f} nm interface padding)"
+            )
         elif len(coords) == 0:
             # Empty system — use explicit box_size or existing dimensions
             box_size = config.get("box_size")
@@ -173,9 +184,7 @@ class SolvationBuilder(BaseModule):
             else:
                 dims = system.structure.dimensions()
             if not np.isfinite(dims).all() or np.any(dims <= 0):
-                raise ModuleConfigError(
-                    "Empty-system solvation requires a positive box_size"
-                )
+                raise ModuleConfigError("Empty-system solvation requires a positive box_size")
             min_coords = np.zeros(3)
             max_coords = dims
             box_dims = max_coords - min_coords
@@ -193,8 +202,10 @@ class SolvationBuilder(BaseModule):
             min_coords = np.zeros(3)
             max_coords = box_dims
             box_vectors = np.diag(box_dims)
-            log.append(f"Box from solute + {box_padding:.1f} nm padding: "
-                       f"{box_dims[0]:.1f}×{box_dims[1]:.1f}×{box_dims[2]:.1f} nm")
+            log.append(
+                f"Box from solute + {box_padding:.1f} nm padding: "
+                f"{box_dims[0]:.1f}×{box_dims[1]:.1f}×{box_dims[2]:.1f} nm"
+            )
         if not np.isfinite(box_dims).all() or np.any(box_dims <= 0):
             raise ModuleConfigError("Solvation produced invalid box dimensions")
 
@@ -206,7 +217,10 @@ class SolvationBuilder(BaseModule):
 
         if use_prebuilt:
             water_coords, n_molecules = self._fill_from_prebuilt(
-                box_dims, water_model_name, water_model, seed,
+                box_dims,
+                water_model_name,
+                water_model,
+                seed,
             )
             # _fill_from_prebuilt tiles from origin [0,0,0];
             # shift to align with solute region [min_coords, max_coords]
@@ -214,8 +228,11 @@ class SolvationBuilder(BaseModule):
                 water_coords += min_coords.reshape(1, 3)
         if water_coords is None:
             water_coords, n_molecules = self._generate_water_grid(
-                min_coords, max_coords, water_model,
-                spacing=self._WATER_SPACING, seed=seed,
+                min_coords,
+                max_coords,
+                water_model,
+                spacing=self._WATER_SPACING,
+                seed=seed,
             )
             log.append(f"Generated {n_molecules} water molecules (grid method)")
         else:
@@ -228,22 +245,42 @@ class SolvationBuilder(BaseModule):
             water_mols = water_coords.reshape(n_molecules, n_atoms_per_water, 3)
             # Per-element VDW radii for overlap detection (nm)
             _ELEM_VDW = {
-                "H": 0.12, "C": 0.17, "N": 0.16, "O": 0.15, "S": 0.18,
-                "P": 0.18, "F": 0.15, "CL": 0.18, "BR": 0.19, "I": 0.20,
-                "NA": 0.23, "K": 0.28, "CA": 0.23, "MG": 0.17, "ZN": 0.16,
+                "H": 0.12,
+                "C": 0.17,
+                "N": 0.16,
+                "O": 0.15,
+                "S": 0.18,
+                "P": 0.18,
+                "F": 0.15,
+                "CL": 0.18,
+                "BR": 0.19,
+                "I": 0.20,
+                "NA": 0.23,
+                "K": 0.28,
+                "CA": 0.23,
+                "MG": 0.17,
+                "ZN": 0.16,
             }
-            solute_vdw = np.array([
-                _ELEM_VDW.get(
-                    (system.structure.elements[i] if i < len(system.structure.elements) else "C").upper()[:2],
-                    0.15)
-                for i in range(len(coords))
-            ])
+            solute_vdw = np.array(
+                [
+                    _ELEM_VDW.get(
+                        (
+                            system.structure.elements[i]
+                            if i < len(system.structure.elements)
+                            else "C"
+                        ).upper()[:2],
+                        0.15,
+                    )
+                    for i in range(len(coords))
+                ]
+            )
             per_atom_vdw = [water_model.approximate_radius, 0.05, 0.05]
             if water_model.n_atoms == 4:
                 per_atom_vdw.append(0.0)
             water_vdw = np.tile(per_atom_vdw, n_molecules)
             overlap = find_overlapping_atoms(
-                water_coords, coords,
+                water_coords,
+                coords,
                 vdw_radii_mobile=water_vdw,
                 vdw_radii_fixed=solute_vdw,
                 scale=overlap_scale,
@@ -255,7 +292,9 @@ class SolvationBuilder(BaseModule):
             n_removed = mol_overlap.sum()
             n_molecules = len(water_mols)
             water_coords = water_mols.reshape(-1, 3)
-            log.append(f"Removed {n_removed} overlapping water molecules, {n_molecules} water molecules kept")
+            log.append(
+                f"Removed {n_removed} overlapping water molecules, {n_molecules} water molecules kept"
+            )
 
             # ---- 3b. Exclude water from membrane hydrophobic core ----
             if membrane_box_set and n_molecules > 0:
@@ -282,8 +321,10 @@ class SolvationBuilder(BaseModule):
                         water_mols = water_mols[~in_core]
                         n_molecules = len(water_mols)
                         water_coords = water_mols.reshape(-1, 3)
-                        log.append(f"Membrane core exclusion: removed {n_core_removed} water molecules "
-                                   f"(Z={z_lo:.1f}–{z_hi:.1f} nm)")
+                        log.append(
+                            f"Membrane core exclusion: removed {n_core_removed} water molecules "
+                            f"(Z={z_lo:.1f}–{z_hi:.1f} nm)"
+                        )
 
         # ---- 4. Build water Structure ----
         n_water_atoms = len(water_coords)
@@ -325,16 +366,18 @@ class SolvationBuilder(BaseModule):
         n_before = system.num_atoms
         merged = system.merge(water_system)
 
-        merged.add_component(Component(
-            name=f"SOLVENT_{water_model_name.upper()}",
-            kind=ComponentKind.SOLVENT,
-            atom_indices=np.arange(n_before, merged.num_atoms),
-            metadata={
-                "water_model": water_model_name,
-                "n_molecules": n_molecules,
-                "volume_nm3": float(np.prod(box_dims)),
-            },
-        ))
+        merged.add_component(
+            Component(
+                name=f"SOLVENT_{water_model_name.upper()}",
+                kind=ComponentKind.SOLVENT,
+                atom_indices=np.arange(n_before, merged.num_atoms),
+                metadata={
+                    "water_model": water_model_name,
+                    "n_molecules": n_molecules,
+                    "volume_nm3": float(np.prod(box_dims)),
+                },
+            )
+        )
 
         # Update box
         merged.structure.box_vectors = box_vectors
@@ -406,11 +449,13 @@ class SolvationBuilder(BaseModule):
             c1, s1 = np.cos(phi), np.sin(phi)
             c2, s2 = np.cos(theta), np.sin(theta)
             c3, s3 = np.cos(psi), np.sin(psi)
-            rot = np.array([
-                [c1*c3 - s1*c2*s3, -c1*s3 - s1*c2*c3, s1*s2],
-                [s1*c3 + c1*c2*s3, -s1*s3 + c1*c2*c3, -c1*s2],
-                [s2*s3, s2*c3, c2],
-            ])
+            rot = np.array(
+                [
+                    [c1 * c3 - s1 * c2 * s3, -c1 * s3 - s1 * c2 * c3, s1 * s2],
+                    [s1 * c3 + c1 * c2 * s3, -s1 * s3 + c1 * c2 * c3, -c1 * s2],
+                    [s2 * s3, s2 * c3, c2],
+                ]
+            )
             h1 = o_pos + rot @ h1_local
             h2 = o_pos + rot @ h2_local
 
@@ -442,6 +487,7 @@ class SolvationBuilder(BaseModule):
         # Locate bundled water box
         # Locate bundled water box relative to package data directory
         import gmxbuilder.data.water_boxes as _wb_pkg
+
         box_path = Path(_wb_pkg.__path__[0]) / f"{water_model_name}_water.gro"
         if not box_path.exists():
             return None, 0

@@ -27,7 +27,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
 
@@ -72,14 +72,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gmxbuilder.web")
 
-_MARTINI_TASK_TYPES = frozenset({
-    "martini3-bilayer",
-    "martini3-solvent",
-})
+_MARTINI_TASK_TYPES = frozenset(
+    {
+        "martini3-bilayer",
+        "martini3-solvent",
+    }
+)
 
 
 def _is_martini_task_type(task_type: str | None) -> bool:
     return task_type in _MARTINI_TASK_TYPES
+
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -122,18 +125,12 @@ class RequestBodyLimitMiddleware:
         if scope.get("type") != "http":
             await self.application(scope, receive, send)
             return
-        headers = {
-            key.lower(): value for key, value in scope.get("headers", [])
-        }
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
         content_type = headers.get(b"content-type", b"").lower()
         if content_type.startswith(b"multipart/form-data"):
-            limit = _positive_body_limit(
-                "GMXBUILDER_UPLOAD_BODY_LIMIT", 128 * 1024 * 1024
-            )
+            limit = _positive_body_limit("GMXBUILDER_UPLOAD_BODY_LIMIT", 128 * 1024 * 1024)
         else:
-            limit = _positive_body_limit(
-                "GMXBUILDER_JSON_BODY_LIMIT", 2 * 1024 * 1024
-            )
+            limit = _positive_body_limit("GMXBUILDER_JSON_BODY_LIMIT", 2 * 1024 * 1024)
         declared = headers.get(b"content-length")
         if declared is not None:
             try:
@@ -144,9 +141,9 @@ class RequestBodyLimitMiddleware:
                     )(scope, receive, send)
                     return
             except ValueError:
-                await JSONResponse(
-                    {"error": "Invalid Content-Length header"}, status_code=400
-                )(scope, receive, send)
+                await JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)(
+                    scope, receive, send
+                )
                 return
 
         consumed = 0
@@ -179,6 +176,7 @@ class RequestBodyLimitMiddleware:
                     status_code=413,
                 )(scope, receive, send)
 
+
 @asynccontextmanager
 async def _app_lifespan(_application: FastAPI):
     await startup_background_tasks()
@@ -187,15 +185,14 @@ async def _app_lifespan(_application: FastAPI):
     finally:
         await shutdown_event()
 
+
 app = FastAPI(title="GMXBUILDER", version=VERSION, lifespan=_app_lifespan)
 app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(_ALLOWED_ORIGINS),
     allow_methods=["GET", "POST"],
-    allow_headers=[
-        "Authorization", "Content-Type", "X-Admin-Token", "X-GMXBUILDER-Token"
-    ],
+    allow_headers=["Authorization", "Content-Type", "X-Admin-Token", "X-GMXBUILDER-Token"],
 )
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR), follow_symlink=False), name="static")
 
@@ -242,33 +239,37 @@ async def security_middleware(request: Request, call_next):
         return apply_security_headers(response, public_mode=public_mode)
 
     if security.errors and not live_probe:
-        return secured(JSONResponse(
-            {"error": "Invalid server security configuration", "details": list(security.errors)},
-            status_code=503,
-        ))
+        return secured(
+            JSONResponse(
+                {
+                    "error": "Invalid server security configuration",
+                    "details": list(security.errors),
+                },
+                status_code=503,
+            )
+        )
 
     if not live_probe and public_mode and not request_is_https(request, security):
-        return secured(JSONResponse(
-            {"error": "HTTPS is required in public deployment mode"},
-            status_code=426,
-        ))
+        return secured(
+            JSONResponse(
+                {"error": "HTTPS is required in public deployment mode"},
+                status_code=426,
+            )
+        )
 
     authentication_required = public_mode or security.authentication_enabled
     if not live_probe and authentication_required and not request_authenticated(request, security):
         headers = {
             "WWW-Authenticate": (
-                'Basic realm="GMXBUILDER", charset="UTF-8"'
-                if security.auth_user else "Bearer"
+                'Basic realm="GMXBUILDER", charset="UTF-8"' if security.auth_user else "Bearer"
             )
         }
-        return secured(JSONResponse(
-            {"error": "Authentication is required"}, status_code=401, headers=headers
-        ))
+        return secured(
+            JSONResponse({"error": "Authentication is required"}, status_code=401, headers=headers)
+        )
 
     if authentication_required and not request_origin_allowed(request, security):
-        return secured(JSONResponse(
-            {"error": "Request Origin is not allowed"}, status_code=403
-        ))
+        return secured(JSONResponse({"error": "Request Origin is not allowed"}, status_code=403))
 
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         policy = _rate_policy(request.url.path)
@@ -278,19 +279,22 @@ async def security_middleware(request: Request, call_next):
                 client_identity(request, security), bucket_name, limit, window
             )
             if not allowed:
-                return secured(JSONResponse(
-                    {
-                        "error": (
-                            "Request rate limit exceeded. Wait before retrying; "
-                            "running or queued work has not been cancelled."
-                        )
-                    },
-                    status_code=429,
-                    headers={"Retry-After": str(retry_after)},
-                ))
+                return secured(
+                    JSONResponse(
+                        {
+                            "error": (
+                                "Request rate limit exceeded. Wait before retrying; "
+                                "running or queued work has not been cancelled."
+                            )
+                        },
+                        status_code=429,
+                        headers={"Retry-After": str(retry_after)},
+                    )
+                )
 
     response = await call_next(request)
     return secured(response)
+
 
 def _validate_task_resource(task_id: str, resource: str | Path) -> Path:
     """Resolve a server-owned file and confine it to exactly one task."""
@@ -303,6 +307,7 @@ def _validate_task_resource(task_id: str, resource: str | Path) -> Path:
     if resolved == task_dir or task_dir not in resolved.parents:
         raise ValueError(f"Resource is outside task {task_id}")
     return resolved
+
 
 def _resolve_input_pdb(task_id: str) -> str:
     """Structure for the input step — filtered selection > original upload.
@@ -378,6 +383,7 @@ def _resolve_propka_pdb_path(task_id: str) -> str:
         return str(pdb_path)
 
     raise ValueError(f"No PDB file found for task {task_id}")
+
 
 def _validate_task_id(task_id: str) -> str:
     """Validate task_id format and path safety. Returns sanitized task_id."""
@@ -462,9 +468,7 @@ def _public_step_result(task_id: str, result: dict) -> dict:
     public.pop("zip_path", None)
     step_name = str(public.get("step", ""))
     if viewer_available and step_name:
-        public["viewer_pdb_url"] = (
-            f"/api/step/{task_id}/{step_name}/viewer.pdb"
-        )
+        public["viewer_pdb_url"] = f"/api/step/{task_id}/{step_name}/viewer.pdb"
     if index_available:
         public["index_available"] = True
     sanitized = _sanitize_public_value(public)
@@ -530,6 +534,8 @@ _custom_lipid_jobs_lock = threading.Lock()
 _custom_gpu_condition = threading.Condition()
 _custom_gpu_in_use: set[int] = set()
 _custom_gpu_cursor = 0
+
+
 def _configured_custom_gpu_ids() -> tuple[int, ...]:
     """Read the already-established deployment allocation without probing CUDA."""
     configured = os.environ.get("GMXBUILDER_GPU_IDS", "").strip()
@@ -561,6 +567,7 @@ if _startup_removed:
 
 # ---------------------------------------------------------------------------
 # Lifespan: periodic cleanup + graceful shutdown
+
 
 async def startup_background_tasks():
     """Start background tasks: periodic cleanup + build-queue consumer."""
@@ -615,6 +622,7 @@ async def startup_background_tasks():
         store = CustomLipidStore(task_dir)
         for lipid_name in store.pending_names():
             _schedule_custom_lipid_build(task_dir.name, lipid_name)
+
     # ---- Periodic cleanup ----
     async def _cleanup_loop():
         while True:
@@ -649,12 +657,15 @@ async def startup_background_tasks():
                             _step_runners.pop(tid, None)
                     # Also remove expired tasks from queue
                     with _queue_lock:
-                        _build_queue[:] = [(tid, d) for tid, d in _build_queue if tid not in removed]
+                        _build_queue[:] = [
+                            (tid, d) for tid, d in _build_queue if tid not in removed
+                        ]
                         for tid in removed:
                             _queue_enqueued_at.pop(tid, None)
                             _build_started_at.pop(tid, None)
             except Exception:
                 logger.exception("Periodic cleanup failed")
+
     _lifespan_tasks.append(asyncio.create_task(_cleanup_loop()))
 
     # ---- Build-queue consumer ----
@@ -705,10 +716,7 @@ def _get_custom_lipid_executor() -> ThreadPoolExecutor:
     """Dedicated two-worker queue so long NPT jobs cannot starve web Checks."""
     global _custom_lipid_executor
     with _custom_lipid_executor_lock:
-        if (
-            _custom_lipid_executor is None
-            or getattr(_custom_lipid_executor, "_shutdown", False)
-        ):
+        if _custom_lipid_executor is None or getattr(_custom_lipid_executor, "_shutdown", False):
             _custom_lipid_executor = ThreadPoolExecutor(
                 max_workers=_CUSTOM_GPU_CONCURRENCY,
                 thread_name_prefix="gmxbuilder-custom-lipid",
@@ -720,10 +728,7 @@ def _get_interactive_executor() -> ThreadPoolExecutor:
     """Small bounded pool for previews and scientific helper calculations."""
     global _interactive_executor
     with _interactive_executor_lock:
-        if (
-            _interactive_executor is None
-            or getattr(_interactive_executor, "_shutdown", False)
-        ):
+        if _interactive_executor is None or getattr(_interactive_executor, "_shutdown", False):
             _interactive_executor = ThreadPoolExecutor(
                 max_workers=min(2, _MAX_CONCURRENT_BUILDS),
                 thread_name_prefix="gmxbuilder-interactive",
@@ -753,9 +758,11 @@ def _signal_queue() -> None:
 # ---------------------------------------------------------------------------
 # Page routes
 
+
 def _wizard_html() -> HTMLResponse:
     """Render the single frontend shell used by history-based task routes."""
     from gmxbuilder import VERSION
+
     template_path = _TEMPLATE_DIR / "index.html"
     if not template_path.is_file():
         return HTMLResponse("<h1>GMXBUILDER Web</h1><p>Template not found.</p>")
@@ -786,11 +793,13 @@ async def workflow_step_page(workflow: str, step: int):
 async def task_step_page(workflow: str, task_id: str, step: int):
     """Retire legacy task-bearing links without rendering their identifiers."""
     from fastapi.responses import RedirectResponse
+
     return RedirectResponse(url="/", status_code=307)
 
 
 # ---------------------------------------------------------------------------
 # Health check
+
 
 @app.get("/health/live")
 async def liveness_check():
@@ -802,6 +811,7 @@ async def liveness_check():
 async def health_check():
     """Authenticated detailed health in public mode; unchanged on trusted networks."""
     from gmxbuilder import VERSION as _ver
+
     security = SecurityConfig.from_environment()
     return {
         "status": "ok",
@@ -828,10 +838,12 @@ async def api_hardware():
 # ---------------------------------------------------------------------------
 # API: task types
 
+
 @app.get("/api/task-types")
 async def api_task_types():
     """Return all available task types for the selection wizard."""
     from gmxbuilder.web.task_types import get_all_task_types
+
     return {"task_types": get_all_task_types()}
 
 
@@ -839,6 +851,7 @@ async def api_task_types():
 async def api_task_type_detail(task_id: str):
     """Return full detail for a specific task type."""
     from gmxbuilder.web.task_types import get_task_type_detail
+
     detail = get_task_type_detail(task_id)
     if detail is None:
         return JSONResponse({"error": f"Unknown task type: {task_id}"}, status_code=404)
@@ -863,19 +876,25 @@ async def api_create_task(request: Request):
             {"error": f"{detail['title']} requires a structure upload"}, status_code=400
         )
     task = task_manager.create_task(f"{task_type_id}_system")
-    task_manager.update_state(task["task_id"], {
-        "task_type": detail,
-        "task_type_id": task_type_id,
-        "current_step": detail["visible_modules"][0],
-    })
+    task_manager.update_state(
+        task["task_id"],
+        {
+            "task_type": detail,
+            "task_type_id": task_type_id,
+            "current_step": detail["visible_modules"][0],
+        },
+    )
     return {"task_id": task["task_id"], "task_type": detail}
 
 
 # ---------------------------------------------------------------------------
 # API: PPM orientation
 
+
 def _legacy_orientation_payload(
-    pdb_path: str, algorithm: str, half_thickness: float | None,
+    pdb_path: str,
+    algorithm: str,
+    half_thickness: float | None,
 ) -> dict:
     """Compute the legacy orientation response off the event-loop thread."""
     parser = PDBParser()
@@ -907,18 +926,14 @@ def _legacy_orientation_payload(
         "oriented_pdb": oriented_pdb,
     }
 
+
 @app.post("/api/orient-ppm")
 async def api_orient_ppm(request: Request):
     """Compute orientation for a previously uploaded PDB."""
     data = await request.json()
     if data.get("tmp_path"):
         return JSONResponse(
-            {
-                "error": (
-                    "Client-supplied filesystem paths are not accepted; "
-                    "provide task_id"
-                )
-            },
+            {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
             status_code=400,
         )
     task_id_val = data.get("task_id", "")
@@ -930,9 +945,7 @@ async def api_orient_ppm(request: Request):
         task_id_val = _validate_task_id(str(task_id_val))
         if task_manager.get_state(task_id_val) is None:
             return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-        tmp_path = str(
-            _validate_task_resource(task_id_val, _resolve_pdb_path(task_id_val))
-        )
+        tmp_path = str(_validate_task_resource(task_id_val, _resolve_pdb_path(task_id_val)))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     if not Path(tmp_path).exists():
@@ -983,9 +996,7 @@ def _generate_orientation_preview(task_id: str, config: dict) -> dict:
             "_orientation_method", preview_config.get("method", "ppm")
         ),
         "orientation": result.system.metadata.get("_orient_params", {}),
-        "orientation_quality": result.system.metadata.get(
-            "_orientation_quality", {}
-        ),
+        "orientation_quality": result.system.metadata.get("_orientation_quality", {}),
         "oriented_pdb": oriented_pdb,
         "log": result.log,
     }
@@ -1000,9 +1011,7 @@ async def api_orient_preview(task_id: str, request: Request):
     try:
         data = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return JSONResponse(
-            {"error": "Request body must be valid JSON"}, status_code=400
-        )
+        return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
         return JSONResponse({"error": "Request body must be an object"}, status_code=400)
     config = data.get("config", data)
@@ -1013,9 +1022,7 @@ async def api_orient_preview(task_id: str, request: Request):
         # Preview is read-only and short-lived. Keep it off the persistent
         # build executor so browser slider traffic cannot occupy build slots,
         # and so application/TestClient restarts cannot reuse a shut-down pool.
-        payload = await _run_interactive(
-            _generate_orientation_preview, task_id, config
-        )
+        payload = await _run_interactive(_generate_orientation_preview, task_id, config)
     except FileNotFoundError as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
     except (ValueError, TypeError) as exc:
@@ -1030,9 +1037,151 @@ async def api_orient_preview(task_id: str, request: Request):
     return JSONResponse(payload)
 
 
+_cg_orientation_preview_cache: dict[tuple[str, int, float], tuple[System, list[str]]] = {}
+_cg_orientation_preview_lock = threading.Lock()
+
+
+def _cg_orientation_cache_key(task_id: str, half_thickness: float) -> tuple[str, int, float]:
+    mapping = task_manager.get_task_dir(task_id) / "steps" / "cg_mapping" / "system.npz"
+    if not mapping.is_file():
+        raise FileNotFoundError("Martini mapping checkpoint is missing; run Map Protein first.")
+    return task_id, mapping.stat().st_mtime_ns, round(float(half_thickness), 6)
+
+
+def _cache_cg_automatic_pose(key: tuple[str, int, float], system: System, log: list[str]) -> None:
+    with _cg_orientation_preview_lock:
+        for old_key in list(_cg_orientation_preview_cache):
+            if old_key[0] == key[0] and old_key != key:
+                _cg_orientation_preview_cache.pop(old_key, None)
+        _cg_orientation_preview_cache[key] = (system.copy(), list(log))
+        while len(_cg_orientation_preview_cache) > 16:
+            _cg_orientation_preview_cache.pop(next(iter(_cg_orientation_preview_cache)))
+
+
+def _generate_cg_orientation_preview(task_id: str, config: dict) -> dict:
+    """Preview the exact independent Martini orientation implementation.
+
+    The expensive deterministic PPM-like base pose is cached per mapping
+    checkpoint. Manual slider requests then apply only their inexpensive
+    adjustment, while the Check module recomputes the same deterministic base.
+    """
+    from gmxbuilder.modules.martini3_bilayer.orientation import (
+        CGOrientationModule,
+        apply_manual_adjustment,
+    )
+
+    half_thickness = float(config.get("half_thickness", 1.4))
+    key = _cg_orientation_cache_key(task_id, half_thickness)
+    runner = _get_step_runner(task_id, "martini3-bilayer")
+    mapped = runner.load_system("cg_mapping")
+    if mapped is None:
+        raise FileNotFoundError("Martini mapping checkpoint is missing; run Map Protein first.")
+    module = CGOrientationModule()
+    module.validate_config(config)
+    method = str(config.get("method", "ppm")).lower()
+
+    with tempfile.TemporaryDirectory(prefix="gmxbuilder-cg-orient-preview-") as tmp:
+        root = Path(tmp)
+        if method == "ppm":
+            preview_config = dict(config)
+            preview_config.update(
+                {
+                    "_task_dir": str(root),
+                    "_step_dir": str(root / "steps" / "cg_orientation"),
+                }
+            )
+            result = module.execute(mapped, preview_config)
+            if not result.success:
+                raise RuntimeError("Martini orientation module reported failure")
+            oriented = result.system
+            log = list(result.log)
+            _cache_cg_automatic_pose(key, oriented, log)
+        else:
+            with _cg_orientation_preview_lock:
+                cached = _cg_orientation_preview_cache.get(key)
+                cached = (cached[0].copy(), list(cached[1])) if cached else None
+            if cached is None:
+                automatic_config = {
+                    "method": "ppm",
+                    "half_thickness": half_thickness,
+                    "_task_dir": str(root),
+                    "_step_dir": str(root / "steps" / "cg_orientation"),
+                }
+                automatic = module.execute(mapped, automatic_config)
+                if not automatic.success:
+                    raise RuntimeError("Martini orientation module reported failure")
+                oriented = automatic.system
+                log = list(automatic.log)
+                _cache_cg_automatic_pose(key, oriented, log)
+            else:
+                oriented, log = cached
+            base_metrics = dict(oriented.metadata.get("cg_orientation") or {})
+            metrics = apply_manual_adjustment(oriented, config, base_metrics)
+            oriented.metadata["cg_orientation"] = metrics
+            oriented.metadata["cg_orientation_method"] = "manual"
+            log.extend(
+                [
+                    "Applied interactive manual Martini orientation adjustment",
+                    f"Protein Z adjustment: {metrics['z_adjustment_nm']:.2f} nm",
+                    f"Protein tilt adjustment: {metrics['tilt_degrees']:.1f} degrees",
+                ]
+            )
+
+        from gmxbuilder.modules.coarse_grained.common import write_cg_viewer_pdb
+
+        preview_path = root / "viewer.pdb"
+        write_cg_viewer_pdb(oriented, preview_path, task_dir=runner.task_dir)
+        pdb = preview_path.read_text(encoding="utf-8")
+
+    return {
+        "status": "ok",
+        "method": method,
+        "orientation": dict(oriented.metadata.get("cg_orientation") or {}),
+        "oriented_pdb": pdb,
+        "log": log,
+    }
+
+
+@app.post("/api/cg-orient-preview/{task_id}")
+async def api_cg_orient_preview(task_id: str, request: Request):
+    """Return exact Martini Step 4 coordinates without changing checkpoints."""
+    task_id = _validate_task_id(task_id)
+    task_state = task_manager.get_state(task_id)
+    task_type = ((task_state or {}).get("task_type") or {}).get("id") or (task_state or {}).get(
+        "task_type_id"
+    )
+    if task_state is None:
+        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
+    if task_type != "martini3-bilayer":
+        return JSONResponse(
+            {"error": "Martini orientation preview requires a Martini 3 Bilayer task"},
+            status_code=409,
+        )
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Request body must be an object"}, status_code=400)
+    config = data.get("config", data)
+    if not isinstance(config, dict):
+        return JSONResponse({"error": "Orientation config must be an object"}, status_code=400)
+    try:
+        payload = await _run_interactive(_generate_cg_orientation_preview, task_id, config)
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except (ModuleConfigError, TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        logger.exception("Failed to generate Martini orientation preview")
+        return JSONResponse({"error": "Martini orientation preview failed"}, status_code=500)
+    return JSONResponse(payload)
+
+
 # ---------------------------------------------------------------------------
 # API: System Verification — preview PDB & geometry comparison
 # ---------------------------------------------------------------------------
+
 
 @app.post("/api/preview-pdb")
 async def api_preview_pdb(request: Request):
@@ -1059,8 +1208,8 @@ async def api_preview_pdb(request: Request):
 
     oriented_pdb = data.get("oriented_pdb", "")
     box_dimensions_nm = data.get("box_dimensions_nm")  # [x, y, z]
-    protein_metrics = data.get("protein")               # {center_of_mass_nm, extent_nm, ...}
-    membrane_metrics = data.get("membrane")             # {midplane_z_nm, half_thickness_nm, ...}
+    protein_metrics = data.get("protein")  # {center_of_mass_nm, extent_nm, ...}
+    membrane_metrics = data.get("membrane")  # {midplane_z_nm, half_thickness_nm, ...}
 
     preview_config = {
         "box_dimensions_nm": box_dimensions_nm,
@@ -1087,11 +1236,13 @@ async def api_preview_pdb(request: Request):
 
             # Update box to match frontend-computed dimensions
             if box_dimensions_nm and len(box_dimensions_nm) == 3:
-                structure.box_vectors = np.diag([
-                    float(box_dimensions_nm[0]),
-                    float(box_dimensions_nm[1]),
-                    float(box_dimensions_nm[2]),
-                ])
+                structure.box_vectors = np.diag(
+                    [
+                        float(box_dimensions_nm[0]),
+                        float(box_dimensions_nm[1]),
+                        float(box_dimensions_nm[2]),
+                    ]
+                )
 
             PDBWriter.write(structure, preview_path, title="GMXBUILDER Preview")
     except Exception:
@@ -1105,10 +1256,15 @@ async def api_preview_pdb(request: Request):
                 pass
 
     # ---- Store preview_config in task state ----
-    task_manager.update_state(task_id, {
-        "preview_config": preview_config,
-        "preview_pdb_resource": "preview.pdb" if preview_path and preview_path.exists() else None,
-    })
+    task_manager.update_state(
+        task_id,
+        {
+            "preview_config": preview_config,
+            "preview_pdb_resource": "preview.pdb"
+            if preview_path and preview_path.exists()
+            else None,
+        },
+    )
 
     return {
         "status": "ok",
@@ -1121,6 +1277,7 @@ async def api_preview_pdb(request: Request):
 # ---------------------------------------------------------------------------
 # API: Filter PDB by chain/molecule selection
 # ---------------------------------------------------------------------------
+
 
 def _normalise_small_molecule_labels(
     raw_labels: object, allowed_resnames: set[str]
@@ -1145,19 +1302,17 @@ def _normalise_small_molecule_labels(
             raise ValueError(f"Display label for {key} contains control characters")
         labels[key] = label
 
-    effective: dict[str, str] = {
-        key: labels.get(key, key) for key in sorted(allowed_resnames)
-    }
+    effective: dict[str, str] = {key: labels.get(key, key) for key in sorted(allowed_resnames)}
     seen: dict[str, str] = {}
     for key, label in effective.items():
         folded = label.casefold()
         if folded in seen:
             raise ValueError(
-                f"Small-molecule display label {label!r} is used for both "
-                f"{seen[folded]} and {key}"
+                f"Small-molecule display label {label!r} is used for both {seen[folded]} and {key}"
             )
         seen[folded] = key
     return labels
+
 
 @app.post("/api/filter-pdb/{task_id}")
 async def api_filter_pdb(task_id: str, request: Request):
@@ -1175,9 +1330,7 @@ async def api_filter_pdb(task_id: str, request: Request):
         return JSONResponse({"error": "No PDB file found"}, status_code=400)
 
     detected_small_molecules = PDBValidator.detect_small_molecules(src)
-    allowed_labels = {
-        str(item["resname"]).strip().upper() for item in detected_small_molecules
-    }
+    allowed_labels = {str(item["resname"]).strip().upper() for item in detected_small_molecules}
     try:
         small_molecule_labels = _normalise_small_molecule_labels(
             data.get("small_molecule_labels", {}), allowed_labels
@@ -1201,16 +1354,20 @@ async def api_filter_pdb(task_id: str, request: Request):
                 n_kept += 1
             fh_out.write(line)
 
-    task_manager.update_state(task_id, {
-        # These are UI labels only.  The original residue key remains stable
-        # in coordinates and force-field parameterization.
-        "small_molecule_labels": small_molecule_labels,
-    })
+    task_manager.update_state(
+        task_id,
+        {
+            # These are UI labels only.  The original residue key remains stable
+            # in coordinates and force-field parameterization.
+            "small_molecule_labels": small_molecule_labels,
+        },
+    )
 
     return {
         "status": "ok",
         "filtered_resource": "filtered.pdb",
-        "n_kept": n_kept, "n_removed": n_removed,
+        "n_kept": n_kept,
+        "n_removed": n_removed,
         "small_molecule_labels": small_molecule_labels,
     }
 
@@ -1218,6 +1375,7 @@ async def api_filter_pdb(task_id: str, request: Request):
 # ---------------------------------------------------------------------------
 # Task management API
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/task/{task_id}")
 async def api_task_status(task_id: str):
@@ -1228,6 +1386,7 @@ async def api_task_status(task_id: str):
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
     # Extend TTL on access (throttled: only writes to disk if >15 min since last write)
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc)
     new_expiry = task_expiry(now)
     state["expires_at"] = new_expiry
@@ -1235,13 +1394,14 @@ async def api_task_status(task_id: str):
     last_write = state.get("_last_ttl_write", "")
     try:
         write_age = (
-            (now - datetime.fromisoformat(last_write)).total_seconds()
-            if last_write else None
+            (now - datetime.fromisoformat(last_write)).total_seconds() if last_write else None
         )
     except (TypeError, ValueError):
         write_age = None
     if write_age is None or write_age > 900:
-        task_manager.update_state(task_id, {"expires_at": new_expiry, "_last_ttl_write": now.isoformat()})
+        task_manager.update_state(
+            task_id, {"expires_at": new_expiry, "_last_ttl_write": now.isoformat()}
+        )
     return _public_task_state(state)
 
 
@@ -1337,9 +1497,7 @@ async def api_task_resume(task_id: str):
             state["sequences"] = sequences
             state["small_molecules"] = small_molecules
             state["pdb_info_full"] = {
-                "filename": (state.get("pdb_info") or {}).get(
-                    "filename", pdb_path.name
-                ),
+                "filename": (state.get("pdb_info") or {}).get("filename", pdb_path.name),
                 "num_atoms": structure.num_atoms,
                 "chains": sorted(chains),
                 "box_nm": [round(v, 3) for v in structure.dimensions().tolist()],
@@ -1352,8 +1510,7 @@ async def api_task_resume(task_id: str):
     try:
         runner = _get_step_runner(task_id, task_type_id)
         checkpoint_steps = {
-            name for name in get_pipeline_steps(task_type_id)
-            if runner.has_checkpoint(name)
+            name for name in get_pipeline_steps(task_type_id) if runner.has_checkpoint(name)
         }
     except ValueError:
         checkpoint_steps = set(state.get("steps_completed") or [])
@@ -1362,7 +1519,9 @@ async def api_task_resume(task_id: str):
     if not isinstance(build_status, dict):
         build_status = {}
     if existing_zip is not None and build_status.get("status") not in {
-        "queued", "running", "failed"
+        "queued",
+        "running",
+        "failed",
     }:
         build_status["status"] = "completed"
     if build_status.get("status") == "completed":
@@ -1392,9 +1551,7 @@ async def api_task_resume(task_id: str):
             if candidate == "simparams" or candidate not in checkpoint_steps:
                 resume_step = candidate
                 break
-    resume_index = (
-        visible_steps.index(resume_step) if resume_step in visible_steps else 0
-    )
+    resume_index = visible_steps.index(resume_step) if resume_step in visible_steps else 0
     route_slug = task_type.get("route_slug") or {
         "membrane-bilayer": "BilayerBuilder",
         "pure-membrane": "PureBilayerSystem",
@@ -1419,8 +1576,7 @@ async def api_task_download(task_id: str):
     zip_path = _authoritative_task_zip(task_id)
     if zip_path is not None:
         filename = f"gmxbuilder_{task_id}.zip"
-        return FileResponse(str(zip_path), media_type="application/zip",
-                            filename=filename)
+        return FileResponse(str(zip_path), media_type="application/zip", filename=filename)
 
     # Fallback: create ZIP from output files recursively
     files = list(output_dir.rglob("*"))
@@ -1431,8 +1587,9 @@ async def api_task_download(task_id: str):
         for f in files:
             if f.is_file() and f.suffix != ".zip":
                 z.write(f, f.relative_to(output_dir))
-    return FileResponse(str(fallback), media_type="application/zip",
-                        filename=f"gmxbuilder_{task_id}.zip")
+    return FileResponse(
+        str(fallback), media_type="application/zip", filename=f"gmxbuilder_{task_id}.zip"
+    )
 
 
 @app.get("/api/build/{task_id}/log")
@@ -1457,13 +1614,15 @@ async def api_task_list(request: Request):
         if d.is_dir() and not d.name.startswith("_"):
             state = task_manager.get_state(d.name)
             if state:
-                tasks.append({
-                    "task_id": state["task_id"],
-                    "filename": state.get("filename", ""),
-                    "current_step": state.get("current_step", ""),
-                    "created_at": state.get("created_at", ""),
-                    "expires_at": state.get("expires_at", ""),
-                })
+                tasks.append(
+                    {
+                        "task_id": state["task_id"],
+                        "filename": state.get("filename", ""),
+                        "current_step": state.get("current_step", ""),
+                        "created_at": state.get("created_at", ""),
+                        "expires_at": state.get("expires_at", ""),
+                    }
+                )
     return tasks
 
 
@@ -1486,9 +1645,7 @@ async def api_build_lipid_library(request: Request):
             status_code=403,
         )
     if not _is_admin_request(request):
-        return JSONResponse(
-            {"error": "Administrator authorization is required"}, status_code=403
-        )
+        return JSONResponse({"error": "Administrator authorization is required"}, status_code=403)
     data = await request.json()
     lipid_name = data.get("lipid_name", "").strip().upper()
     if not lipid_name:
@@ -1557,7 +1714,9 @@ async def api_build_lipid_library(request: Request):
 
 @app.get("/api/lipid-library-status")
 async def api_lipid_library_status(
-    lipid_name: str = "", force_field: str = "amber14sb", lipid_ff: str = "",
+    lipid_name: str = "",
+    force_field: str = "amber14sb",
+    lipid_ff: str = "",
 ):
     """Check if a lipid's conformation library is built."""
     if not lipid_name:
@@ -1565,6 +1724,7 @@ async def api_lipid_library_status(
     from gmxbuilder.modules.membrane.equilibrated_library import (
         get_equilibrated_lipid_library,
     )
+
     lib = get_equilibrated_lipid_library()
     if lipid_ff:
         effective_lipid_ff = lipid_ff
@@ -1591,11 +1751,13 @@ async def api_lipid_library_status(
 async def api_orient_algorithms():
     """Return the list of available orientation algorithms."""
     from gmxbuilder.modules.membrane.orient import list_orientation_algorithms
+
     return list_orientation_algorithms()
 
 
 # ---------------------------------------------------------------------------
 # API: custom lipid from SMILES
+
 
 @app.post("/api/custom-lipid")
 async def api_custom_lipid(request: Request):
@@ -1606,6 +1768,7 @@ async def api_custom_lipid(request: Request):
 
     try:
         from gmxbuilder.modules.membrane.lipids import parse_custom_lipid
+
         result = parse_custom_lipid(smiles, name)
         return result
     except ValueError as exc:
@@ -1626,6 +1789,7 @@ def _run_custom_lipid_job(task_id: str, lipid_name: str) -> None:
             from gmxbuilder.modules.membrane.lipid_equilibration import (
                 lipid_gpu_device,
             )
+
             with lipid_gpu_device(gpu_id):
                 run_custom_lipid_build(task_dir, lipid_name)
     except Exception as exc:
@@ -1731,7 +1895,8 @@ async def api_submit_task_custom_lipid(task_id: str, request: Request):
             str(data.get("name", "")).strip(),
         )
         exact = [
-            match for match in find_registered_lipid_matches(properties["canonical_smiles"])
+            match
+            for match in find_registered_lipid_matches(properties["canonical_smiles"])
             if match["match"] == "exact"
         ]
         if exact:
@@ -1754,9 +1919,7 @@ async def api_submit_task_custom_lipid(task_id: str, request: Request):
         return JSONResponse({"error": str(exc)}, status_code=409)
     except Exception as exc:
         logger.exception("Custom lipid submission failed")
-        return JSONResponse(
-            {"error": _redact_server_paths(exc)}, status_code=500
-        )
+        return JSONResponse({"error": _redact_server_paths(exc)}, status_code=500)
 
 
 @app.get("/api/task/{task_id}/custom-lipids")
@@ -1779,9 +1942,7 @@ async def api_task_custom_lipid_status(task_id: str, lipid_name: str):
     if task_manager.get_state(task_id) is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
     try:
-        record = CustomLipidStore(
-            task_manager.get_task_dir(task_id)
-        ).public_record(lipid_name)
+        record = CustomLipidStore(task_manager.get_task_dir(task_id)).public_record(lipid_name)
         record["message"] = _redact_server_paths(record.get("message", ""))
         return record
     except (KeyError, ValueError):
@@ -1803,7 +1964,10 @@ async def api_retry_task_custom_lipid(task_id: str, lipid_name: str):
                 status_code=409,
             )
         store.update_status(
-            record["name"], state="queued", phase="queued", progress=0,
+            record["name"],
+            state="queued",
+            phase="queued",
+            progress=0,
             message="Retry queued",
         )
         _schedule_custom_lipid_build(task_id, record["name"])
@@ -1815,6 +1979,7 @@ async def api_retry_task_custom_lipid(task_id: str, lipid_name: str):
 # ---------------------------------------------------------------------------
 # API: protonation & modifications
 
+
 def _schedule_propka_precompute(tmp_path: str) -> None:
     """Kick off PROPKA in a background thread so results are ready later."""
     with _pka_cache_lock:
@@ -1825,6 +1990,7 @@ def _schedule_propka_precompute(tmp_path: str) -> None:
     def _run():
         try:
             from gmxbuilder.modules.modifications.protonation import predict_pka_from_pdb
+
             preds = predict_pka_from_pdb(tmp_path)
             with _pka_cache_lock:
                 _pka_cache[tmp_path] = preds
@@ -1850,6 +2016,7 @@ async def _get_propka_results(tmp_path: str) -> list[dict]:
     # Not cached — run in thread pool to keep event loop free
     try:
         from gmxbuilder.modules.modifications.protonation import predict_pka_from_pdb
+
         preds = await _run_interactive(predict_pka_from_pdb, tmp_path)
         with _pka_cache_lock:
             _pka_cache[tmp_path] = preds
@@ -1867,12 +2034,7 @@ async def api_propka_status(tmp_path: str = "", task_id: str = ""):
     """Check whether PROPKA has finished precomputing for a given PDB."""
     if tmp_path:
         return JSONResponse(
-            {
-                "error": (
-                    "Client-supplied filesystem paths are not accepted; "
-                    "provide task_id"
-                )
-            },
+            {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
             status_code=400,
         )
     if not task_id:
@@ -1881,9 +2043,7 @@ async def api_propka_status(tmp_path: str = "", task_id: str = ""):
         task_id = _validate_task_id(task_id)
         if task_manager.get_state(task_id) is None:
             return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-        tmp_path = str(
-            _validate_task_resource(task_id, _resolve_propka_pdb_path(task_id))
-        )
+        tmp_path = str(_validate_task_resource(task_id, _resolve_propka_pdb_path(task_id)))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     with _pka_cache_lock:
@@ -1907,12 +2067,7 @@ async def api_protonate(request: Request):
     his_tautomer = data.get("his_tautomer", "HSE")
     if data.get("tmp_path"):
         return JSONResponse(
-            {
-                "error": (
-                    "Client-supplied filesystem paths are not accepted; "
-                    "provide task_id"
-                )
-            },
+            {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
             status_code=400,
         )
     tmp_path = ""
@@ -1921,12 +2076,10 @@ async def api_protonate(request: Request):
         try:
             task_id_val = _validate_task_id(str(task_id_val))
             if task_manager.get_state(task_id_val) is None:
-                return JSONResponse(
-                    {"error": "Task not found or expired"}, status_code=404
-                )
-            tmp_path = str(_validate_task_resource(
-                task_id_val, _resolve_propka_pdb_path(task_id_val)
-            ))
+                return JSONResponse({"error": "Task not found or expired"}, status_code=404)
+            tmp_path = str(
+                _validate_task_resource(task_id_val, _resolve_propka_pdb_path(task_id_val))
+            )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
     structure_residues = data.get("structure_residues", [])  # [{resname, chain, resid, index}]
@@ -2012,6 +2165,7 @@ async def api_protonate(request: Request):
 async def api_patches(force_field: str | None = None):
     """Return the list of available PTM patches."""
     from gmxbuilder.modules.modifications.patches import list_patches
+
     return list_patches(force_field)
 
 
@@ -2019,6 +2173,7 @@ async def api_patches(force_field: str | None = None):
 async def api_patches_for_residue(resname: str, force_field: str | None = None):
     """Return patches applicable to a specific residue."""
     from gmxbuilder.modules.modifications.patches import list_patches_for_residue
+
     return list_patches_for_residue(resname, force_field)
 
 
@@ -2026,6 +2181,7 @@ async def api_patches_for_residue(resname: str, force_field: str | None = None):
 async def api_terminal_capabilities(force_field: str = "charmm36"):
     """Return explicit cap support for the selected bundled force field."""
     from gmxbuilder.modules.modifications.processor import terminal_capabilities
+
     try:
         return terminal_capabilities(force_field)
     except (FileNotFoundError, ValueError) as exc:
@@ -2036,6 +2192,7 @@ async def api_terminal_capabilities(force_field: str = "charmm36"):
 async def api_crosslink_capabilities(force_field: str = "charmm36"):
     """Return force-field-specific support for dedicated cross-residue chemistry."""
     from gmxbuilder.modules.modifications.patches import disulfide_capability
+
     try:
         supported, reason, target = disulfide_capability(force_field)
         return {
@@ -2063,12 +2220,7 @@ async def api_apply_modifications(request: Request):
     data = await request.json()
     if data.get("tmp_path"):
         return JSONResponse(
-            {
-                "error": (
-                    "Client-supplied filesystem paths are not accepted; "
-                    "provide task_id"
-                )
-            },
+            {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
             status_code=400,
         )
     task_id_val = data.get("task_id", "")
@@ -2078,17 +2230,15 @@ async def api_apply_modifications(request: Request):
         task_id_val = _validate_task_id(str(task_id_val))
         if task_manager.get_state(task_id_val) is None:
             return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-        tmp_path = str(
-            _validate_task_resource(task_id_val, _resolve_pdb_path(task_id_val))
-        )
+        tmp_path = str(_validate_task_resource(task_id_val, _resolve_pdb_path(task_id_val)))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     pH = data.get("pH", 7.0)
     his_tautomer = data.get("his_tautomer", "HSE")
     modifications = data.get("modifications", [])  # [{index, patch_id}]
     force_field = str(data.get("force_field", "charmm36m"))
-    nter_patch = data.get("nter_patch")   # e.g. "ACE" or null
-    cter_patch = data.get("cter_patch")   # e.g. "NME" or null
+    nter_patch = data.get("nter_patch")  # e.g. "ACE" or null
+    cter_patch = data.get("cter_patch")  # e.g. "NME" or null
 
     if not Path(tmp_path).exists():
         return JSONResponse({"error": "PDB file not found"}, status_code=400)
@@ -2114,26 +2264,31 @@ async def api_apply_modifications(request: Request):
             idx = mod.get("index")
             patch_id = mod.get("patch_id")
             if idx is not None and idx < len(residues):
-                applied.append({
-                    "index": idx,
-                    "original_resname": residues[idx],
-                    "patch_id": patch_id,
-                })
+                applied.append(
+                    {
+                        "index": idx,
+                        "original_resname": residues[idx],
+                        "patch_id": patch_id,
+                    }
+                )
 
         # Convert protonation assignments to residue-level summary
         residue_changes = []
         for a in prot_assignments:
             if a["is_titratable"]:
-                residue_changes.append({
-                    "index": a["index"],
-                    "original": a["original"],
-                    "new_name": a["assigned_name"],
-                    "charge": a["charge"],
-                    "pKa": a["pKa"],
-                    "state": a["state_label"],
-                })
+                residue_changes.append(
+                    {
+                        "index": a["index"],
+                        "original": a["original"],
+                        "new_name": a["assigned_name"],
+                        "charge": a["charge"],
+                        "pKa": a["pKa"],
+                        "state": a["state_label"],
+                    }
+                )
 
         from gmxbuilder.modules.modifications.protonation import compute_net_charge_from_protonation
+
         net_charge = compute_net_charge_from_protonation(prot_assignments)
 
         # Add modification charge shifts (side-chain PTMs + N/C-terminal patches)
@@ -2141,29 +2296,39 @@ async def api_apply_modifications(request: Request):
             effective_patch_charge_shift,
             get_patch,
         )
+
         for mod in applied:
             patch = get_patch(mod["patch_id"])
             if patch:
-                net_charge += effective_patch_charge_shift(
-                    mod["patch_id"], force_field
-                )
+                net_charge += effective_patch_charge_shift(mod["patch_id"], force_field)
 
         # Apply N-terminal patch charge (e.g. ACE: 0, standard NH3+: +1)
         if nter_patch:
             nter_p = get_patch(nter_patch)
             if nter_p:
                 net_charge += nter_p.charge_shift
-                applied.append({"index": 0, "original_resname": residues[0] if residues else "?",
-                               "patch_id": nter_patch, "term": "N"})
+                applied.append(
+                    {
+                        "index": 0,
+                        "original_resname": residues[0] if residues else "?",
+                        "patch_id": nter_patch,
+                        "term": "N",
+                    }
+                )
 
         # Apply C-terminal patch charge (e.g. NME: 0, standard COO-: -1)
         if cter_patch:
             cter_p = get_patch(cter_patch)
             if cter_p:
                 net_charge += cter_p.charge_shift
-                applied.append({"index": len(residues) - 1 if residues else 0,
-                               "original_resname": residues[-1] if residues else "?",
-                               "patch_id": cter_patch, "term": "C"})
+                applied.append(
+                    {
+                        "index": len(residues) - 1 if residues else 0,
+                        "original_resname": residues[-1] if residues else "?",
+                        "patch_id": cter_patch,
+                        "term": "C",
+                    }
+                )
 
         return {
             "pH": pH,
@@ -2182,6 +2347,7 @@ async def api_apply_modifications(request: Request):
 
 # ---------------------------------------------------------------------------
 # API: options
+
 
 @app.get("/api/options")
 async def api_options():
@@ -2217,20 +2383,22 @@ async def api_options():
             "charmm36": "CHARMM36 RTP",
         }
         return {
-             "name": name, "common_name": lipid.common_name,
-             "category": lipid.category,
-             "formula": lipid.formula,
-             "headgroup": lipid.headgroup,
-             "tail1": list(lipid.tail1),
-             "tail2": list(lipid.tail2),
-             "area_per_lipid": lipid.area_per_lipid,
-             "charge": lipid.charge,
-             "thickness": lipid.bilayer_thickness,
-             "smiles": lipid.smiles,
-             "parameterizations": sources,
-             "parameterization": " + ".join(source_labels[item] for item in sources)
-                 if sources else "Unavailable",
-             "gaff2_unavailable_reason": gaff_reason if not gaff_supported else "",
+            "name": name,
+            "common_name": lipid.common_name,
+            "category": lipid.category,
+            "formula": lipid.formula,
+            "headgroup": lipid.headgroup,
+            "tail1": list(lipid.tail1),
+            "tail2": list(lipid.tail2),
+            "area_per_lipid": lipid.area_per_lipid,
+            "charge": lipid.charge,
+            "thickness": lipid.bilayer_thickness,
+            "smiles": lipid.smiles,
+            "parameterizations": sources,
+            "parameterization": " + ".join(source_labels[item] for item in sources)
+            if sources
+            else "Unavailable",
+            "gaff2_unavailable_reason": gaff_reason if not gaff_supported else "",
         }
 
     return {
@@ -2240,21 +2408,34 @@ async def api_options():
             for cat, names in LipidRegistry.list_by_category().items()
         },
         "water_models": [
-            {"name": n, "full_name": WaterRegistry.get(n).full_name,
-             "n_atoms": WaterRegistry.get(n).n_atoms,
-             "supported_force_fields": supported_force_fields(n)}
+            {
+                "name": n,
+                "full_name": WaterRegistry.get(n).full_name,
+                "n_atoms": WaterRegistry.get(n).n_atoms,
+                "supported_force_fields": supported_force_fields(n),
+            }
             for n in WaterRegistry.list()
         ],
         "solvents": [
             # Water models (full molecular generation supported)
             {"name": "tip3p", "label": "TIP3P Water", "category": "water", "density": 0.998},
-            {"name": "spc",   "label": "SPC Water",   "category": "water", "density": 0.978},
-            {"name": "spce",  "label": "SPC/E Water",  "category": "water", "density": 0.998},
-            {"name": "tip4p", "label": "TIP4P Water",  "category": "water", "density": 0.997},
+            {"name": "spc", "label": "SPC Water", "category": "water", "density": 0.978},
+            {"name": "spce", "label": "SPC/E Water", "category": "water", "density": 0.998},
+            {"name": "tip4p", "label": "TIP4P Water", "category": "water", "density": 0.997},
             # Organic solvents (ITP bundled in OPLS-AA, geometry TBD)
-            {"name": "methanol",    "label": "Methanol (MeOH)",       "category": "organic", "density": 0.791},
-            {"name": "ethanol",     "label": "Ethanol (EtOH)",        "category": "organic", "density": 0.789},
-            {"name": "1propanol",   "label": "1-Propanol (PrOH)",     "category": "organic", "density": 0.803},
+            {
+                "name": "methanol",
+                "label": "Methanol (MeOH)",
+                "category": "organic",
+                "density": 0.791,
+            },
+            {"name": "ethanol", "label": "Ethanol (EtOH)", "category": "organic", "density": 0.789},
+            {
+                "name": "1propanol",
+                "label": "1-Propanol (PrOH)",
+                "category": "organic",
+                "density": 0.803,
+            },
         ],
         "force_fields": [
             {
@@ -2304,13 +2485,13 @@ async def api_forcefield_compatibility(task_id: str, request: Request):
         else:
             system = System.load_checkpoint(checkpoint)
         from gmxbuilder.modules.forcefield.compatibility import compatibility_report
+
         report = compatibility_report(system, protein_ff, lipid_names)
         nucleic_report = report.get("nucleic_acid", {})
         if nucleic_report.get("present") and pipeline_type != "solvator":
             nucleic_report["enabled"] = False
             nucleic_report["reason"] = (
-                "DNA/RNA polymers are currently supported only by the Solution "
-                "Solvator workflow"
+                "DNA/RNA polymers are currently supported only by the Solution Solvator workflow"
             )
         saved_labels = state.get("small_molecule_labels", {})
         labels = {
@@ -2418,9 +2599,12 @@ async def api_cgenff_upload(
         return JSONResponse({"error": "Run Step 1 Check Upload first"}, status_code=409)
     try:
         from gmxbuilder.modules.forcefield.compatibility import molecule_groups
+
         groups = molecule_groups(System.load_checkpoint(checkpoint))
     except (OSError, ValueError, KeyError) as exc:
-        return JSONResponse({"error": f"Could not inspect input checkpoint: {exc}"}, status_code=400)
+        return JSONResponse(
+            {"error": f"Could not inspect input checkpoint: {exc}"}, status_code=400
+        )
     if name not in groups:
         return JSONResponse(
             {"error": f"The retained input system has no small molecule named {name}"},
@@ -2443,8 +2627,13 @@ async def api_cgenff_upload(
     stream_path.write_bytes(str_content)
     try:
         from gmxbuilder.modules.forcefield.cgenff_import import prepare_cgenff_molecule
+
         template = prepare_cgenff_molecule(
-            name, mol2_path, stream_path, selected_ff, package_dir / "generated",
+            name,
+            mol2_path,
+            stream_path,
+            selected_ff,
+            package_dir / "generated",
         )
     except (ModuleConfigError, OSError, ValueError) as exc:
         mol2_path.unlink(missing_ok=True)
@@ -2491,12 +2680,18 @@ async def api_cgenff_upload(
 # Map non-standard amino acid names to standard ones
 _NONSTANDARD_AA_MAP = {
     # Histidine protonation states
-    "HSD": "HIS", "HSE": "HIS", "HSP": "HIS",
-    "HID": "HIS", "HIE": "HIS", "HIP": "HIS",
+    "HSD": "HIS",
+    "HSE": "HIS",
+    "HSP": "HIS",
+    "HID": "HIS",
+    "HIE": "HIS",
+    "HIP": "HIS",
     # Cysteine variants
-    "CYM": "CYS", "CYX": "CYS",
+    "CYM": "CYS",
+    "CYX": "CYS",
     # Aspartate / Glutamate protonation
-    "ASH": "ASP", "GLH": "GLU",
+    "ASH": "ASP",
+    "GLH": "GLU",
     # Lysine neutral
     "LYN": "LYS",
     # Selenomethionine
@@ -2538,7 +2733,6 @@ def _filter_pdb_for_display(pdb_text: str) -> str:
     return "\n".join(lines)
 
 
-
 def _detect_disulfides(pdb_path: Path) -> list[tuple[str, int, str, str, int, str]]:
     """Find CYS SG-SG pairs within disulfide bond distance (< 2.5 Å)."""
     cys_atoms = []
@@ -2565,7 +2759,7 @@ def _detect_disulfides(pdb_path: Path) -> list[tuple[str, int, str, str, int, st
         for j in range(i + 1, n):
             xi, yi, zi, chi, ridi = cys_atoms[i]
             xj, yj, zj, chj, ridj = cys_atoms[j]
-            dist = np.sqrt((xi - xj)**2 + (yi - yj)**2 + (zi - zj)**2)
+            dist = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2 + (zi - zj) ** 2)
             if dist < 2.5:
                 pairs.append((chi, ridi, "CYS", chj, ridj, "CYS"))
     return pairs
@@ -2597,7 +2791,7 @@ def _apply_disulfide_rename(pdb_path: Path, pairs: list) -> None:
 
 def _auto_clean_pdb(input_path: Path, output_path: Path) -> None:
     """Clean a PDB file for downstream processing.
-    
+
     - Renames non-standard amino acids to standard names
     - Removes water molecules and common solvents
     - Removes hydrogen atoms (will be added back by topology builder)
@@ -2607,38 +2801,38 @@ def _auto_clean_pdb(input_path: Path, output_path: Path) -> None:
     stripped_water = 0
     stripped_h = 0
     kept = 0
-    
+
     with open(input_path) as fh_in, open(output_path, "w") as fh_out:
         for line in fh_in:
             if not line.startswith(("ATOM", "HETATM")):
                 # Pass through non-atom records (REMARK, CRYST1, TER, etc.)
                 fh_out.write(line)
                 continue
-            
+
             resname = line[17:20].strip()
             atom_name = line[12:16].strip()
             element = line[76:78].strip() if len(line) >= 78 else ""
-            
+
             # Strip water
             if resname.upper() in _WATER_RESNAMES:
                 stripped_water += 1
                 continue
-            
+
             # Strip hydrogens
             if _is_hydrogen(atom_name, element):
                 stripped_h += 1
                 continue
-            
+
             # Rename non-standard residues
             new_name = _NONSTANDARD_AA_MAP.get(resname.upper())
             if new_name and line.startswith("ATOM"):
                 # Replace resname in columns 18-20
                 line = line[:17] + f"{new_name:>3s}" + line[20:]
                 renamed += 1
-            
+
             fh_out.write(line)
             kept += 1
-    
+
     # If nothing was kept, don't create empty file
     if kept == 0:
         output_path.unlink(missing_ok=True)
@@ -2669,7 +2863,7 @@ def _auto_clean_pdb(input_path: Path, output_path: Path) -> None:
                         x = float(line[30:38]) - centroid[0]
                         y = float(line[38:46]) - centroid[1]
                         z = float(line[46:54]) - centroid[2]
-                        line = (line[:30] + f"{x:8.3f}{y:8.3f}{z:8.3f}" + line[54:])
+                        line = line[:30] + f"{x:8.3f}{y:8.3f}{z:8.3f}" + line[54:]
                     except (ValueError, IndexError):
                         pass
                 fh.write(line)
@@ -2678,14 +2872,26 @@ def _auto_clean_pdb(input_path: Path, output_path: Path) -> None:
     disulfide_pairs = _detect_disulfides(output_path)
     if disulfide_pairs:
         _apply_disulfide_rename(output_path, disulfide_pairs)
-        logger.info("PDB cleanup: %d residues renamed, %d waters removed, "
-                     "%d hydrogens removed, %d atoms kept, centered at origin, "
-                     "%d disulfide bond(s) detected",
-                     renamed, stripped_water, stripped_h, kept, len(disulfide_pairs))
+        logger.info(
+            "PDB cleanup: %d residues renamed, %d waters removed, "
+            "%d hydrogens removed, %d atoms kept, centered at origin, "
+            "%d disulfide bond(s) detected",
+            renamed,
+            stripped_water,
+            stripped_h,
+            kept,
+            len(disulfide_pairs),
+        )
     else:
-        logger.info("PDB cleanup: %d residues renamed, %d waters removed, "
-                     "%d hydrogens removed, %d atoms kept, centered at origin",
-                     renamed, stripped_water, stripped_h, kept)
+        logger.info(
+            "PDB cleanup: %d residues renamed, %d waters removed, "
+            "%d hydrogens removed, %d atoms kept, centered at origin",
+            renamed,
+            stripped_water,
+            stripped_h,
+            kept,
+        )
+
 
 _STRUCTURE_SUFFIX_FORMATS = {
     ".pdb": "pdb",
@@ -2704,8 +2910,7 @@ def _structure_upload_suffix(filename: str) -> tuple[str, bool]:
     declared = _STRUCTURE_SUFFIX_FORMATS.get(Path(inner_name).suffix.lower())
     if declared is None:
         raise ValueError(
-            "Accepted structure formats are .pdb, .ent, .cif, .mmcif, "
-            "and their .gz variants"
+            "Accepted structure formats are .pdb, .ent, .cif, .mmcif, and their .gz variants"
         )
     return declared, compressed
 
@@ -2781,22 +2986,23 @@ async def api_upload_pdb(
     # Multipart framing contributes to Content-Length. The streamed file read
     # below remains the authoritative per-file limit.
     if declared_size is not None and declared_size > MAX_UPLOAD_BYTES + 1024 * 1024:
-        return JSONResponse({
-            "error": (
-                f"File too large ({declared_size/1024/1024:.0f} MB). "
-                f"Maximum is {max_upload_mb} MB."
-            )
-        }, status_code=413)
+        return JSONResponse(
+            {
+                "error": (
+                    f"File too large ({declared_size / 1024 / 1024:.0f} MB). "
+                    f"Maximum is {max_upload_mb} MB."
+                )
+            },
+            status_code=413,
+        )
 
     # Read with size cap — read max_bytes+1 so we can detect overage
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        return JSONResponse({
-            "error": (
-                f"File too large (>{max_upload_mb} MB). "
-                f"Maximum is {max_upload_mb} MB."
-            )
-        }, status_code=413)
+        return JSONResponse(
+            {"error": (f"File too large (>{max_upload_mb} MB). Maximum is {max_upload_mb} MB.")},
+            status_code=413,
+        )
 
     try:
         stored_name, content, structure_format, format_warnings = _prepare_structure_upload(
@@ -2831,10 +3037,9 @@ async def api_upload_pdb(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         existing_state = task_manager.get_state(task_id)
-        existing_type = (
-            ((existing_state or {}).get("task_type") or {}).get("id")
-            or (existing_state or {}).get("task_type_id")
-        )
+        existing_type = ((existing_state or {}).get("task_type") or {}).get("id") or (
+            existing_state or {}
+        ).get("task_type_id")
         if not _is_martini_task_type(task_type) or existing_type != task_type:
             return JSONResponse(
                 {"error": "Existing task does not accept this structure upload"},
@@ -2854,6 +3059,7 @@ async def api_upload_pdb(
         try:
             from gmxbuilder.io.cif import CIFParser
             from gmxbuilder.io.pdb import PDBWriter
+
             cif_structure = CIFParser().parse(tmp_path)
             cif_pdb_path = task_manager.get_task_dir(task_id) / "converted.pdb"
             PDBWriter.write(
@@ -2878,14 +3084,18 @@ async def api_upload_pdb(
     try:
         # ---- Step 1: Validate ----
         from gmxbuilder.io.pdb import PDBValidator
+
         validation = PDBValidator.validate(tmp_path)
         validation["warnings"] = format_warnings + validation["warnings"]
         if not validation["valid"]:
-            return JSONResponse({
-                "error": "PDB validation failed",
-                "validation_errors": validation["errors"],
-                "validation_warnings": validation["warnings"],
-            }, status_code=400)
+            return JSONResponse(
+                {
+                    "error": "PDB validation failed",
+                    "validation_errors": validation["errors"],
+                    "validation_warnings": validation["warnings"],
+                },
+                status_code=400,
+            )
 
         # ---- Step 2: Parse ----
         parser = PDBParser()
@@ -2898,6 +3108,7 @@ async def api_upload_pdb(
         display_text = _filter_pdb_for_display(pdb_text)
 
         from collections import Counter
+
         res_counts = Counter(structure.resnames)
         protein_res = [r for r in res_counts if r in PDBInputModule._PROTEIN_RESNAMES]
 
@@ -2920,20 +3131,23 @@ async def api_upload_pdb(
             _schedule_propka_precompute(str(tmp_path))
 
         # Update task state
-        task_manager.update_state(task_id, {
-            "task_type": task_type_detail,
-            "task_type_id": task_type,
-            "uploaded_structure_name": uploaded_path.name,
-            "uploaded_structure_format": structure_format,
-            "pdb_info": {
-                "filename": original_filename,
-                "num_atoms": structure.num_atoms,
-                "chains": sorted(chains),
-                "box_nm": [round(v, 3) for v in structure.dimensions().tolist()],
-                "small_molecules": small_molecules,
+        task_manager.update_state(
+            task_id,
+            {
+                "task_type": task_type_detail,
+                "task_type_id": task_type,
+                "uploaded_structure_name": uploaded_path.name,
+                "uploaded_structure_format": structure_format,
+                "pdb_info": {
+                    "filename": original_filename,
+                    "num_atoms": structure.num_atoms,
+                    "chains": sorted(chains),
+                    "box_nm": [round(v, 3) for v in structure.dimensions().tolist()],
+                    "small_molecules": small_molecules,
+                },
+                "current_step": "input",
             },
-            "current_step": "input",
-        })
+        )
 
         return {
             "task_id": task_id,
@@ -2971,9 +3185,7 @@ _build_queue: list[tuple[str, dict]] = []  # [(task_id, data), ...]
 _queue_lock = threading.Lock()
 _build_admission_lock = threading.Lock()
 _queue_event: asyncio.Event | None = None  # created in the active app event loop
-_MAX_QUEUED_BUILDS = _positive_environment_integer(
-    "GMXBUILDER_MAX_QUEUED_BUILDS", 32
-)
+_MAX_QUEUED_BUILDS = _positive_environment_integer("GMXBUILDER_MAX_QUEUED_BUILDS", 32)
 _queue_enqueued_at: dict[str, float] = {}
 _build_started_at: dict[str, float] = {}
 _build_duration_history: deque[float] = deque(maxlen=50)
@@ -3010,10 +3222,7 @@ def _queue_estimate(position: int) -> dict[str, object]:
     ]
     # Simulate FIFO assignment to the first available slot. Free slots start
     # at t=0; occupied slots start at their estimated remaining duration.
-    availability = remaining + [
-        0.0
-        for _ in range(max(0, _MAX_CONCURRENT_BUILDS - len(remaining)))
-    ]
+    availability = remaining + [0.0 for _ in range(max(0, _MAX_CONCURRENT_BUILDS - len(remaining)))]
     if not availability:
         availability = [0.0]
     heapq.heapify(availability)
@@ -3098,9 +3307,7 @@ async def _consume_queue():
 
             # Dispatch build (don't await — let it run in background)
             loop = asyncio.get_event_loop()
-            task = loop.run_in_executor(
-                _get_executor(), _run_queued_build, data, task_id
-            )
+            task = loop.run_in_executor(_get_executor(), _run_queued_build, data, task_id)
             # Schedule queue recheck when this build finishes
             asyncio.create_task(_on_build_done(task))
 
@@ -3197,9 +3404,7 @@ async def api_build(request: Request):
     if state is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
     persisted_task_type = (
-        (state.get("task_type") or {}).get("id")
-        or state.get("task_type_id")
-        or "membrane-bilayer"
+        (state.get("task_type") or {}).get("id") or state.get("task_type_id") or "membrane-bilayer"
     )
     requested_task_type = str(data.get("task_type", persisted_task_type))
     if requested_task_type != persisted_task_type:
@@ -3213,8 +3418,11 @@ async def api_build(request: Request):
             status_code=409,
         )
     if persisted_task_type not in {
-        "membrane-bilayer", "pure-membrane", "solvator",
-        "martini3-bilayer", "martini3-solvent",
+        "membrane-bilayer",
+        "pure-membrane",
+        "solvator",
+        "martini3-bilayer",
+        "martini3-solvent",
     }:
         return JSONResponse(
             {"error": f"Workflow {persisted_task_type!r} is not available for finalization"},
@@ -3224,9 +3432,7 @@ async def api_build(request: Request):
     # Reject malformed expert MDP input before the task consumes a build slot.
     modules = data.get("modules", {})
     if not isinstance(modules, dict):
-        return JSONResponse(
-            {"error": "Build modules must be an object"}, status_code=400
-        )
+        return JSONResponse({"error": "Build modules must be an object"}, status_code=400)
     simparams = modules.get("simparams", {})
     runner = _get_step_runner(task_id, persisted_task_type)
     try:
@@ -3237,15 +3443,11 @@ async def api_build(request: Request):
             if checked is None:
                 raise ValueError("Final CG System Check is missing")
             if not checked.metadata.get("system_confirmed"):
-                raise ValueError(
-                    "Inspect and confirm the exact Final CG System before building"
-                )
+                raise ValueError("Inspect and confirm the exact Final CG System before building")
             has_membrane = checked.metadata.get("cg_environment") == "bilayer"
             simparams = normalize_protocol(simparams, has_membrane=has_membrane)
             include_solvent = bool(
-                (checked.metadata.get("cg_solvation_config") or {}).get(
-                    "include_solvent", True
-                )
+                (checked.metadata.get("cg_solvation_config") or {}).get("include_solvent", True)
             )
             export_config = modules.setdefault("export", {})
             if not isinstance(export_config, dict):
@@ -3259,31 +3461,25 @@ async def api_build(request: Request):
             if not isinstance(persisted_forcefield, dict):
                 persisted_forcefield = {}
             ff_name = str(
-                forcefield_config.get("name")
-                or persisted_forcefield.get("name")
-                or "amber14sb"
+                forcefield_config.get("name") or persisted_forcefield.get("name") or "amber14sb"
             )
             simulation_context = {
                 "force_field": ff_name,
                 "force_field_family": (
-                    "charmm" if ff_name.lower().startswith("charmm")
-                    else "opls" if ff_name.lower().startswith("opls")
+                    "charmm"
+                    if ff_name.lower().startswith("charmm")
+                    else "opls"
+                    if ff_name.lower().startswith("opls")
                     else "amber"
                 ),
-                "has_membrane": persisted_task_type in {
-                    "membrane-bilayer", "pure-membrane"
-                },
+                "has_membrane": persisted_task_type in {"membrane-bilayer", "pure-membrane"},
             }
-            simparams = MDPWriter.normalize_simulation_config(
-                simparams, simulation_context
-            )
+            simparams = MDPWriter.normalize_simulation_config(simparams, simulation_context)
             from gmxbuilder.runtime.hardware import normalize_simulation_hardware
 
             normalize_simulation_hardware(simparams.get("hardware"))
     except (ModuleConfigError, TypeError, ValueError) as exc:
-        return JSONResponse(
-            {"error": f"Invalid simulation parameters: {exc}"}, status_code=400
-        )
+        return JSONResponse({"error": f"Invalid simulation parameters: {exc}"}, status_code=400)
     modules["simparams"] = simparams
 
     source_step = "cg_system" if _is_martini_task_type(persisted_task_type) else "ions"
@@ -3309,11 +3505,14 @@ async def api_build(request: Request):
         )
     data["task_type"] = persisted_task_type
     data["source_step"] = source_step
-    task_manager.update_state(task_id, {
-        "simparams": simparams,
-        "step_simparams_config": simparams,
-        "current_step": "simparams",
-    })
+    task_manager.update_state(
+        task_id,
+        {
+            "simparams": simparams,
+            "step_simparams_config": simparams,
+            "current_step": "simparams",
+        },
+    )
 
     queue_pos = None
     already_queued = False
@@ -3323,9 +3522,7 @@ async def api_build(request: Request):
         with _tasks_lock:
             already_building = task_id in _building_tasks
         if already_building:
-            return JSONResponse({
-                "error": "This task is already being built."
-            }, status_code=409)
+            return JSONResponse({"error": "This task is already being built."}, status_code=409)
 
         with _queue_lock:
             for pos, (tid, _) in enumerate(_build_queue):
@@ -3399,18 +3596,20 @@ async def api_build(request: Request):
                 f"Position {queue_pos} in build queue; estimated wait "
                 f"{estimate['estimated_wait_seconds']}s."
             )
-        return JSONResponse({
-            "status": "queued",
-            "task_id": task_id,
-            "queue_position": queue_pos,
-            **estimate,
-            "message": (
-                f"You are position {queue_pos} in the build queue. "
-                f"Estimated start: {estimate['estimated_start_at']}. "
-                f"Your build will start automatically. Save task ID {task_id}; "
-                "it restores this workflow and its queue status."
-            ),
-        })
+        return JSONResponse(
+            {
+                "status": "queued",
+                "task_id": task_id,
+                "queue_position": queue_pos,
+                **estimate,
+                "message": (
+                    f"You are position {queue_pos} in the build queue. "
+                    f"Estimated start: {estimate['estimated_start_at']}. "
+                    f"Your build will start automatically. Save task ID {task_id}; "
+                    "it restores this workflow and its queue status."
+                ),
+            }
+        )
 
     _persist_build_status(
         task_id,
@@ -3420,17 +3619,23 @@ async def api_build(request: Request):
 
     # Dispatch build in background — return immediately so HTTP doesn't block
     with _build_logs_lock:
-        _build_logs[task_id] = [f"Build starting ({active_count}/{_MAX_CONCURRENT_BUILDS} slots used)..."]
-    logger.info("Build %s started immediately (%d/%d slots)", task_id, active_count, _MAX_CONCURRENT_BUILDS)
+        _build_logs[task_id] = [
+            f"Build starting ({active_count}/{_MAX_CONCURRENT_BUILDS} slots used)..."
+        ]
+    logger.info(
+        "Build %s started immediately (%d/%d slots)", task_id, active_count, _MAX_CONCURRENT_BUILDS
+    )
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(_get_executor(), _run_background_build, data, task_id)
 
-    return JSONResponse({
-        "status": "started",
-        "task_id": task_id,
-        "message": "Build started. Poll /api/build/{task_id}/log for progress."
-    })
+    return JSONResponse(
+        {
+            "status": "started",
+            "task_id": task_id,
+            "message": "Build started. Poll /api/build/{task_id}/log for progress.",
+        }
+    )
 
 
 def _run_background_build(data: dict, task_id: str, retry: bool = False) -> None:
@@ -3458,12 +3663,14 @@ def _run_background_build(data: dict, task_id: str, retry: bool = False) -> None
         logger.exception("Build %s failed", task_id)
         public_error = _redact_server_paths(exc)
         with _tasks_lock:
-            _tasks[task_id] = {"status": "failed", "progress": 0, "result": None,
-                               "error": public_error}
+            _tasks[task_id] = {
+                "status": "failed",
+                "progress": 0,
+                "result": None,
+                "error": public_error,
+            }
         with _build_logs_lock:
-            _build_logs.setdefault(task_id, []).append(
-                f"✗ Finalization failed: {public_error}"
-            )
+            _build_logs.setdefault(task_id, []).append(f"✗ Finalization failed: {public_error}")
         _persist_build_status(
             task_id,
             "failed",
@@ -3542,16 +3749,19 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
         with _build_logs_lock:
             _build_logs[task_id].extend(result["log"])
             _build_logs[task_id].append(f"✓ Package complete: {system.num_atoms:,} atoms")
-            build_log = [
-                _redact_server_paths(line)
-                for line in _build_logs.get(task_id, [])
-            ]
+            build_log = [_redact_server_paths(line) for line in _build_logs.get(task_id, [])]
         summary = {
             "task_id": task_id,
             "num_atoms": system.num_atoms,
-            "components": [{"name": c.name, "atoms": len(c.atom_indices), "kind": c.kind.name,
-                           "n_molecules": c.metadata.get("n_molecules")}
-                          for c in system.components],
+            "components": [
+                {
+                    "name": c.name,
+                    "atoms": len(c.atom_indices),
+                    "kind": c.kind.name,
+                    "n_molecules": c.metadata.get("n_molecules"),
+                }
+                for c in system.components
+            ],
             "log": build_log,
             "source_checkpoint": source_step,
             "coordinate_rebuild": False,
@@ -3568,21 +3778,21 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # API: status / download
 
+
 @app.get("/api/status/{task_id}")
 async def api_status(task_id: str):
     task_id = _validate_task_id(task_id)
     t = _tasks.get(task_id)
     if t is None:
         return JSONResponse({"error": "Task not found"}, status_code=404)
-    return JSONResponse({
-        "task_id": task_id,
-        "status": t["status"],
-        "progress": t["progress"],
-        "error": (
-            _redact_server_paths(t.get("error"))
-            if t.get("error") is not None else None
-        ),
-    })
+    return JSONResponse(
+        {
+            "task_id": task_id,
+            "status": t["status"],
+            "progress": t["progress"],
+            "error": (_redact_server_paths(t.get("error")) if t.get("error") is not None else None),
+        }
+    )
 
 
 @app.get("/api/download/{task_id}")
@@ -3599,8 +3809,9 @@ async def api_download(task_id: str):
     zip_path = _authoritative_task_zip(task_id)
     if zip_path is None or not zip_path.exists():
         return JSONResponse({"error": "ZIP file not found on disk"}, status_code=404)
-    return FileResponse(str(zip_path), media_type="application/zip",
-                        filename=f"gmxbuilder_{task_id}.zip")
+    return FileResponse(
+        str(zip_path), media_type="application/zip", filename=f"gmxbuilder_{task_id}.zip"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3614,6 +3825,7 @@ _step_runners_lock = threading.Lock()
 def _get_step_runner(task_id: str, pipeline_type: str = "membrane-bilayer") -> StepRunner:
     """Get or create a StepRunner for the given task."""
     from gmxbuilder.pipeline.step_executor import StepRunner
+
     with _step_runners_lock:
         if task_id not in _step_runners:
             task_dir = task_manager.get_task_dir(task_id)
@@ -3623,16 +3835,11 @@ def _get_step_runner(task_id: str, pipeline_type: str = "membrane-bilayer") -> S
 
 def _require_task_custom_lipids_ready(task_id: str) -> list[dict]:
     """Reject progression while any submitted molecule is not validated."""
-    records = CustomLipidStore(
-        task_manager.get_task_dir(task_id)
-    ).list_public()
-    unavailable = [
-        record for record in records if record.get("state") != "ready"
-    ]
+    records = CustomLipidStore(task_manager.get_task_dir(task_id)).list_public()
+    unavailable = [record for record in records if record.get("state") != "ready"]
     if unavailable:
         details = ", ".join(
-            f"{record.get('name')} ({record.get('state')}: "
-            f"{record.get('phase')})"
+            f"{record.get('name')} ({record.get('state')}: {record.get('phase')})"
             for record in unavailable
         )
         raise ValueError(
@@ -3645,9 +3852,7 @@ def _require_task_custom_lipids_ready(task_id: str) -> list[dict]:
 def _trusted_membrane_config(task_id: str, config: dict) -> dict:
     """Bind every non-built-in membrane entry to this task's READY record."""
     trusted = copy.deepcopy(config)
-    definitions = CustomLipidStore(
-        task_manager.get_task_dir(task_id)
-    ).load_definitions()
+    definitions = CustomLipidStore(task_manager.get_task_dir(task_id)).load_definitions()
     composition = trusted.get("lipid_composition")
     entries: list[dict] = []
     if isinstance(composition, dict):
@@ -3666,16 +3871,11 @@ def _trusted_membrane_config(task_id: str, config: dict) -> dict:
         definition = definitions.get(name)
         if definition is None:
             raise ValueError(
-                f"Lipid {name!r} is not in the standard library and does not "
-                "belong to this task"
+                f"Lipid {name!r} is not in the standard library and does not belong to this task"
             )
-        status = CustomLipidStore(
-            task_manager.get_task_dir(task_id)
-        ).load_status(name)
+        status = CustomLipidStore(task_manager.get_task_dir(task_id)).load_status(name)
         if status.get("state") != "ready":
-            raise ValueError(
-                f"Task-scoped lipid {name} is not ready ({status.get('state')})"
-            )
+            raise ValueError(f"Task-scoped lipid {name} is not ready ({status.get('state')})")
         # Replace all scientific metadata supplied by the browser with the
         # immutable server-side definition while preserving only the ratio.
         ratio = entry.get("ratio")
@@ -3709,18 +3909,19 @@ async def api_steps_status(task_id: str):
         if _is_martini_task_type(pipeline_type) and s == "cg_system" and has_checkpoint:
             checked_system = runner.load_system(s)
             confirmed = bool(
-                checked_system is not None
-                and checked_system.metadata.get("system_confirmed")
+                checked_system is not None and checked_system.metadata.get("system_confirmed")
             )
             # Frontend completion means scientific Check plus explicit WYSIWYG
             # confirmation; retain preview availability as a separate field.
             has_checkpoint = confirmed
-        step_status.append({
-            "name": s,
-            "has_checkpoint": has_checkpoint,
-            "preview_available": preview_available,
-            "confirmed": confirmed,
-        })
+        step_status.append(
+            {
+                "name": s,
+                "has_checkpoint": has_checkpoint,
+                "preview_available": preview_available,
+                "confirmed": confirmed,
+            }
+        )
 
     return {
         "task_id": task_id,
@@ -3745,21 +3946,15 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
     try:
         data = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return JSONResponse(
-            {"error": "Request body must be valid JSON"}, status_code=400
-        )
+        return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
-        return JSONResponse(
-            {"error": "Request body must be a JSON object"}, status_code=400
-        )
+        return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
     if "config" in data:
         config = data["config"]
     else:
         modules = data.get("modules", {})
         if not isinstance(modules, dict):
-            return JSONResponse(
-                {"error": "modules must be a JSON object"}, status_code=400
-            )
+            return JSONResponse({"error": "modules must be a JSON object"}, status_code=400)
         config = modules.get(step_name, {})
     if not isinstance(config, dict):
         return JSONResponse(
@@ -3801,7 +3996,8 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
                 continue
             if mol2_path.is_file() and str_path.is_file():
                 trusted_packages[str(name).upper()] = {
-                    "mol2_path": str(mol2_path), "str_path": str(str_path),
+                    "mol2_path": str(mol2_path),
+                    "str_path": str(str_path),
                 }
         config = dict(config)
         config["cgenff_parameters"] = trusted_packages
@@ -3847,8 +4043,7 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
     # (chain selections applied by frontend Check button) > cleaned > uploaded
     pdb_path = None
     protein_free_cg = (
-        _is_martini_task_type(pipeline_type)
-        and config.get("include_protein") is False
+        _is_martini_task_type(pipeline_type) and config.get("include_protein") is False
     )
     if step_name == "input" and not protein_free_cg:
         try:
@@ -3872,13 +4067,13 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
 
     # Run step in thread pool (all steps are synchronous)
     loop = asyncio.get_event_loop()
+
     def _run_scoped_step():
-        with task_manager.active_task(task_id), task_custom_lipid_scope(
-            task_manager.get_task_dir(task_id)
+        with (
+            task_manager.active_task(task_id),
+            task_custom_lipid_scope(task_manager.get_task_dir(task_id)),
         ):
-            return runner.run_step(
-                step_name, config, initial_system=initial, pdb_path=pdb_path
-            )
+            return runner.run_step(step_name, config, initial_system=initial, pdb_path=pdb_path)
 
     result = await loop.run_in_executor(_get_executor(), _run_scoped_step)
 
@@ -3900,9 +4095,7 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
                 (result.get("metrics") or {}).get("modification_geometry") or []
             )
         if step_name == "orient":
-            saved_orientation = dict(
-                (result.get("metrics") or {}).get("orientation") or {}
-            )
+            saved_orientation = dict((result.get("metrics") or {}).get("orientation") or {})
             saved_orientation["method"] = config.get("method", "ppm")
             state_update["orient"] = saved_orientation
         if step_name == "cg_system":
@@ -3917,9 +4110,8 @@ async def api_confirm_cg_system(task_id: str):
     """Confirm an already-built exact CG checkpoint without rebuilding it."""
     task_id = _validate_task_id(task_id)
     task_state = task_manager.get_state(task_id)
-    task_type = (
-        ((task_state or {}).get("task_type") or {}).get("id")
-        or (task_state or {}).get("task_type_id")
+    task_type = ((task_state or {}).get("task_type") or {}).get("id") or (task_state or {}).get(
+        "task_type_id"
     )
     if task_state is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
@@ -3939,10 +4131,13 @@ async def api_confirm_cg_system(task_id: str):
         )
     system.metadata["system_confirmed"] = True
     system.save_checkpoint(runner.step_dir("cg_system"))
-    task_manager.update_state(task_id, {
-        "cg_system_confirmed": True,
-        "current_step": "cg_system",
-    })
+    task_manager.update_state(
+        task_id,
+        {
+            "cg_system_confirmed": True,
+            "current_step": "cg_system",
+        },
+    )
     return {
         "status": "ok",
         "task_id": task_id,
@@ -3981,8 +4176,32 @@ async def api_step_viewer_pdb(task_id: str, step_name: str):
     if not pdb_path.exists():
         return JSONResponse({"error": f"No viewer PDB for step '{step_name}'"}, status_code=404)
 
-    return FileResponse(str(pdb_path), media_type="chemical/x-pdb",
-                       filename=f"{step_name}_viewer.pdb")
+    # Enrich an already checked Martini orientation from the immutable mapped
+    # protein graph. This also repairs the active task after a service update
+    # without changing its scientific checkpoint or requiring a re-run.
+    if _is_martini_task_type(pipeline_type) and step_name == "cg_orientation":
+        original = pdb_path.read_text(encoding="utf-8", errors="replace")
+        if "\nCONECT" not in original:
+            system = runner.load_system(step_name)
+            if system is not None:
+                from gmxbuilder.modules.coarse_grained.common import write_cg_viewer_pdb
+
+                with tempfile.TemporaryDirectory(prefix="gmxbuilder-cg-viewer-") as tmp_dir:
+                    enriched_path = Path(tmp_dir) / "viewer.pdb"
+                    write_cg_viewer_pdb(system, enriched_path, task_dir=runner.task_dir)
+                    enriched = enriched_path.read_text(encoding="utf-8")
+                if "\nCONECT" in enriched:
+                    return Response(
+                        enriched,
+                        media_type="chemical/x-pdb",
+                        headers={
+                            "Content-Disposition": (f'inline; filename="{step_name}_viewer.pdb"')
+                        },
+                    )
+
+    return FileResponse(
+        str(pdb_path), media_type="chemical/x-pdb", filename=f"{step_name}_viewer.pdb"
+    )
 
 
 @app.get("/api/step/{task_id}/export/download")
@@ -4009,8 +4228,9 @@ async def api_step_export_download(task_id: str):
         return JSONResponse({"error": "No ZIP file in export directory"}, status_code=404)
 
     zip_path = max(zip_files, key=lambda p: p.stat().st_mtime_ns)
-    return FileResponse(str(zip_path), media_type="application/zip",
-                       filename=f"gmxbuilder_{task_id}.zip")
+    return FileResponse(
+        str(zip_path), media_type="application/zip", filename=f"gmxbuilder_{task_id}.zip"
+    )
 
 
 # Import for step runner
@@ -4018,6 +4238,7 @@ from gmxbuilder.pipeline.step_executor import StepRunner, get_pipeline_steps  # 
 
 # ---------------------------------------------------------------------------
 # Helpers
+
 
 def _extract_sequences(structure) -> list[dict]:
     """Extract per-chain residue sequences with 1-based residue numbering.
@@ -4054,7 +4275,8 @@ def _extract_sequences(structure) -> list[dict]:
         is_nucleic = (str(chain), int(resid)) in nucleic_residues
         nucleic_type = (
             nucleic_residues[(str(chain), int(resid))]
-            if is_nucleic else classify_nucleic_residue(resname)
+            if is_nucleic
+            else classify_nucleic_residue(resname)
         )
         if not is_protein and not is_nucleic:
             continue
@@ -4085,11 +4307,13 @@ def _extract_sequences(structure) -> list[dict]:
         # this same order for residue indices; sorting by residue number here
         # made frontend modifications target a different residue in PDB files
         # with insertion codes or non-monotonic author numbering.
-        result.append({
-            "chain_id": chain_id,
-            "length": len(residues),
-            "residues": residues,
-        })
+        result.append(
+            {
+                "chain_id": chain_id,
+                "length": len(residues),
+                "residues": residues,
+            }
+        )
     return result
 
 

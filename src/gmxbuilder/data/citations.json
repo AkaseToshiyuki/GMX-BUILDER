@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "references": {
+    "gmxbuilder": {"title": "GMXBUILDER", "url": "https://github.com/AkaseToshiyuki/GMX-BUILDER", "reason": "system construction and workflow orchestration"},
+    "gromacs": {"title": "GROMACS: High performance molecular simulations through multi-level parallelism from laptops to supercomputers", "doi": "10.1016/j.softx.2015.06.001", "reason": "topology validation and generated simulation workflow"},
+    "v-rescale": {"title": "Canonical sampling through velocity rescaling", "doi": "10.1063/1.2408420", "reason": "default thermostat"},
+    "c-rescale": {"title": "Pressure control using stochastic cell rescaling", "doi": "10.1063/5.0020514", "reason": "default barostat"},
+    "ff14sb": {"title": "ff14SB: Improving the Accuracy of Protein Side Chain and Backbone Parameters from ff99SB", "doi": "10.1021/acs.jctc.5b00255", "reason": "Amber14SB protein force field"},
+    "amber99sb": {"title": "Improved side-chain torsion potentials for the Amber ff99SB protein force field", "doi": "10.1002/prot.22711", "reason": "Amber99SB-ILDN protein force field"},
+    "gaff": {"title": "Development and testing of a general Amber force field", "doi": "10.1002/jcc.20035", "reason": "GAFF2-compatible ligand or lipid parameterization lineage"},
+    "lipid21": {"title": "Lipid21: Complex Lipid Membrane Simulations with AMBER", "doi": "10.1021/acs.jctc.1c01217", "reason": "Amber Lipid21 membrane parameters"},
+    "charmm36m": {"title": "CHARMM36m: an improved force field for folded and intrinsically disordered proteins", "doi": "10.1038/nmeth.4067", "reason": "CHARMM36m protein force field"},
+    "charmm36-protein": {"title": "Optimization of the additive CHARMM all-atom protein force field", "doi": "10.1021/ct300400x", "reason": "CHARMM36 protein force field"},
+    "charmm36-lipid": {"title": "Update of the CHARMM all-atom additive force field for lipids", "doi": "10.1021/jp101759q", "reason": "CHARMM36 lipid parameters"},
+    "charmm-gromacs": {"title": "Implementation of the CHARMM force field in GROMACS", "doi": "10.1021/ct900549r", "reason": "CHARMM force-field port and GROMACS settings"},
+    "cgenff": {"title": "CHARMM General Force Field: A force field for drug-like molecules", "doi": "10.1002/jcc.21367", "reason": "CGenFF ligand parameters"},
+    "oplsaa": {"title": "Development and testing of the OPLS all-atom force field", "doi": "10.1021/ja9621760", "reason": "OPLS-AA force field"},
+    "tip3p": {"title": "Comparison of simple potential functions for simulating liquid water", "doi": "10.1063/1.445869", "reason": "TIP3P water model"},
+    "ppm": {"title": "Positioning of proteins in membranes: a computational approach", "doi": "10.1110/ps.062126106", "reason": "PPM-like membrane positioning objective"},
+    "wimley-white": {"title": "Experimentally determined hydrophobicity scale for proteins at membrane interfaces", "doi": "10.1038/nsb1096-842", "reason": "membrane transfer-energy scale"},
+    "propka": {"title": "PROPKA3: Consistent treatment of internal and surface residues in empirical pKa predictions", "doi": "10.1021/ct100578z", "reason": "optional pKa estimation"},
+    "acpype": {"title": "ACPYPE - AnteChamber PYthon Parser interfacE", "doi": "10.1186/1756-0500-5-367", "reason": "GAFF topology conversion"},
+    "rdkit": {"title": "RDKit: Open-source cheminformatics", "doi": "10.5281/zenodo.591637", "reason": "chemical identity and geometry processing"},
+    "metropolis": {"title": "Equation of State Calculations by Fast Computing Machines", "doi": "10.1063/1.1699114", "reason": "optional Metropolis ion-site sampling"},
+    "openmm": {"title": "OpenMM 7: Rapid development of high performance algorithms for molecular dynamics", "doi": "10.1371/journal.pcbi.1005659", "reason": "PDBFixer/OpenMM structure repair"},
+    "dssp": {"title": "Dictionary of protein secondary structure: Pattern recognition of hydrogen-bonded and geometrical features", "doi": "10.1002/bip.360221211", "reason": "secondary-structure assignment for coarse-grained mapping"},
+    "martini3": {"title": "Martini 3: a general purpose force field for coarse-grained molecular dynamics", "doi": "10.1038/s41592-021-01098-3", "reason": "coarse-grained force field"},
+    "martinize2": {"title": "Martinize2 and Vermouth provide a unified framework for molecular topology generation", "doi": "10.7554/eLife.90627", "reason": "coarse-grained protein mapping and topology generation"},
+    "coby": {"title": "Creating Coarse-Grained Systems with COBY: Toward Higher Accuracy of Complex Biological Systems", "doi": "10.1021/acs.jcim.5c00069", "reason": "coarse-grained membrane, solvent and ion assembly"},
+    "3dmol": {"title": "3Dmol.js: molecular visualization with WebGL", "doi": "10.1093/bioinformatics/btu829", "reason": "interactive molecular visualization"},
+    "smilesdrawer": {"title": "SmilesDrawer: Parsing and Drawing SMILES-Encoded Molecular Structures Using Client-Side JavaScript", "doi": "10.1021/acs.jcim.7b00425", "reason": "client-side chemical structure depiction"}
+  }
+}

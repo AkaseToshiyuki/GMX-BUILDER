@@ -93,7 +93,7 @@ class Structure:
 
     def dimensions(self) -> np.ndarray:
         """Return box lengths [a, b, c] in nm (diagonal of box_vectors)."""
-        return np.sqrt((self.box_vectors ** 2).sum(axis=1))
+        return np.sqrt((self.box_vectors**2).sum(axis=1))
 
     def extent(self) -> tuple[np.ndarray, np.ndarray]:
         """Return (min_coords, max_coords) for axis-aligned bounding box."""
@@ -124,10 +124,12 @@ class Structure:
 
         # Convert to numpy arrays for fast C-level concatenation, then back to lists
         def _cat(arr_a, arr_b, dtype=str):
-            return np.concatenate([
-                np.asarray(arr_a, dtype=dtype),
-                np.asarray(arr_b, dtype=dtype),
-            ]).tolist()
+            return np.concatenate(
+                [
+                    np.asarray(arr_a, dtype=dtype),
+                    np.asarray(arr_b, dtype=dtype),
+                ]
+            ).tolist()
 
         if self.resids and other.resids:
             shift = max(self.resids) + 1 - min(other.resids)

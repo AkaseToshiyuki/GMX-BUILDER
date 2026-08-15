@@ -10,16 +10,16 @@ from pathlib import Path
 class WaterModel:
     """Metadata for a water model."""
 
-    name: str               # "tip3p", "spce", "tip4p"
-    full_name: str          # "TIP3P", "SPC/E", "TIP4P"
-    n_atoms: int            # 3 or 4
-    charge: float           # Total molecular charge
-    atom_names: list[str]   # ["OW", "HW1", "HW2"] etc.
+    name: str  # "tip3p", "spce", "tip4p"
+    full_name: str  # "TIP3P", "SPC/E", "TIP4P"
+    n_atoms: int  # 3 or 4
+    charge: float  # Total molecular charge
+    atom_names: list[str]  # ["OW", "HW1", "HW2"] etc.
     atom_masses: list[float]
     default_density: float  # kg/L, used to compute box size
     approximate_radius: float  # nm, for overlap detection
-    oh_bond: float          # nm
-    hoh_angle: float        # degrees
+    oh_bond: float  # nm
+    hoh_angle: float  # degrees
     virtual_site_distance: float | None = None  # O-to-M distance, nm
 
 
@@ -114,7 +114,4 @@ def water_model_supported(force_field: str, water_model: str) -> bool:
 def supported_force_fields(water_model: str) -> list[str]:
     from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
 
-    return [
-        name for name in ForceFieldRegistry.list()
-        if water_model_supported(name, water_model)
-    ]
+    return [name for name in ForceFieldRegistry.list() if water_model_supported(name, water_model)]

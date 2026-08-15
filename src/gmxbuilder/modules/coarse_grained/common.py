@@ -20,13 +20,43 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROReader
-from gmxbuilder.modules.coarse_grained.assets import load_manifest
+from gmxbuilder.modules.coarse_grained.assets import (
+    lipid_viewer_topologies,
+    load_manifest,
+)
 
 
 STANDARD_PROTEIN_RESIDUES = {
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-    "HID", "HIE", "HIP", "HSD", "HSE", "HSP", "ASH", "GLH", "LYN", "CYX",
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "VAL",
+    "HID",
+    "HIE",
+    "HIP",
+    "HSD",
+    "HSE",
+    "HSP",
+    "ASH",
+    "GLH",
+    "LYN",
+    "CYX",
 }
 
 
@@ -69,8 +99,13 @@ def run_checked(
     except (TypeError, ValueError):
         configured_threads = 1
     threads = str(max(1, configured_threads))
-    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
-                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
         env[name] = threads
     process = subprocess.Popen(
         args,
@@ -159,13 +194,155 @@ def coby_lipid_tokens(entries: list[dict]) -> list[str]:
     return tokens
 
 
+def write_cg_viewer_pdb(system: System, path: Path, *, task_dir: Path) -> None:
+    """Write CG coordinates with authoritative protein and lipid connections.
+
+    Martini bead separations are commonly longer than atomistic covalent-bond
+    guessing thresholds.  A coordinate-only PDB therefore appears as isolated
+    beads in browser viewers even though the simulation topology is intact.
+    Martinize2 and the bundled lipid ITP files already contain the correct
+    connection graphs.  Retain those graphs after coordinate transformations
+    instead of reconstructing bonds by distance.
+    """
+    system.write_viewer_pdb(path)
+    if system.num_atoms > 99999:
+        return
+
+    root = Path(task_dir).resolve()
+    relative_sources = [
+        system.metadata.get("cg_connectivity_pdb"),
+        # Checkpoints created before the dedicated metadata key still have the
+        # authoritative task-private Martinize2 output at this stable path.
+        "steps/cg_mapping/martinize/cg_protein.pdb",
+        system.metadata.get("cg_protein_pdb"),
+    ]
+    source_lines: list[str] | None = None
+    for value in relative_sources:
+        if not value:
+            continue
+        raw_candidate = root / str(value)
+        if raw_candidate.is_symlink():
+            continue
+        candidate = raw_candidate.resolve()
+        if candidate != root and root in candidate.parents and candidate.is_file():
+            candidate_lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+            if any(line.startswith("CONECT") for line in candidate_lines):
+                source_lines = candidate_lines
+                break
+    connections: set[tuple[int, int]] = set()
+    if source_lines is not None:
+        atom_serials: list[int] = []
+        source_connections: list[list[int]] = []
+        for line in source_lines:
+            record = line[:6].strip()
+            if record in {"ATOM", "HETATM"}:
+                try:
+                    atom_serials.append(int(line[6:11]))
+                except ValueError:
+                    atom_serials = []
+                    break
+            elif record == "CONECT":
+                try:
+                    serials = [int(value) for value in line[6:].split()]
+                except ValueError:
+                    source_connections = []
+                    break
+                if len(serials) >= 2:
+                    source_connections.append(serials)
+
+        protein_atoms = len(atom_serials)
+        protein_indices = sorted(
+            {
+                int(index)
+                for component in system.components
+                if component.kind == ComponentKind.PROTEIN
+                for index in component.atom_indices
+            }
+        )
+        if (
+            source_connections
+            and atom_serials == list(range(1, protein_atoms + 1))
+            and protein_atoms <= system.num_atoms
+            and protein_indices[:protein_atoms] == list(range(protein_atoms))
+            and all(
+                1 <= serial <= protein_atoms for serials in source_connections for serial in serials
+            )
+        ):
+            for serials in source_connections:
+                source = serials[0]
+                for target in serials[1:]:
+                    if source != target:
+                        connections.add(tuple(sorted((source, target))))
+
+    lipid_topologies = lipid_viewer_topologies()
+    for component in system.components:
+        if component.kind != ComponentKind.MEMBRANE:
+            continue
+        current_key: tuple[str, int, str] | None = None
+        residue_indices: list[int] = []
+
+        def add_lipid_residue() -> None:
+            if not residue_indices:
+                return
+            first = residue_indices[0]
+            name = str(system.structure.resnames[first]).strip().upper()
+            topology = lipid_topologies.get(name)
+            if topology is None:
+                return
+            observed = tuple(
+                str(system.structure.atom_names[index]).strip().upper() for index in residue_indices
+            )
+            if observed != topology["atom_names"]:
+                return
+            for local_a, local_b in topology["edges"]:
+                if local_a <= len(residue_indices) and local_b <= len(residue_indices):
+                    serial_a = residue_indices[local_a - 1] + 1
+                    serial_b = residue_indices[local_b - 1] + 1
+                    connections.add(tuple(sorted((serial_a, serial_b))))
+
+        for raw_index in sorted(int(index) for index in component.atom_indices):
+            key = (
+                str(system.structure.resnames[raw_index]).strip().upper(),
+                int(system.structure.resids[raw_index]),
+                str(system.structure.chain_ids[raw_index]),
+            )
+            if current_key is not None and key != current_key:
+                add_lipid_residue()
+                residue_indices = []
+            current_key = key
+            residue_indices.append(raw_index)
+        add_lipid_residue()
+
+    if not connections:
+        return
+
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for source, target in sorted(connections):
+        adjacency[source].append(target)
+    connect_lines: list[str] = []
+    for source, targets in sorted(adjacency.items()):
+        for offset in range(0, len(targets), 4):
+            connect_lines.append(
+                f"CONECT{source:5d}"
+                + "".join(f"{target:5d}" for target in targets[offset : offset + 4])
+            )
+
+    viewer_lines = path.read_text(encoding="utf-8").splitlines()
+    end_index = next(
+        (index for index, line in enumerate(viewer_lines) if line.strip() == "END"),
+        len(viewer_lines),
+    )
+    viewer_lines[end_index:end_index] = connect_lines
+    path.write_text("\n".join(viewer_lines) + "\n", encoding="utf-8")
+
+
 def molecule_types_from_topology(text: str) -> list[str]:
     names: list[str] = []
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if line.strip().replace(" ", "").lower() != "[moleculetype]":
             continue
-        for candidate in lines[index + 1:]:
+        for candidate in lines[index + 1 :]:
             candidate = candidate.split(";", 1)[0].strip()
             if candidate:
                 names.append(candidate.split()[0])
@@ -283,7 +460,8 @@ def system_from_gro(path: Path, topology_text: str, *, metadata: dict) -> System
         elif kind == ComponentKind.IONS:
             counts = {
                 name: int(molecule_counts[name])
-                for name in ("NA", "CL") if molecule_counts.get(name, 0)
+                for name in ("NA", "CL")
+                if molecule_counts.get(name, 0)
             }
             component_metadata = {
                 "n_molecules": int(sum(counts.values()) or len(indices)),
@@ -292,18 +470,21 @@ def system_from_gro(path: Path, topology_text: str, *, metadata: dict) -> System
         elif kind == ComponentKind.MEMBRANE:
             counts = {
                 name: int(molecule_counts[name])
-                for name in sorted(lipids) if molecule_counts.get(name, 0)
+                for name in sorted(lipids)
+                if molecule_counts.get(name, 0)
             }
             component_metadata = {
                 "n_molecules": int(sum(counts.values())),
                 "counts": counts,
             }
-        components.append(Component(
-            name=labels[kind],
-            kind=kind,
-            atom_indices=np.asarray(indices, dtype=np.int64),
-            metadata=component_metadata,
-        ))
+        components.append(
+            Component(
+                name=labels[kind],
+                kind=kind,
+                atom_indices=np.asarray(indices, dtype=np.int64),
+                metadata=component_metadata,
+            )
+        )
     metadata = dict(metadata)
     metadata["cg_molecule_counts"] = dict(molecule_counts)
     metadata["resolution"] = "coarse-grained"
@@ -313,12 +494,9 @@ def system_from_gro(path: Path, topology_text: str, *, metadata: dict) -> System
 
 def rotation_matrix(x_deg: float, y_deg: float, z_deg: float) -> np.ndarray:
     x, y, z = np.radians([x_deg, y_deg, z_deg])
-    rx = np.array([[1, 0, 0], [0, math.cos(x), -math.sin(x)],
-                   [0, math.sin(x), math.cos(x)]])
-    ry = np.array([[math.cos(y), 0, math.sin(y)], [0, 1, 0],
-                   [-math.sin(y), 0, math.cos(y)]])
-    rz = np.array([[math.cos(z), -math.sin(z), 0],
-                   [math.sin(z), math.cos(z), 0], [0, 0, 1]])
+    rx = np.array([[1, 0, 0], [0, math.cos(x), -math.sin(x)], [0, math.sin(x), math.cos(x)]])
+    ry = np.array([[math.cos(y), 0, math.sin(y)], [0, 1, 0], [-math.sin(y), 0, math.cos(y)]])
+    rz = np.array([[math.cos(z), -math.sin(z), 0], [math.sin(z), math.cos(z), 0], [0, 0, 1]])
     return rz @ ry @ rx
 
 
@@ -326,5 +504,7 @@ def residue_groups(system: System, indices: Iterable[int]) -> list[np.ndarray]:
     groups: dict[tuple[str, int], list[int]] = defaultdict(list)
     for raw in indices:
         index = int(raw)
-        groups[(str(system.structure.resnames[index]), int(system.structure.resids[index]))].append(index)
+        groups[(str(system.structure.resnames[index]), int(system.structure.resids[index]))].append(
+            index
+        )
     return [np.asarray(value, dtype=np.int64) for value in groups.values()]

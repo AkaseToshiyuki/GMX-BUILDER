@@ -1,2 +1,9 @@
+include install-local.sh
+include CITATION.cff
+include THIRD_PARTY_NOTICES.md
+include THIRD_PARTY_NOTICES.zh-CN.md
+recursive-include deploy *
+recursive-include docs *.md *.pdf *.svg
+recursive-include scripts *.py *.json
 prune src/gmxbuilder/web/static/output
 recursive-exclude * __pycache__/* *.py[cod]

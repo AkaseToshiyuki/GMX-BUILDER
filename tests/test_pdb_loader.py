@@ -78,8 +78,7 @@ def test_pdb_parser_selects_highest_occupancy_alternate_location(tmp_path):
 def test_pdb_parser_rejects_insertion_codes_instead_of_merging_residues(tmp_path):
     pdb = tmp_path / "insertion.pdb"
     pdb.write_text(
-        "ATOM      1  CA  ALA A  10A      1.000   0.000   0.000  1.00  0.00           C\n"
-        "END\n"
+        "ATOM      1  CA  ALA A  10A      1.000   0.000   0.000  1.00  0.00           C\nEND\n"
     )
 
     with pytest.raises(ParseError, match="insertion codes"):
@@ -143,10 +142,12 @@ def test_pdb_loader_rejects_non_finite_structure_values(tmp_path, monkeypatch):
 
 def test_same_chain_ions_and_buffers_are_not_promoted_to_protein():
     structure = Structure(
-        coordinates=np.zeros((10, 3)), box_vectors=np.eye(3) * 5,
+        coordinates=np.zeros((10, 3)),
+        box_vectors=np.eye(3) * 5,
         atom_names=["N", "CA", "C", "O", "NA", "C1", "O1", "N", "CA", "C"],
         resnames=["ALA"] * 4 + ["NA", "ACT", "ACT"] + ["PLC"] * 3,
-        resids=[1] * 4 + [2, 3, 3, 4, 4, 4], chain_ids=["A"] * 10,
+        resids=[1] * 4 + [2, 3, 3, 4, 4, 4],
+        chain_ids=["A"] * 10,
         elements=["N", "C", "C", "O", "Na", "C", "O", "N", "C", "C"],
     )
     system = System(structure=structure)
@@ -164,15 +165,25 @@ def test_same_chain_ions_and_buffers_are_not_promoted_to_protein():
 def test_input_normalizes_phosphoserine_and_records_reversible_patch(tmp_path):
     pdb = tmp_path / "phosphoserine.pdb"
     atoms = [
-        ("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O"),
-        ("CB", "C"), ("OG", "O"), ("P", "P"),
-        ("O1P", "O"), ("O2P", "O"), ("O3P", "O"),
+        ("N", "N"),
+        ("CA", "C"),
+        ("C", "C"),
+        ("O", "O"),
+        ("CB", "C"),
+        ("OG", "O"),
+        ("P", "P"),
+        ("O1P", "O"),
+        ("O2P", "O"),
+        ("O3P", "O"),
     ]
-    pdb.write_text("".join(
-        f"ATOM  {index:5d} {name:^4s} SEP A  10    "
-        f"{index * 1.2:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00  0.00          {element:>2s}\n"
-        for index, (name, element) in enumerate(atoms, 1)
-    ) + "TER\nEND\n")
+    pdb.write_text(
+        "".join(
+            f"ATOM  {index:5d} {name:^4s} SEP A  10    "
+            f"{index * 1.2:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00  0.00          {element:>2s}\n"
+            for index, (name, element) in enumerate(atoms, 1)
+        )
+        + "TER\nEND\n"
+    )
 
     result = PDBInputModule().run(_empty_system(), {"pdb": str(pdb)})
 
@@ -181,23 +192,27 @@ def test_input_normalizes_phosphoserine_and_records_reversible_patch(tmp_path):
     assert set(result.system.structure.atom_names) == {"N", "CA", "C", "O", "CB", "OG"}
     report = result.system.metadata["input_modifications"]
     assert report["detected"] == report["recognized"] == 1
-    assert report["records"] == [{
-        "chain": "A",
-        "resid": 10,
-        "original_resname": "SEP",
-        "standard_resname": "SER",
-        "patch_id": "PHOS_SER",
-        "status": "recognized",
-        "normalized": True,
-        "removed_atoms": ["O1P", "O2P", "O3P", "P"],
-        "residue_index": 0,
-    }]
+    assert report["records"] == [
+        {
+            "chain": "A",
+            "resid": 10,
+            "original_resname": "SEP",
+            "standard_resname": "SER",
+            "patch_id": "PHOS_SER",
+            "status": "recognized",
+            "normalized": True,
+            "removed_atoms": ["O1P", "O2P", "O3P", "P"],
+            "residue_index": 0,
+        }
+    ]
     metrics = _compute_step_metrics(result.system, "input")
-    assert metrics["input_sequences"] == [{
-        "chain_id": "A",
-        "length": 1,
-        "residues": [{"resname": "SER", "resid": 10, "is_protein": True}],
-    }]
+    assert metrics["input_sequences"] == [
+        {
+            "chain_id": "A",
+            "length": 1,
+            "residues": [{"resname": "SER", "resid": 10, "is_protein": True}],
+        }
+    ]
 
 
 def test_input_recognizes_newly_validated_hydroxyproline(tmp_path):
@@ -249,15 +264,15 @@ def test_input_mly_is_dimethyllysine_not_malonyllysine(tmp_path):
     template = load_force_field_rtp("charmm36m").get_residue("MLY")
     assert template is not None
     pdb = tmp_path / "dimethyllysine.pdb"
-    heavy_atoms = [
-        atom[0] for atom in template["atoms"]
-        if not atom[0].startswith("H")
-    ]
-    pdb.write_text("".join(
-        f"ATOM  {index:5d} {name:^4s} MLY A  10    "
-        f"{index * 1.2:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00  0.00          {name[0]:>2s}\n"
-        for index, name in enumerate(heavy_atoms, 1)
-    ) + "TER\nEND\n")
+    heavy_atoms = [atom[0] for atom in template["atoms"] if not atom[0].startswith("H")]
+    pdb.write_text(
+        "".join(
+            f"ATOM  {index:5d} {name:^4s} MLY A  10    "
+            f"{index * 1.2:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00  0.00          {name[0]:>2s}\n"
+            for index, name in enumerate(heavy_atoms, 1)
+        )
+        + "TER\nEND\n"
+    )
 
     result = PDBInputModule().run(_empty_system(), {"pdb": str(pdb)})
 

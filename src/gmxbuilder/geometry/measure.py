@@ -32,4 +32,4 @@ def all_pairwise_distances(set1: np.ndarray, set2: np.ndarray) -> np.ndarray:
     Returns (M, N) array.
     """
     diff = set1[:, np.newaxis, :] - set2[np.newaxis, :, :]
-    return np.sqrt((diff ** 2).sum(axis=2))
+    return np.sqrt((diff**2).sum(axis=2))

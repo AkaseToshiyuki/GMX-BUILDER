@@ -17,9 +17,20 @@ from gmxbuilder.modules.modifications.patches import ALL_PATCHES, patch_capabili
 
 
 _STANDARD_RESIDUES = frozenset(_SIDECHAIN_PARENTS)
-_PROTONATION_ALIASES = frozenset({
-    "ASH", "GLH", "CYM", "HID", "HIE", "HIP", "HSD", "HSE", "HSP", "LYN",
-})
+_PROTONATION_ALIASES = frozenset(
+    {
+        "ASH",
+        "GLH",
+        "CYM",
+        "HID",
+        "HIE",
+        "HIP",
+        "HSD",
+        "HSE",
+        "HSP",
+        "LYN",
+    }
+)
 _TERMINAL_PRODUCTS = frozenset({"ACE", "NME", "FOR"})
 
 
@@ -45,11 +56,7 @@ def _recognized_product_patches() -> dict[str, tuple[str, str]]:
         if product in _STANDARD_RESIDUES or product == "MSE" or product in _TERMINAL_PRODUCTS:
             continue
         candidates[product].append((parent, patch_id))
-    return {
-        product: entries[0]
-        for product, entries in candidates.items()
-        if len(entries) == 1
-    }
+    return {product: entries[0] for product, entries in candidates.items() if len(entries) == 1}
 
 
 RECOGNIZED_PRODUCT_PATCHES = _recognized_product_patches()
@@ -65,17 +72,12 @@ def _slice_structure(structure: Structure, keep: np.ndarray) -> Structure:
         resids=[structure.resids[index] for index in indices],
         chain_ids=[structure.chain_ids[index] for index in indices],
         segids=[structure.segids[index] for index in indices],
-        elements=(
-            [structure.elements[index] for index in indices]
-            if structure.elements else []
-        ),
+        elements=([structure.elements[index] for index in indices] if structure.elements else []),
         occupancies=(
-            [structure.occupancies[index] for index in indices]
-            if structure.occupancies else []
+            [structure.occupancies[index] for index in indices] if structure.occupancies else []
         ),
         tempfactors=(
-            [structure.tempfactors[index] for index in indices]
-            if structure.tempfactors else []
+            [structure.tempfactors[index] for index in indices] if structure.tempfactors else []
         ),
     )
 
@@ -111,14 +113,12 @@ def normalize_detected_modifications(
         if mapping is not None:
             parent, patch_id = mapping
             allowed = _BACKBONE | set(_SIDECHAIN_PARENTS[parent]) | {"OXT"}
-            observed = {
-                str(structure.atom_names[index]).strip().upper()
-                for index in indices
-            }
+            observed = {str(structure.atom_names[index]).strip().upper() for index in indices}
             retained = observed & allowed
             blockers = sorted(_BACKBONE - retained)
             disconnected = sorted(
-                atom for atom, parent_atom in _SIDECHAIN_PARENTS[parent].items()
+                atom
+                for atom, parent_atom in _SIDECHAIN_PARENTS[parent].items()
                 if atom in retained and parent_atom not in retained
             )
             if blockers or disconnected:
@@ -126,26 +126,26 @@ def normalize_detected_modifications(
                 if blockers:
                     details.append("missing standard backbone " + ",".join(blockers))
                 if disconnected:
-                    details.append(
-                        "disconnected parent atoms for " + ",".join(disconnected)
-                    )
+                    details.append("disconnected parent atoms for " + ",".join(disconnected))
                 warning = (
                     f"{chain or '?'}:{resid} {original} matches {patch_id}, but it "
                     "cannot be converted conservatively (" + "; ".join(details) + "); "
                     "it was left unchanged and must be repaired or handled manually."
                 )
                 warnings.append(warning)
-                records.append({
-                    "chain": chain or "?",
-                    "resid": resid,
-                    "original_resname": original,
-                    "standard_resname": parent,
-                    "patch_id": patch_id,
-                    "status": "recognized_unconvertible",
-                    "normalized": False,
-                    "removed_atoms": [],
-                    "warning": warning,
-                })
+                records.append(
+                    {
+                        "chain": chain or "?",
+                        "resid": resid,
+                        "original_resname": original,
+                        "standard_resname": parent,
+                        "patch_id": patch_id,
+                        "status": "recognized_unconvertible",
+                        "normalized": False,
+                        "removed_atoms": [],
+                        "warning": warning,
+                    }
+                )
                 continue
             removed_atoms: list[str] = []
             for index in indices:
@@ -183,17 +183,19 @@ def normalize_detected_modifications(
                 "selenomethionine; no oxidation patch was inferred from the ambiguous MSE label."
             )
             warnings.append(warning)
-            records.append({
-                "chain": chain or "?",
-                "resid": resid,
-                "original_resname": original,
-                "standard_resname": "MET",
-                "patch_id": None,
-                "status": "normalized_only",
-                "normalized": True,
-                "removed_atoms": [],
-                "warning": warning,
-            })
+            records.append(
+                {
+                    "chain": chain or "?",
+                    "resid": resid,
+                    "original_resname": original,
+                    "standard_resname": "MET",
+                    "patch_id": None,
+                    "status": "normalized_only",
+                    "normalized": True,
+                    "removed_atoms": [],
+                    "warning": warning,
+                }
+            )
             continue
 
         if (
@@ -208,17 +210,19 @@ def normalize_detected_modifications(
                 "it was left unchanged for user review."
             )
             warnings.append(warning)
-            records.append({
-                "chain": chain or "?",
-                "resid": resid,
-                "original_resname": original,
-                "standard_resname": None,
-                "patch_id": None,
-                "status": "unrecognized",
-                "normalized": False,
-                "removed_atoms": [],
-                "warning": warning,
-            })
+            records.append(
+                {
+                    "chain": chain or "?",
+                    "resid": resid,
+                    "original_resname": original,
+                    "standard_resname": None,
+                    "patch_id": None,
+                    "status": "unrecognized",
+                    "normalized": False,
+                    "removed_atoms": [],
+                    "warning": warning,
+                }
+            )
 
     if not keep.all():
         structure = _slice_structure(structure, keep)
@@ -230,9 +234,7 @@ def normalize_detected_modifications(
             continue
         residue_index.setdefault((chain or "?", resid), len(residue_index))
     for record in records:
-        record["residue_index"] = residue_index.get(
-            (record["chain"], int(record["resid"]))
-        )
+        record["residue_index"] = residue_index.get((record["chain"], int(record["resid"])))
 
     recognized = sum(record["status"] == "recognized" for record in records)
     return structure, {

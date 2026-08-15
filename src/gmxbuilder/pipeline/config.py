@@ -35,6 +35,7 @@ class PipelineConfig(BaseModel):
     def from_json(cls, path: str | Path) -> PipelineConfig:
         """Load configuration from a JSON file."""
         import json
+
         path = Path(path)
         with open(path) as fh:
             data = json.load(fh)

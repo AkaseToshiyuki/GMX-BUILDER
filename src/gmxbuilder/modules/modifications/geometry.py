@@ -152,9 +152,7 @@ def _heavy_template(template: dict) -> tuple[dict[str, str], list[tuple[str, str
     return atom_types, bonds
 
 
-def _neighbours(
-    atom_types: dict[str, str], bonds: list[tuple[str, str]]
-) -> dict[str, list[str]]:
+def _neighbours(atom_types: dict[str, str], bonds: list[tuple[str, str]]) -> dict[str, list[str]]:
     graph = {name: [] for name in atom_types}
     for first, second in bonds:
         graph[first].append(second)
@@ -170,9 +168,7 @@ def _angle_terms(
     terms = []
     for centre, bonded in graph.items():
         for first, third in combinations(bonded, 2):
-            target = parameters.angle(
-                atom_types[first], atom_types[centre], atom_types[third]
-            )
+            target = parameters.angle(atom_types[first], atom_types[centre], atom_types[third])
             terms.append((first, centre, third, target))
     return terms
 
@@ -230,10 +226,12 @@ def _signed_volume(
     third: str,
 ) -> float:
     origin = coordinates[center]
-    return float(np.dot(
-        np.cross(coordinates[first] - origin, coordinates[second] - origin),
-        coordinates[third] - origin,
-    ))
+    return float(
+        np.dot(
+            np.cross(coordinates[first] - origin, coordinates[second] - origin),
+            coordinates[third] - origin,
+        )
+    )
 
 
 def _seed_stereochemistry(
@@ -246,9 +244,7 @@ def _seed_stereochemistry(
         ordered = (first, second, third)
         movable = next((name for name in ordered if name in missing), None)
         if movable is None:
-            oriented = expected_sign * _signed_volume(
-                coordinates, center, first, second, third
-            )
+            oriented = expected_sign * _signed_volume(coordinates, center, first, second, third)
             if oriented < 2.0e-4:
                 raise ModificationGeometryError(
                     f"Retained atoms contradict required stereochemistry {label}"
@@ -259,9 +255,7 @@ def _seed_stereochemistry(
             raise ModificationGeometryError(
                 f"Cannot seed stereochemistry {label} with multiple new reference atoms"
             )
-        oriented = expected_sign * _signed_volume(
-            coordinates, center, first, second, third
-        )
+        oriented = expected_sign * _signed_volume(coordinates, center, first, second, third)
         if oriented >= 2.0e-4:
             continue
         origin = coordinates[center]
@@ -274,12 +268,8 @@ def _seed_stereochemistry(
         coordinates[movable] = (
             coordinates[movable] - 2.0 * float(np.dot(displacement, normal)) * normal
         )
-        if expected_sign * _signed_volume(
-            coordinates, center, first, second, third
-        ) < 2.0e-4:
-            raise ModificationGeometryError(
-                f"Cannot initialize required stereochemistry {label}"
-            )
+        if expected_sign * _signed_volume(coordinates, center, first, second, third) < 2.0e-4:
+            raise ModificationGeometryError(f"Cannot initialize required stereochemistry {label}")
 
 
 @lru_cache(maxsize=1)
@@ -307,10 +297,7 @@ def _local_basis(
     first = known_neighbours[0]
     axis = _unit(coordinates[first] - coordinates[anchor])
 
-    references = [
-        coordinates[name] - coordinates[anchor]
-        for name in known_neighbours[1:]
-    ]
+    references = [coordinates[name] - coordinates[anchor] for name in known_neighbours[1:]]
     references.extend(
         coordinates[name] - coordinates[first]
         for name in graph[first]
@@ -401,25 +388,25 @@ def _initialize_missing_atoms(
         known_bonds = [neighbour for neighbour in graph[name] if neighbour in coordinates]
         anchor = known_bonds[0]
         target_length = next(
-            target
-            for first, second, target in bond_targets
-            if {first, second} == {name, anchor}
+            target for first, second, target in bond_targets if {first, second} == {name, anchor}
         )
         basis = _local_basis(anchor, coordinates, graph)
         directions = _sphere_directions() @ basis.T
         candidates = coordinates[anchor][None, :] + target_length * directions
-        scores = np.asarray([
-            _initial_score(
-                name,
-                candidate,
-                coordinates,
-                graph_distances,
-                bond_targets,
-                angle_targets,
-                environment,
-            )
-            for candidate in candidates
-        ])
+        scores = np.asarray(
+            [
+                _initial_score(
+                    name,
+                    candidate,
+                    coordinates,
+                    graph_distances,
+                    bond_targets,
+                    angle_targets,
+                    environment,
+                )
+                for candidate in candidates
+            ]
+        )
         coordinates[name] = candidates[int(np.argmin(scores))]
         pending.remove(name)
     return coordinates
@@ -455,7 +442,8 @@ def build_modified_heavy_atom_geometry(
         if first in missing or second in missing
     ]
     angle_targets = [
-        term for term in _angle_terms(graph, atom_types, parameters)
+        term
+        for term in _angle_terms(graph, atom_types, parameters)
         if any(name in missing for name in term[:3])
     ]
     environment = np.asarray(
@@ -477,8 +465,7 @@ def build_modified_heavy_atom_geometry(
     internal_clashes = [
         (first, second, _clash_threshold(first, second))
         for first, second in combinations(atom_types, 2)
-        if (first in missing or second in missing)
-        and graph_distances.get((first, second), 99) > 2
+        if (first in missing or second in missing) and graph_distances.get((first, second), 99) > 2
     ]
 
     def unpack(values: np.ndarray) -> dict[str, np.ndarray]:
@@ -505,9 +492,7 @@ def build_modified_heavy_atom_geometry(
                 result.extend((np.maximum(0.0, 0.17 - distances) / 0.01).tolist())
         for center, first, second, third, expected_sign, _label in resolved_stereo:
             if all(name in trial for name in (center, first, second, third)):
-                oriented = expected_sign * _signed_volume(
-                    trial, center, first, second, third
-                )
+                oriented = expected_sign * _signed_volume(trial, center, first, second, third)
                 # Bond/angle targets determine the physical volume magnitude;
                 # this one-sided residual only selects the documented enantiomer
                 # and keeps the centre safely away from a planar ambiguity.
@@ -517,8 +502,12 @@ def build_modified_heavy_atom_geometry(
         result.extend((1e-4 * (values - initial) / 0.1).tolist())
         return np.asarray(result, dtype=float)
 
-    lower = np.tile(np.min(np.vstack(list(retained_coordinates.values())), axis=0) - 1.0, len(missing))
-    upper = np.tile(np.max(np.vstack(list(retained_coordinates.values())), axis=0) + 1.0, len(missing))
+    lower = np.tile(
+        np.min(np.vstack(list(retained_coordinates.values())), axis=0) - 1.0, len(missing)
+    )
+    upper = np.tile(
+        np.max(np.vstack(list(retained_coordinates.values())), axis=0) + 1.0, len(missing)
+    )
     optimized = least_squares(
         residuals,
         initial,
@@ -529,9 +518,7 @@ def build_modified_heavy_atom_geometry(
         gtol=1e-11,
     )
     if not optimized.success or not np.isfinite(optimized.x).all():
-        raise ModificationGeometryError(
-            "Local force-field geometry optimization did not converge"
-        )
+        raise ModificationGeometryError("Local force-field geometry optimization did not converge")
     coordinates = unpack(optimized.x)
 
     bond_errors = [
@@ -573,9 +560,7 @@ def build_modified_heavy_atom_geometry(
             "Modified-residue geometry contains a heavy-atom overlap below 0.08 nm"
         )
     for center, first, second, third, expected_sign, label in resolved_stereo:
-        oriented = expected_sign * _signed_volume(
-            coordinates, center, first, second, third
-        )
+        oriented = expected_sign * _signed_volume(coordinates, center, first, second, third)
         if oriented < 2.0e-4:
             raise ModificationGeometryError(
                 f"Modified-residue stereochemistry does not match {label}"
@@ -602,9 +587,7 @@ def validate_modified_template_parameters(
     for first, second in bonds:
         if first in missing or second in missing:
             parameters.bond(atom_types[first], atom_types[second])
-    for first, centre, third, _target in _angle_terms(
-        graph, atom_types, parameters
-    ):
+    for first, centre, third, _target in _angle_terms(graph, atom_types, parameters):
         if any(name in missing for name in (first, centre, third)):
             # _angle_terms has already performed the strict parameter lookup.
             continue
@@ -618,15 +601,10 @@ def crosslink_bond_length(
 ) -> float:
     """Return the native equilibrium length for a symmetric crosslink bond."""
     atoms = {
-        str(atom[0]).strip(): str(atom[1]).strip()
-        for atom in residue_template.get("atoms", [])
+        str(atom[0]).strip(): str(atom[1]).strip() for atom in residue_template.get("atoms", [])
     }
     try:
         atom_type = atoms[atom_name]
     except KeyError as error:
-        raise ModificationGeometryError(
-            f"Crosslink residue has no {atom_name} atom"
-        ) from error
-    return _load_geometry_parameters(force_field.strip().lower()).bond(
-        atom_type, atom_type
-    )
+        raise ModificationGeometryError(f"Crosslink residue has no {atom_name} atom") from error
+    return _load_geometry_parameters(force_field.strip().lower()).bond(atom_type, atom_type)

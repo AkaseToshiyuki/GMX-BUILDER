@@ -40,14 +40,20 @@ def _small_molecule_system():
     structure = Structure(
         coordinates=np.array([[0.0, 0.0, 0.0], [0.145, 0.0, 0.0]]),
         box_vectors=np.eye(3) * 4.0,
-        atom_names=["C01", "N02"], resnames=["LIG", "LIG"],
-        resids=[1, 1], chain_ids=["L", "L"], elements=["C", "N"],
+        atom_names=["C01", "N02"],
+        resnames=["LIG", "LIG"],
+        resids=[1, 1],
+        chain_ids=["L", "L"],
+        elements=["C", "N"],
     )
     system = System(structure)
-    system.add_component(Component(
-        name="UNKNOWN", kind=ComponentKind.UNKNOWN,
-        atom_indices=np.array([0, 1]),
-    ))
+    system.add_component(
+        Component(
+            name="UNKNOWN",
+            kind=ComponentKind.UNKNOWN,
+            atom_indices=np.array([0, 1]),
+        )
+    )
     return system
 
 
@@ -59,10 +65,16 @@ def test_gaff2_coordinate_molecule_preserves_heavy_atoms_and_adds_hydrogens(monk
     assert template.atom_names[:2] == ("C01", "N02")
     assert len(template.atom_names) > 2
 
-    result = ForceFieldSelector().run(system, {
-        "name": "amber99sb-ildn", "lipid_names": [], "lipid_ff": "none",
-        "ligand_ff": "gaff2", "ligand_charges": {"LIG": 0},
-    })
+    result = ForceFieldSelector().run(
+        system,
+        {
+            "name": "amber99sb-ildn",
+            "lipid_names": [],
+            "lipid_ff": "none",
+            "ligand_ff": "gaff2",
+            "ligand_charges": {"LIG": 0},
+        },
+    )
     assert result.system.num_atoms == len(template.atom_names)
     assert result.system.component_by_kind(ComponentKind.LIGAND)
     assert result.system.total_charge() == 0
@@ -70,17 +82,32 @@ def test_gaff2_coordinate_molecule_preserves_heavy_atoms_and_adds_hydrogens(monk
 
     output = tmp_path / "topology"
     output.mkdir()
-    TopologyWriter("amber99sb-ildn", ff_config={
-        "water_model": "tip3p",
-        "ligand_parameters": result.system.metadata["ligand_parameters"],
-    }).write_top(result.system.structure, output / "topol.top")
+    TopologyWriter(
+        "amber99sb-ildn",
+        ff_config={
+            "water_model": "tip3p",
+            "ligand_parameters": result.system.metadata["ligand_parameters"],
+        },
+    ).write_top(result.system.structure, output / "topol.top")
     assert '#include "LIG.itp"' in (output / "topol.top").read_text()
     GROWriter.write(result.system.structure, output / "input.gro")
     _write_smoke_mdp(output / "smoke.mdp")
     process = subprocess.run(
-        [_find_gmx(), "grompp", "-f", "smoke.mdp", "-c", "input.gro",
-         "-p", "topol.top", "-o", "smoke.tpr"],
-        cwd=output, capture_output=True, text=True,
+        [
+            _find_gmx(),
+            "grompp",
+            "-f",
+            "smoke.mdp",
+            "-c",
+            "input.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "smoke.tpr",
+        ],
+        cwd=output,
+        capture_output=True,
+        text=True,
     )
     assert process.returncode == 0, process.stdout + "\n" + process.stderr
 
@@ -89,10 +116,16 @@ def test_gaff_charge_suggestion_is_ph_dependent_for_primary_amine():
     system = _small_molecule_system()
 
     physiological = estimate_gaff_net_charge(
-        "LIG", system.structure, [0, 1], pH=7.0,
+        "LIG",
+        system.structure,
+        [0, 1],
+        pH=7.0,
     )
     basic = estimate_gaff_net_charge(
-        "LIG", system.structure, [0, 1], pH=13.0,
+        "LIG",
+        system.structure,
+        [0, 1],
+        pH=13.0,
     )
 
     assert physiological.net_charge == 1
@@ -105,8 +138,12 @@ def test_gaff2_ph_protonation_preserves_uploaded_heavy_atom_names(monkeypatch, t
     system = _small_molecule_system()
 
     template = prepare_gaff_molecule(
-        "LIG", system.structure, [0, 1], 1,
-        charge_method="gas", target_pH=7.0,
+        "LIG",
+        system.structure,
+        [0, 1],
+        1,
+        charge_method="gas",
+        target_pH=7.0,
     )
 
     assert template.atom_names[:2] == ("C01", "N02")
@@ -147,12 +184,14 @@ def test_explicit_gaff_lipid_geometry_uses_cached_topology_order(lipid_name):
 
 
 def test_force_field_policy_preserves_rtp_and_uses_one_gaff_family():
+    assert {LipidRegistry.get(name).category for name in LipidRegistry.list()} <= set(
+        CATEGORY_NAMES
+    )
     assert {
-        LipidRegistry.get(name).category for name in LipidRegistry.list()
-    } <= set(CATEGORY_NAMES)
-    assert {
-        name: (Chem.GetFormalCharge(Chem.MolFromSmiles(LipidRegistry.get(name).smiles)),
-               LipidRegistry.get(name).charge)
+        name: (
+            Chem.GetFormalCharge(Chem.MolFromSmiles(LipidRegistry.get(name).smiles)),
+            LipidRegistry.get(name).charge,
+        )
         for name in LipidRegistry.list()
         if Chem.GetFormalCharge(Chem.MolFromSmiles(LipidRegistry.get(name).smiles))
         != LipidRegistry.get(name).charge
@@ -172,12 +211,14 @@ def test_force_field_policy_preserves_rtp_and_uses_one_gaff_family():
     assert gaff.gaff_lipids == ("20AHC", "POPC")
 
     assert membrane_lipid_names({"lipid_type": "popc"}) == ("POPC",)
-    assert membrane_lipid_names({
-        "lipid_composition": {
-            "upper": [{"name": "POPC", "ratio": 50}, {"name": "camp", "ratio": 50}],
-            "lower": [{"name": "POPC", "ratio": 100}],
+    assert membrane_lipid_names(
+        {
+            "lipid_composition": {
+                "upper": [{"name": "POPC", "ratio": 50}, {"name": "camp", "ratio": 50}],
+                "lower": [{"name": "POPC", "ratio": 100}],
+            }
         }
-    }) == ("CAMP", "POPC")
+    ) == ("CAMP", "POPC")
 
 
 def test_numeric_lipid_name_uses_gromacs_safe_molecule_type(monkeypatch, tmp_path):
@@ -198,23 +239,30 @@ def test_numeric_lipid_name_uses_gromacs_safe_molecule_type(monkeypatch, tmp_pat
 
 
 def test_pipeline_derives_policy_input_from_membrane_config():
-    system = System(Structure(
-        coordinates=np.empty((0, 3)), box_vectors=np.eye(3),
-        atom_names=[], resnames=[], resids=[],
-    ))
+    system = System(
+        Structure(
+            coordinates=np.empty((0, 3)),
+            box_vectors=np.eye(3),
+            atom_names=[],
+            resnames=[],
+            resids=[],
+        )
+    )
     pipeline = Pipeline().add_module(ForceFieldSelector())
-    config = PipelineConfig(modules={
-        "forcefield": {
-            "name": "amber99sb-ildn", "lipid_ff": "lipid21",
-            "ligand_ff": "none",
-        },
-        "membrane": {
-            "lipid_composition": {
-                "upper": [{"name": "POPC", "ratio": 50},
-                          {"name": "DAPC", "ratio": 50}],
-            }
-        },
-    })
+    config = PipelineConfig(
+        modules={
+            "forcefield": {
+                "name": "amber99sb-ildn",
+                "lipid_ff": "lipid21",
+                "ligand_ff": "none",
+            },
+            "membrane": {
+                "lipid_composition": {
+                    "upper": [{"name": "POPC", "ratio": 50}, {"name": "DAPC", "ratio": 50}],
+                }
+            },
+        }
+    )
     result = pipeline.run(system, config)
     assert result.system.metadata["force_field"] == "amber99sb-ildn"
     assert result.system.metadata["lipid_ff"] == "lipid21"

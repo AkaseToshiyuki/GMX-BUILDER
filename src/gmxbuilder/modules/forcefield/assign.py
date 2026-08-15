@@ -27,16 +27,16 @@ class ForceFieldAssigner(BaseModule):
         # config may override it for compatibility.
         self.validate_config_keys(config, {"name", "protein", "seed"})
         for key in ("name", "protein"):
-            if key in config and (
-                not isinstance(config[key], str) or not config[key].strip()
-            ):
+            if key in config and (not isinstance(config[key], str) or not config[key].strip()):
                 raise ModuleConfigError(f"topology.{key} must be a non-empty string")
         return True
 
     def run(self, system: System, config: dict) -> ModuleResult:
         # Read FF name from metadata (set by the earlier forcefield step),
         # falling back to config for backward compatibility.
-        ff_name = system.metadata.get("force_field") or config.get("protein", config.get("name", self._DEFAULT_FF))
+        ff_name = system.metadata.get("force_field") or config.get(
+            "protein", config.get("name", self._DEFAULT_FF)
+        )
         nucleic_components = system.component_by_kind(ComponentKind.NUCLEIC_ACID)
         if nucleic_components:
             native_records = system.metadata.get("native_nucleic_topologies")
@@ -65,16 +65,13 @@ class ForceFieldAssigner(BaseModule):
             from gmxbuilder.modules.forcefield.lipid_policy import gaff_lipid_capability
 
             blocked_gaff = [
-                (name, gaff_lipid_capability(name)[1]) for name in lipid_names
+                (name, gaff_lipid_capability(name)[1])
+                for name in lipid_names
                 if not gaff_lipid_capability(name)[0]
             ]
             if blocked_gaff:
-                raise ForceFieldError(
-                    "; ".join(reason for _name, reason in blocked_gaff)
-                )
-        missing_rtp = [
-            name for name in lipid_names if not lipid_has_rtp(name, ff_name)
-        ]
+                raise ForceFieldError("; ".join(reason for _name, reason in blocked_gaff))
+        missing_rtp = [name for name in lipid_names if not lipid_has_rtp(name, ff_name)]
         blocked_charmm = [
             (name, charmm_lipid_capability(name, ff_name)[1])
             for name in lipid_names
@@ -118,9 +115,7 @@ class ForceFieldAssigner(BaseModule):
 
             supported, reason, target_distance = disulfide_capability(str(ff_name))
             if not supported or target_distance is None:
-                raise ForceFieldError(
-                    f"Saved disulfides are unavailable for {ff_name}: {reason}"
-                )
+                raise ForceFieldError(f"Saved disulfides are unavailable for {ff_name}: {reason}")
         for record in crosslinks:
             if not isinstance(record, dict) or record.get("type") != "disulfide":
                 raise ForceFieldError("Invalid crosslink metadata in structure checkpoint")
@@ -139,14 +134,17 @@ class ForceFieldAssigner(BaseModule):
                         f"Disulfide metadata has invalid {label} residue"
                     ) from error
                 matches = [
-                    index for index, (atom_chain, atom_resid, atom_name, residue_name)
-                    in enumerate(zip(
-                        system.structure.chain_ids,
-                        system.structure.resids,
-                        system.structure.atom_names,
-                        system.structure.resnames,
-                    ))
-                    if str(atom_chain) == chain and int(atom_resid) == resid
+                    index
+                    for index, (atom_chain, atom_resid, atom_name, residue_name) in enumerate(
+                        zip(
+                            system.structure.chain_ids,
+                            system.structure.resids,
+                            system.structure.atom_names,
+                            system.structure.resnames,
+                        )
+                    )
+                    if str(atom_chain) == chain
+                    and int(atom_resid) == resid
                     and str(atom_name).strip() == "SG"
                     and str(residue_name).strip().upper() == "CYX"
                 ]
@@ -159,10 +157,11 @@ class ForceFieldAssigner(BaseModule):
             pair = tuple(sorted(endpoints))
             if pair[0] == pair[1]:
                 raise ForceFieldError("Disulfide endpoints resolve to the same SG atom")
-            observed = float(np.linalg.norm(
-                system.structure.coordinates[pair[0]]
-                - system.structure.coordinates[pair[1]]
-            ))
+            observed = float(
+                np.linalg.norm(
+                    system.structure.coordinates[pair[0]] - system.structure.coordinates[pair[1]]
+                )
+            )
             if abs(observed - target_distance) > 0.04:
                 raise ForceFieldError(
                     f"Saved disulfide SG-SG distance changed to {observed:.3f} nm; "
@@ -187,7 +186,8 @@ class ForceFieldAssigner(BaseModule):
                         "Nucleic-acid FF: CHARMM36 native GROMACS topology "
                         f"({len(nucleic_components)} polymer chain(s))"
                     ]
-                    if nucleic_components else []
+                    if nucleic_components
+                    else []
                 ),
             ],
         )

@@ -71,13 +71,9 @@ def _run_with_watchdog(
                 last_activity = time.monotonic()
             now = time.monotonic()
             if now - started > total_timeout:
-                raise TimeoutError(
-                    f"lipid worker exceeded {total_timeout:.0f}s total runtime"
-                )
+                raise TimeoutError(f"lipid worker exceeded {total_timeout:.0f}s total runtime")
             if now - last_activity > idle_timeout:
-                raise TimeoutError(
-                    f"lipid worker produced no log output for {idle_timeout:.0f}s"
-                )
+                raise TimeoutError(f"lipid worker produced no log output for {idle_timeout:.0f}s")
             time.sleep(15.0)
         return int(process.returncode or 0)
     except BaseException:
@@ -104,26 +100,35 @@ def _run_job(
     executable = shutil.which("gmxbuilder")
     if not executable:
         raise RuntimeError("gmxbuilder executable is not available on PATH")
-    label = f"{job['force_field']}-{job['lipid_name']}"
+    label = f"{job['force_field']}-{job['lipid_name']}-{job['parameter_family']}"
     device_label = f"gpu{gpu}" if gpu is not None else "cpu"
     log_path = log_dir / f"{label}-{device_label}.log"
     environment = os.environ.copy()
-    environment.update({
-        "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
-        "GMXBUILDER_LIPID_LIBRARY_GPU": "1" if gpu is not None else "0",
-        "GMXBUILDER_GAFF_THREADS": str(len(cpus)),
-        "GMXBUILDER_LIPID_THREADS": str(len(cpus)),
-        "GMXBUILDER_CPU_CORES": str(len(cpus)),
-        "PYTHONUNBUFFERED": "1",
-    })
+    environment.update(
+        {
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+            "GMXBUILDER_LIPID_LIBRARY_GPU": "1" if gpu is not None else "0",
+            "GMXBUILDER_GAFF_THREADS": str(len(cpus)),
+            "GMXBUILDER_LIPID_THREADS": str(len(cpus)),
+            "GMXBUILDER_CPU_CORES": str(len(cpus)),
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
     if gpu is not None:
         environment["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
     command = [
-        executable, "lipid-library", "build",
-        "--force-field", job["force_field"],
-        "--lipid", job["lipid_name"],
-        "--npt-ps", str(float(npt_ps)),
+        executable,
+        "lipid-library",
+        "build",
+        "--force-field",
+        job["force_field"],
+        "--lipid",
+        job["lipid_name"],
+        "--lipid-ff",
+        job["lipid_ff"],
+        "--npt-ps",
+        str(float(npt_ps)),
     ]
     with log_path.open("w", encoding="utf-8") as log:
         returncode = _run_with_watchdog(
@@ -134,6 +139,31 @@ def _run_job(
             log_path=log_path,
         )
     return job, returncode == 0, str(log_path)
+
+
+def _unique_lock_batches(pending: list[dict], concurrency: int) -> list[list[dict]]:
+    """Batch jobs without contending for the same per-lipid build lock."""
+    remaining = list(pending)
+    batches: list[list[dict]] = []
+    while remaining:
+        batch: list[dict] = []
+        deferred: list[dict] = []
+        lock_keys: set[tuple[str, str]] = set()
+        for job in remaining:
+            lock_key = (
+                str(job["force_field"]).strip().lower(),
+                str(job["lipid_name"]).strip().upper(),
+            )
+            if len(batch) < concurrency and lock_key not in lock_keys:
+                batch.append(job)
+                lock_keys.add(lock_key)
+            else:
+                deferred.append(job)
+        if not batch:
+            raise RuntimeError("Unable to schedule a unique lipid-library batch")
+        batches.append(batch)
+        remaining = deferred
+    return batches
 
 
 def run_library_queue(
@@ -152,23 +182,31 @@ def run_library_queue(
     cpu_ids = configured_cpu_ids()
     threads = min(configured_task_threads(), len(cpu_ids))
     cpu_slots = max(1, len(cpu_ids) // threads)
-    concurrency = min(2, len(gpu_devices), cpu_slots) if gpu_devices else 1
+    concurrency = min(len(gpu_devices), cpu_slots) if gpu_devices else 1
     cpu_sets = tuple(
-        tuple(cpu_ids[index * threads:(index + 1) * threads])
-        for index in range(concurrency)
+        tuple(cpu_ids[index * threads : (index + 1) * threads]) for index in range(concurrency)
     )
     library = EquilibratedLipidLibrary()
     pending = []
     for force_field in force_fields:
-        pending.extend(
-            job for job in library.coverage([str(force_field).lower()])
-            if not job["ready"]
-        )
+        for job in library.coverage([str(force_field).lower()]):
+            if job["ready"]:
+                continue
+            if (
+                library.inspect_failure(
+                    job["lipid_name"],
+                    job["force_field"],
+                    job["lipid_ff"],
+                    min_npt_ps=npt_ps,
+                )
+                is not None
+            ):
+                continue
+            pending.append(job)
 
     results = []
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        for offset in range(0, len(pending), concurrency):
-            batch = pending[offset:offset + concurrency]
+        for batch in _unique_lock_batches(pending, concurrency):
             futures = [
                 executor.submit(
                     _run_job,
@@ -187,8 +225,6 @@ def run_library_queue(
                     error_log = destination / (
                         f"{job['force_field']}-{job['lipid_name']}-queue-error.log"
                     )
-                    error_log.write_text(
-                        f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
-                    )
+                    error_log.write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
                     results.append((job, False, str(error_log)))
     return results

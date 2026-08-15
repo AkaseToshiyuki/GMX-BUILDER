@@ -13,20 +13,21 @@ from dataclasses import dataclass, field
 # Task type registry
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TaskType:
-    id: str                    # unique slug, e.g. "membrane-bilayer"
-    category: str              # "Membrane", "Solution", "Glycan", etc.
-    title: str                 # display name, e.g. "Bilayer Builder"
-    description: str           # one-sentence summary
-    icon: str                  # emoji or SVG placeholder
-    enabled: bool = True       # False = greyed-out with "Coming Soon"
-    pipeline: str = "membrane" # "membrane" | "solvator" — which pipeline to create
-    requires_input: bool = True # whether the workflow starts from an uploaded structure
-    route_slug: str = ""        # stable browser URL segment
-    required_modules: list[str] = field(default_factory=list)   # module names that MUST run
-    visible_modules: list[str] = field(default_factory=list)    # module names shown in wizard
-    default_config: dict = field(default_factory=dict)          # default module settings
+    id: str  # unique slug, e.g. "membrane-bilayer"
+    category: str  # "Membrane", "Solution", "Glycan", etc.
+    title: str  # display name, e.g. "Bilayer Builder"
+    description: str  # one-sentence summary
+    icon: str  # emoji or SVG placeholder
+    enabled: bool = True  # False = greyed-out with "Coming Soon"
+    pipeline: str = "membrane"  # "membrane" | "solvator" — which pipeline to create
+    requires_input: bool = True  # whether the workflow starts from an uploaded structure
+    route_slug: str = ""  # stable browser URL segment
+    required_modules: list[str] = field(default_factory=list)  # module names that MUST run
+    visible_modules: list[str] = field(default_factory=list)  # module names shown in wizard
+    default_config: dict = field(default_factory=dict)  # default module settings
 
 
 _TASK_TYPES: list[TaskType] = [
@@ -40,12 +41,33 @@ _TASK_TYPES: list[TaskType] = [
         pipeline="martini_bilayer",
         requires_input=False,
         route_slug="Martini3BilayerBuilder",
-        required_modules=["input", "cg_model", "cg_mapping", "cg_orientation", "cg_environment", "cg_solvation", "cg_system"],
-        visible_modules=["input", "cg_model", "cg_mapping", "cg_orientation", "cg_environment", "cg_solvation", "cg_system", "simparams"],
+        required_modules=[
+            "input",
+            "cg_model",
+            "cg_mapping",
+            "cg_orientation",
+            "cg_environment",
+            "cg_solvation",
+            "cg_system",
+        ],
+        visible_modules=[
+            "input",
+            "cg_model",
+            "cg_mapping",
+            "cg_orientation",
+            "cg_environment",
+            "cg_solvation",
+            "cg_system",
+            "simparams",
+        ],
         default_config={
             "input": {"include_protein": True, "environment": "bilayer"},
             "cg_model": {"model": "martini3", "water_model": "W"},
-            "cg_mapping": {"protein_model": "folded", "secondary_structure": "auto", "elastic": True},
+            "cg_mapping": {
+                "protein_model": "folded",
+                "secondary_structure": "auto",
+                "elastic": True,
+            },
             "cg_orientation": {"method": "ppm", "half_thickness": 1.4},
             "cg_environment": {
                 "n_lipids_per_leaflet": 150,
@@ -67,12 +89,31 @@ _TASK_TYPES: list[TaskType] = [
         pipeline="martini_solvent",
         requires_input=True,
         route_slug="Martini3SolventBuilder",
-        required_modules=["input", "cg_model", "cg_mapping", "cg_environment", "cg_solvation", "cg_system"],
-        visible_modules=["input", "cg_model", "cg_mapping", "cg_environment", "cg_solvation", "cg_system", "simparams"],
+        required_modules=[
+            "input",
+            "cg_model",
+            "cg_mapping",
+            "cg_environment",
+            "cg_solvation",
+            "cg_system",
+        ],
+        visible_modules=[
+            "input",
+            "cg_model",
+            "cg_mapping",
+            "cg_environment",
+            "cg_solvation",
+            "cg_system",
+            "simparams",
+        ],
         default_config={
             "input": {"include_protein": True, "environment": "solution"},
             "cg_model": {"model": "martini3", "water_model": "W"},
-            "cg_mapping": {"protein_model": "folded", "secondary_structure": "auto", "elastic": True},
+            "cg_mapping": {
+                "protein_model": "folded",
+                "secondary_structure": "auto",
+                "elastic": True,
+            },
             "cg_environment": {},
             "cg_solvation": {"include_solvent": True, "padding_nm": 1.5},
             "cg_system": {"salt_molarity": 0.15},
@@ -86,8 +127,25 @@ _TASK_TYPES: list[TaskType] = [
         icon="🫧",
         enabled=True,
         route_slug="BilayerBuilder",
-        required_modules=["input", "forcefield", "structure", "orient", "membrane", "solvation", "ions"],
-        visible_modules=["input", "forcefield", "structure", "orient", "membrane", "solvation", "ions", "simparams"],
+        required_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "orient",
+            "membrane",
+            "solvation",
+            "ions",
+        ],
+        visible_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "orient",
+            "membrane",
+            "solvation",
+            "ions",
+            "simparams",
+        ],
         default_config={
             "membrane": {"lipid_type": "POPC", "bilayer_size": "auto", "box_padding": 2.0},
             "solvation": {"box_padding": 2.0},
@@ -123,8 +181,24 @@ _TASK_TYPES: list[TaskType] = [
         description="Generate a protein/monolayer complex or monolayer-only system for molecular dynamics simulations",
         icon="🪞",
         enabled=False,
-        required_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "topology"],
-        visible_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "simparams"],
+        required_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "topology",
+        ],
+        visible_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "simparams",
+        ],
     ),
     TaskType(
         id="nanodisc-builder",
@@ -133,8 +207,24 @@ _TASK_TYPES: list[TaskType] = [
         description="Generate a lipid-only or protein-embedded nanodisc system for molecular dynamics simulations",
         icon="🪙",
         enabled=False,
-        required_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "topology"],
-        visible_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "simparams"],
+        required_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "topology",
+        ],
+        visible_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "simparams",
+        ],
     ),
     TaskType(
         id="hmmm-builder",
@@ -143,8 +233,24 @@ _TASK_TYPES: list[TaskType] = [
         description="Generate a bilayer simulation system with the Highly Mobile Membrane-Mimetic (HMMM) model",
         icon="🔬",
         enabled=False,
-        required_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "topology"],
-        visible_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "simparams"],
+        required_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "topology",
+        ],
+        visible_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "simparams",
+        ],
     ),
     TaskType(
         id="bicelle-builder",
@@ -153,8 +259,24 @@ _TASK_TYPES: list[TaskType] = [
         description="Generate a protein/bicelle complex or bicelle-only system for molecular dynamics simulations",
         icon="🫓",
         enabled=False,
-        required_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "topology"],
-        visible_modules=["input", "forcefield", "structure", "membrane", "solvation", "ions", "simparams"],
+        required_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "topology",
+        ],
+        visible_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "membrane",
+            "solvation",
+            "ions",
+            "simparams",
+        ],
     ),
     TaskType(
         id="solvator",
@@ -202,19 +324,22 @@ _TASK_TYPES: list[TaskType] = [
     # Nanomaterial: no implementation plan — very niche.
 ]
 
+
 def get_all_task_types() -> list[dict]:
     """Return all task types as dictionaries for the API."""
     result = []
     for t in _TASK_TYPES:
-        result.append({
-            "id": t.id,
-            "category": t.category,
-            "title": t.title,
-            "description": t.description,
-            "icon": t.icon,
-            "enabled": t.enabled,
-            "route_slug": t.route_slug,
-        })
+        result.append(
+            {
+                "id": t.id,
+                "category": t.category,
+                "title": t.title,
+                "description": t.description,
+                "icon": t.icon,
+                "enabled": t.enabled,
+                "route_slug": t.route_slug,
+            }
+        )
     return result
 
 

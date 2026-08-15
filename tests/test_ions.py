@@ -60,41 +60,60 @@ def _water_system(model_name="tip3p", n_water=100, protein_resname=None):
         chain_ids=chain_ids,
         elements=elements,
     )
-    system = System(structure, metadata={
-        "force_field": "amber14sb", "water_model": model_name, "seed": 7,
-    })
+    system = System(
+        structure,
+        metadata={
+            "force_field": "amber14sb",
+            "water_model": model_name,
+            "seed": 7,
+        },
+    )
     if protein_resname:
-        system.add_component(Component(
-            "PROTEIN", ComponentKind.PROTEIN, np.array([0]), {},
-        ))
-    system.add_component(Component(
-        "SOLVENT", ComponentKind.SOLVENT,
-        np.arange(solvent_start, structure.num_atoms),
-        {"water_model": model_name, "n_molecules": n_water},
-    ))
+        system.add_component(
+            Component(
+                "PROTEIN",
+                ComponentKind.PROTEIN,
+                np.array([0]),
+                {},
+            )
+        )
+    system.add_component(
+        Component(
+            "SOLVENT",
+            ComponentKind.SOLVENT,
+            np.arange(solvent_start, structure.num_atoms),
+            {"water_model": model_name, "n_molecules": n_water},
+        )
+    )
     return system
 
 
 def _config(**updates):
     config = {
-        "cations": ["NA"], "anions": ["CL"],
+        "cations": ["NA"],
+        "anions": ["CL"],
         "concentration": {"NA": 0.0, "CL": 0.0},
-        "neutralize": True, "neutralize_cation": "NA",
-        "neutralize_anion": "CL", "ion_method": "replace",
+        "neutralize": True,
+        "neutralize_cation": "NA",
+        "neutralize_anion": "CL",
+        "ion_method": "replace",
         "exclusion_radius": 0.35,
     }
     config.update(updates)
     return config
 
 
-@pytest.mark.parametrize("bad", [
-    {"cations": ["CL"]},
-    {"anions": ["NA"]},
-    {"anions": ["XX"]},
-    {"ion_method": "unknown"},
-    {"exclusion_radius": -1},
-    {"concentration": {"NA": float("nan"), "CL": 0.0}},
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"cations": ["CL"]},
+        {"anions": ["NA"]},
+        {"anions": ["XX"]},
+        {"ion_method": "unknown"},
+        {"exclusion_radius": -1},
+        {"concentration": {"NA": float("nan"), "CL": 0.0}},
+    ],
+)
 def test_invalid_ion_config_is_rejected(bad):
     config = _config()
     config.update(bad)
@@ -104,14 +123,20 @@ def test_invalid_ion_config_is_rejected(bad):
 
 def test_multivalent_salt_requires_charge_balanced_concentrations():
     with pytest.raises(ModuleConfigError, match="0.15 M CaCl2"):
-        IonBuilder().validate_config(_config(
-            cations=["CA"], anions=["CL"],
-            concentration={"CA": 0.15, "CL": 0.15},
-        ))
-    assert IonBuilder().validate_config(_config(
-        cations=["CA"], anions=["CL"],
-        concentration={"CA": 0.15, "CL": 0.30},
-    ))
+        IonBuilder().validate_config(
+            _config(
+                cations=["CA"],
+                anions=["CL"],
+                concentration={"CA": 0.15, "CL": 0.15},
+            )
+        )
+    assert IonBuilder().validate_config(
+        _config(
+            cations=["CA"],
+            anions=["CL"],
+            concentration={"CA": 0.15, "CL": 0.30},
+        )
+    )
 
 
 def _solvated_disulfide_stub() -> System:
@@ -126,18 +151,18 @@ def _solvated_disulfide_stub() -> System:
             elements=["S", "S"],
         ),
         topology=Topology(force_field="amber14sb", bonds=[Bond(0, 1)]),
-        components=[Component(
-            "PROTEIN", ComponentKind.PROTEIN, np.array([0, 1]), {}
-        )],
+        components=[Component("PROTEIN", ComponentKind.PROTEIN, np.array([0, 1]), {})],
         metadata={
             "force_field": "amber14sb",
             "water_model": "tip3p",
-            "crosslinks": [{
-                "type": "disulfide",
-                "first": {"chain": "A", "resid": 10},
-                "second": {"chain": "A", "resid": 20},
-                "status": "passed",
-            }],
+            "crosslinks": [
+                {
+                    "type": "disulfide",
+                    "first": {"chain": "A", "resid": 10},
+                    "second": {"chain": "A", "resid": 20},
+                    "status": "passed",
+                }
+            ],
         },
     )
     return protein.merge(_water_system(n_water=100))
@@ -182,7 +207,9 @@ def test_ions_replace_complete_water_and_remap_components(model_name):
     assert solvent.metadata["n_molecules"] == 99
     assert len(solvent.atom_indices) == 99 * model.n_atoms
     assert max(max(comp.atom_indices, default=-1) for comp in output.components) < output.num_atoms
-    nearest = cKDTree(output.coordinates[solvent.atom_indices]).query(output.coordinates[ions.atom_indices])[0]
+    nearest = cKDTree(output.coordinates[solvent.atom_indices]).query(
+        output.coordinates[ions.atom_indices]
+    )[0]
     assert nearest.min() > 0.0
 
 
@@ -193,11 +220,18 @@ def test_divalent_counterion_cannot_neutralize_odd_charge():
 
 
 def test_distinct_neutralizing_species_keeps_cation_anion_site_order():
-    result = IonBuilder().run(_water_system(protein_resname="ASP"), _config(
-        concentration={"NA": 0.60, "CL": 0.60},
-        neutralize_cation="K",
-        ion_method="replace",
-    )).system
+    result = (
+        IonBuilder()
+        .run(
+            _water_system(protein_resname="ASP"),
+            _config(
+                concentration={"NA": 0.60, "CL": 0.60},
+                neutralize_cation="K",
+                ion_method="replace",
+            ),
+        )
+        .system
+    )
     ions = result.component_by_kind(ComponentKind.IONS)[0]
     names = np.asarray(result.structure.resnames)[ions.atom_indices].tolist()
     assert names == ["NA", "K", "CL"]
@@ -206,19 +240,29 @@ def test_distinct_neutralizing_species_keeps_cation_anion_site_order():
 @pytest.mark.parametrize("method", ["replace", "random", "mc"])
 def test_every_placement_method_replaces_complete_waters(method):
     system = _water_system(n_water=100)
-    result = IonBuilder().run(system, _config(
-        concentration={"NA": 0.60, "CL": 0.60},
-        neutralize=False,
-        ion_method=method,
-    )).system
+    result = (
+        IonBuilder()
+        .run(
+            system,
+            _config(
+                concentration={"NA": 0.60, "CL": 0.60},
+                neutralize=False,
+                ion_method=method,
+            ),
+        )
+        .system
+    )
     metrics = result.metadata["ions"]
     assert metrics["waters_replaced"] == sum(metrics["total_counts"].values())
     assert result.num_atoms == system.num_atoms - 2 * metrics["waters_replaced"]
-    assert metrics["placement_strategy"] == {
-        "random": "uniform_random_water_replacement",
-        "replace": "periodic_electrostatic_water_replacement",
-        "mc": "metropolis_water_site_sampling",
-    }[method]
+    assert (
+        metrics["placement_strategy"]
+        == {
+            "random": "uniform_random_water_replacement",
+            "replace": "periodic_electrostatic_water_replacement",
+            "mc": "metropolis_water_site_sampling",
+        }[method]
+    )
 
 
 def test_ion_check_materializes_canonical_index_before_simparams(tmp_path):
@@ -226,11 +270,14 @@ def test_ion_check_materializes_canonical_index_before_simparams(tmp_path):
     source = _water_system(n_water=100)
     source.save_checkpoint(runner.step_dir("solvation"))
 
-    result = runner.run_step("ions", _config(
-        concentration={"NA": 0.60, "CL": 0.60},
-        neutralize=False,
-        ion_method="random",
-    ))
+    result = runner.run_step(
+        "ions",
+        _config(
+            concentration={"NA": 0.60, "CL": 0.60},
+            neutralize=False,
+            ion_method="random",
+        ),
+    )
 
     index_path = runner.step_dir("ions") / "index.ndx"
     assert result["status"] == "ok"
@@ -246,14 +293,19 @@ def test_recommended_random_method_does_not_use_electrostatic_extrema(monkeypatc
         raise AssertionError("recommended random replacement must not score electrostatic extrema")
 
     monkeypatch.setattr(IonBuilder, "_site_potentials", unexpected_potential_call)
-    result = IonBuilder().run(_water_system(n_water=100), _config(
-        concentration={"NA": 0.60, "CL": 0.60},
-        neutralize=False,
-        ion_method="random",
-    )).system
-    assert result.metadata["ions"]["placement_strategy"] == (
-        "uniform_random_water_replacement"
+    result = (
+        IonBuilder()
+        .run(
+            _water_system(n_water=100),
+            _config(
+                concentration={"NA": 0.60, "CL": 0.60},
+                neutralize=False,
+                ion_method="random",
+            ),
+        )
+        .system
     )
+    assert result.metadata["ions"]["placement_strategy"] == ("uniform_random_water_replacement")
 
 
 def test_replace_and_monte_carlo_are_distinct_electrostatic_algorithms(monkeypatch):
@@ -267,8 +319,12 @@ def test_replace_and_monte_carlo_are_distinct_electrostatic_algorithms(monkeypat
 
     monkeypatch.setattr(IonBuilder, "_site_potentials", tracked_potentials)
     IonBuilder()._select_sites(
-        system, sites, {"NA": 1, "CL": 1}, "replace",
-        np.random.default_rng(11), 0.35,
+        system,
+        sites,
+        {"NA": 1, "CL": 1},
+        "replace",
+        np.random.default_rng(11),
+        0.35,
     )
 
     class TrackingRng:
@@ -285,7 +341,12 @@ def test_replace_and_monte_carlo_are_distinct_electrostatic_algorithms(monkeypat
 
     mc_rng = TrackingRng()
     IonBuilder()._select_sites(
-        system, sites, {"NA": 1, "CL": 1}, "mc", mc_rng, 0.35,
+        system,
+        sites,
+        {"NA": 1, "CL": 1},
+        "mc",
+        mc_rng,
+        0.35,
     )
 
     assert calls == [100, 100]
@@ -297,11 +358,13 @@ def test_eligible_water_exclusion_uses_periodic_minimum_image():
     protein = system.component_by_kind(ComponentKind.PROTEIN)[0]
     water = system.component_by_kind(ComponentKind.SOLVENT)[0]
     system.coordinates[protein.atom_indices[0]] = [0.1, 0.1, 0.1]
-    system.coordinates[water.atom_indices[:3]] = np.array([
-        [5.9, 0.1, 0.1],
-        [5.99572, 0.1, 0.1],
-        [5.87, 0.19, 0.1],
-    ])
+    system.coordinates[water.atom_indices[:3]] = np.array(
+        [
+            [5.9, 0.1, 0.1],
+            [5.99572, 0.1, 0.1],
+            [5.87, 0.19, 0.1],
+        ]
+    )
     sites, _model = IonBuilder._water_sites(system, "tip3p")
 
     eligible = IonBuilder._eligible_sites(system, sites, [(0.0, 6.0)], 0.35)
@@ -345,8 +408,11 @@ def test_protein_charge_counts_residue_ids_independently_per_chain():
     protein = Structure(
         coordinates=np.array([[0.1, 0.1, 0.1], [0.2, 0.2, 0.2]]),
         box_vectors=system.structure.box_vectors.copy(),
-        atom_names=["CA", "CA"], resnames=["LYS", "LYS"],
-        resids=[1, 1], chain_ids=["A", "B"], elements=["C", "C"],
+        atom_names=["CA", "CA"],
+        resnames=["LYS", "LYS"],
+        resids=[1, 1],
+        chain_ids=["A", "B"],
+        elements=["C", "C"],
     )
     merged = System(protein).merge(system)
     merged.add_component(Component("PROTEIN", ComponentKind.PROTEIN, np.array([0, 1]), {}))
@@ -357,18 +423,25 @@ def test_topology_uses_force_field_ions_without_redefinition(tmp_path):
     gmx = _find_gmx()
     model = WaterRegistry.get("tip3p")
     structure = Structure(
-        coordinates=np.array([
-            [0.5, 0.5, 0.5], [0.59572, 0.5, 0.5], [0.47, 0.59, 0.5],
-            [1.2, 1.2, 1.2], [1.8, 1.8, 1.8],
-        ]),
+        coordinates=np.array(
+            [
+                [0.5, 0.5, 0.5],
+                [0.59572, 0.5, 0.5],
+                [0.47, 0.59, 0.5],
+                [1.2, 1.2, 1.2],
+                [1.8, 1.8, 1.8],
+            ]
+        ),
         box_vectors=np.diag([2.5, 2.5, 2.5]),
         atom_names=model.atom_names + ["NA", "CL"],
         resnames=["SOL", "SOL", "SOL", "NA", "CL"],
-        resids=[1, 1, 1, 2, 3], elements=["O", "H", "H", "Na", "Cl"],
+        resids=[1, 1, 1, 2, 3],
+        elements=["O", "H", "H", "Na", "Cl"],
     )
     GROWriter.write(structure, tmp_path / "input.gro", title="ion smoke")
     TopologyWriter("amber14sb", {"water_model": "tip3p"}).write_top(
-        structure, tmp_path / "topol.top",
+        structure,
+        tmp_path / "topol.top",
     )
     text = (tmp_path / "topol.top").read_text()
     assert '#include "ions_tip3p.itp"' in text
@@ -377,7 +450,10 @@ def test_topology_uses_force_field_ions_without_redefinition(tmp_path):
     _write_smoke_mdp(tmp_path / "smoke.mdp")
     proc = subprocess.run(
         [gmx, "grompp", "-f", "smoke.mdp", "-c", "input.gro", "-p", "topol.top", "-o", "smoke.tpr"],
-        cwd=tmp_path, text=True, capture_output=True, check=False,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
 

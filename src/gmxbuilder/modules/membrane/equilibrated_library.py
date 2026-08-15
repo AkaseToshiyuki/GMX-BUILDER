@@ -98,9 +98,7 @@ class EquilibratedLipidLibrary:
     @classmethod
     def _contained_entry(cls, root: Path, family: str, lipid_name: str) -> Path:
         safe_family = cls._safe_component(family, "parameter family")
-        safe_name = cls._safe_component(
-            str(lipid_name).strip().upper(), "lipid name"
-        )
+        safe_name = cls._safe_component(str(lipid_name).strip().upper(), "lipid name")
         resolved_root = root.expanduser().resolve()
         candidate = (resolved_root / safe_family / safe_name).resolve()
         if resolved_root not in candidate.parents:
@@ -112,10 +110,7 @@ class EquilibratedLipidLibrary:
             from gmxbuilder.runtime.prebuilt_assets import ensure_prebuilt_assets
 
             ensure_prebuilt_assets()
-            bundled = (
-                Path(__file__).resolve().parent.parent.parent
-                / "data" / "lipid_equilibrated"
-            )
+            bundled = Path(__file__).resolve().parent.parent.parent / "data" / "lipid_equilibrated"
             writable = Path(
                 os.environ.get(
                     "GMXBUILDER_LIPID_LIBRARY",
@@ -126,23 +121,31 @@ class EquilibratedLipidLibrary:
         self.roots = [Path(root).expanduser() for root in roots]
 
     def entry_dir(
-        self, lipid_name: str, force_field: str, lipid_ff: str | None = None,
-        *, writable: bool = False,
+        self,
+        lipid_name: str,
+        force_field: str,
+        lipid_ff: str | None = None,
+        *,
+        writable: bool = False,
     ) -> Path:
         family = lipid_parameter_family(force_field, lipid_ff)
         root = self.roots[0] if writable else self.roots[-1]
         return self._contained_entry(root, family, lipid_name)
 
     def _candidate_dirs(
-        self, lipid_name: str, force_field: str, lipid_ff: str | None = None,
+        self,
+        lipid_name: str,
+        force_field: str,
+        lipid_ff: str | None = None,
     ) -> list[Path]:
         family = lipid_parameter_family(force_field, lipid_ff)
-        return [
-            self._contained_entry(root, family, lipid_name) for root in self.roots
-        ]
+        return [self._contained_entry(root, family, lipid_name) for root in self.roots]
 
     def inspect(
-        self, lipid_name: str, force_field: str, lipid_ff: str | None = None,
+        self,
+        lipid_name: str,
+        force_field: str,
+        lipid_ff: str | None = None,
     ) -> LibraryEntry | None:
         expected_family = lipid_parameter_family(force_field, lipid_ff)
         for directory in self._candidate_dirs(lipid_name, force_field, lipid_ff):
@@ -170,14 +173,14 @@ class EquilibratedLipidLibrary:
                 and bool(orientation.get("passed"))
                 and int(orientation.get("n_lipids_checked", 0)) >= len(files)
             )
-            stored_names = [
-                str(name).strip() for name in metadata.get("atom_names", [])
-            ]
+            stored_names = [str(name).strip() for name in metadata.get("atom_names", [])]
             stored_force_field = str(metadata.get("force_field", "")).lower()
             stored_lipid_ff = str(metadata.get("lipid_ff", "")).lower()
             if stored_names and stored_force_field and stored_lipid_ff:
                 valid = valid and metadata.get("topology_sha256") == topology_signature(
-                    stored_names, stored_force_field, stored_lipid_ff,
+                    stored_names,
+                    stored_force_field,
+                    stored_lipid_ff,
                 )
             else:
                 valid = False
@@ -198,8 +201,7 @@ class EquilibratedLipidLibrary:
                 )
                 current_identity = canonical_lipid_identity(registered.smiles)
                 valid = valid and (
-                    stored_identity["canonical_smiles"]
-                    == current_identity["canonical_smiles"]
+                    stored_identity["canonical_smiles"] == current_identity["canonical_smiles"]
                 )
             except KeyError:
                 # User-defined lipids are not in the built-in registry; their
@@ -209,14 +211,85 @@ class EquilibratedLipidLibrary:
             except (TypeError, ValueError):
                 valid = False
             if expected_family in {"charmm36-lipid", "charmm36m-lipid"}:
-                valid = valid and str(metadata.get("force_field", "")).lower() == str(force_field).lower()
-                valid = valid and str(metadata.get("lipid_ff", "")).lower() == str(lipid_ff or force_field).lower()
+                valid = (
+                    valid
+                    and str(metadata.get("force_field", "")).lower() == str(force_field).lower()
+                )
+                valid = (
+                    valid
+                    and str(metadata.get("lipid_ff", "")).lower()
+                    == str(lipid_ff or force_field).lower()
+                )
             if valid:
                 return LibraryEntry(directory, metadata)
         return None
 
     def has(self, lipid_name: str, force_field: str, lipid_ff: str | None = None) -> bool:
         return self.inspect(lipid_name, force_field, lipid_ff) is not None
+
+    def inspect_failure(
+        self,
+        lipid_name: str,
+        force_field: str,
+        lipid_ff: str | None = None,
+        *,
+        min_npt_ps: float = 500.0,
+    ) -> LibraryEntry | None:
+        """Return a current, production-length scientific rejection.
+
+        A failed geometry gate is a classified unavailable result for the
+        current library schema, not a transient queue error.  Retaining and
+        recognizing it prevents an hourly service from repeating the exact
+        same deterministic NPT calculation forever.  A schema bump or an
+        explicit manual ``--force`` build remains the retry mechanism after a
+        scientific protocol change.
+        """
+        expected_family = lipid_parameter_family(force_field, lipid_ff)
+        expected_force_field = str(force_field).strip().lower()
+        expected_lipid_ff = str(lipid_ff or force_field).strip().lower()
+        for directory in self._candidate_dirs(lipid_name, force_field, lipid_ff):
+            failed_directory = directory.with_name(directory.name + ".failed")
+            metadata_path = failed_directory / "metadata.json"
+            if not metadata_path.is_file():
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                atom_names = [str(name).strip() for name in metadata.get("atom_names", [])]
+                valid = (
+                    metadata.get("schema_version") == SCHEMA_VERSION
+                    and metadata.get("status") == "failed"
+                    and metadata.get("method") == ACCEPTED_METHOD
+                    and metadata.get("parameter_family") == expected_family
+                    and str(metadata.get("force_field", "")).lower() == expected_force_field
+                    and str(metadata.get("lipid_ff", "")).lower() == expected_lipid_ff
+                    and not bool(metadata.get("test_mode"))
+                    and float(metadata.get("npt_ps", 0.0)) >= float(min_npt_ps)
+                    and bool(atom_names)
+                    and metadata.get("topology_sha256")
+                    == topology_signature(atom_names, force_field, expected_lipid_ff)
+                    and not bool(metadata.get("quality", {}).get("passed"))
+                )
+            except (OSError, TypeError, ValueError):
+                continue
+            if not valid:
+                continue
+            try:
+                from gmxbuilder.modules.membrane.lipids import (
+                    LipidRegistry,
+                    canonical_lipid_identity,
+                )
+
+                registered = LipidRegistry.get(str(lipid_name).strip().upper())
+                stored_identity = canonical_lipid_identity(
+                    str(metadata.get("canonical_smiles", ""))
+                )
+                current_identity = canonical_lipid_identity(registered.smiles)
+                valid = stored_identity["canonical_smiles"] == current_identity["canonical_smiles"]
+            except (KeyError, TypeError, ValueError):
+                valid = False
+            if valid:
+                return LibraryEntry(failed_directory, metadata)
+        return None
 
     def load_one(
         self,
@@ -262,35 +335,44 @@ class EquilibratedLipidLibrary:
         from gmxbuilder.modules.membrane.lipids import LipidRegistry
 
         fields = force_fields or [
-            "amber14sb", "charmm36m", "charmm36", "amber99sb-ildn", "amber99sb",
+            "amber14sb",
+            "charmm36m",
+            "charmm36",
+            "amber99sb-ildn",
+            "amber99sb",
         ]
         jobs = []
         for force_field in fields:
             for lipid_name in LipidRegistry.list():
                 if force_field.startswith("amber"):
-                    lipid_backends = list(
-                        amber_lipid_backend_candidates([lipid_name])
-                    )
+                    lipid_backends = list(amber_lipid_backend_candidates([lipid_name]))
                     compatible = bool(lipid_backends)
                 else:
                     lipid_ff = force_field
-                    compatible = charmm_lipid_capability(
-                        lipid_name, force_field
-                    )[0]
+                    compatible = charmm_lipid_capability(lipid_name, force_field)[0]
                 if not compatible:
                     continue
-                backends = (
-                    lipid_backends if force_field.startswith("amber")
-                    else [lipid_ff]
-                )
+                backends = lipid_backends if force_field.startswith("amber") else [lipid_ff]
                 for lipid_ff in backends:
-                    jobs.append({
-                        "lipid_name": lipid_name,
-                        "force_field": force_field,
-                        "lipid_ff": lipid_ff,
-                        "parameter_family": lipid_parameter_family(force_field, lipid_ff),
-                        "ready": self.has(lipid_name, force_field, lipid_ff),
-                    })
+                    ready = self.has(lipid_name, force_field, lipid_ff)
+                    jobs.append(
+                        {
+                            "lipid_name": lipid_name,
+                            "force_field": force_field,
+                            "lipid_ff": lipid_ff,
+                            "parameter_family": lipid_parameter_family(force_field, lipid_ff),
+                            "ready": ready,
+                            "unavailable": (
+                                not ready
+                                and self.inspect_failure(
+                                    lipid_name,
+                                    force_field,
+                                    lipid_ff,
+                                )
+                                is not None
+                            ),
+                        }
+                    )
         return jobs
 
 

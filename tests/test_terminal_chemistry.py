@@ -39,9 +39,7 @@ def _two_residue_system(force_field: str) -> System:
     )
     return System(
         structure=structure,
-        components=[
-            Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(names)))
-        ],
+        components=[Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(names)))],
         metadata={"force_field": force_field},
     )
 
@@ -82,9 +80,7 @@ def _itp_residue_charges(path) -> dict[int, float]:
 def test_standard_termini_match_templates_and_itp_charges(
     tmp_path, force_field, expected_n_type, expected_c_oxygens
 ):
-    result = StructureProcessor().run(
-        _two_residue_system(force_field), {"skip_protonation": True}
-    )
+    result = StructureProcessor().run(_two_residue_system(force_field), {"skip_protonation": True})
     assert result.success
     structure = result.system.structure
 
@@ -100,18 +96,26 @@ def test_standard_termini_match_templates_and_itp_charges(
     assert sorted(component_indices) == list(range(structure.num_atoms))
     assert np.isfinite(structure.coordinates).all()
     for attribute in (
-        "atom_names", "resnames", "resids", "chain_ids", "segids",
-        "elements", "occupancies", "tempfactors",
+        "atom_names",
+        "resnames",
+        "resids",
+        "chain_ids",
+        "segids",
+        "elements",
+        "occupancies",
+        "tempfactors",
     ):
         assert len(getattr(structure, attribute)) == structure.num_atoms
 
     n_index = next(
-        index for index, (resid, name) in enumerate(zip(structure.resids, structure.atom_names))
+        index
+        for index, (resid, name) in enumerate(zip(structure.resids, structure.atom_names))
         if resid == 1 and name == "N"
     )
     for hydrogen in ("H1", "H2", "H3"):
         h_index = next(
-            index for index, (resid, name) in enumerate(zip(structure.resids, structure.atom_names))
+            index
+            for index, (resid, name) in enumerate(zip(structure.resids, structure.atom_names))
             if resid == 1 and name == hydrogen
         )
         bond_length = np.linalg.norm(
@@ -135,8 +139,14 @@ def test_single_residue_chain_fails_without_partial_mutation():
     keep = list(range(5))
     system.structure.coordinates = system.structure.coordinates[keep]
     for attribute in (
-        "atom_names", "resnames", "resids", "chain_ids", "segids",
-        "elements", "occupancies", "tempfactors",
+        "atom_names",
+        "resnames",
+        "resids",
+        "chain_ids",
+        "segids",
+        "elements",
+        "occupancies",
+        "tempfactors",
     ):
         values = getattr(system.structure, attribute)
         setattr(system.structure, attribute, [values[index] for index in keep])
@@ -150,12 +160,8 @@ def test_single_residue_chain_fails_without_partial_mutation():
     np.testing.assert_array_equal(system.structure.coordinates, original.coordinates)
 
 
-@pytest.mark.parametrize(
-    "force_field", ["charmm36", "charmm36m", "amber99sb", "amber99sb-ildn"]
-)
-def test_explicit_ace_nme_caps_have_atoms_charges_and_cross_residue_bonds(
-    tmp_path, force_field
-):
+@pytest.mark.parametrize("force_field", ["charmm36", "charmm36m", "amber99sb", "amber99sb-ildn"])
+def test_explicit_ace_nme_caps_have_atoms_charges_and_cross_residue_bonds(tmp_path, force_field):
     result = StructureProcessor().run(
         _two_residue_system(force_field),
         {

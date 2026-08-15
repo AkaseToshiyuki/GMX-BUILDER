@@ -42,9 +42,7 @@ from gmxbuilder.modules.membrane.lipid_orientation import (
 )
 
 
-_gpu_device: ContextVar[int | None] = ContextVar(
-    "gmxbuilder_lipid_gpu_device", default=None
-)
+_gpu_device: ContextVar[int | None] = ContextVar("gmxbuilder_lipid_gpu_device", default=None)
 
 # Side-chain hydroxylated sterols are not conventional single-headed
 # amphiphiles.  Atomistic studies find broad tilt/interfacial populations for
@@ -52,9 +50,15 @@ _gpu_device: ContextVar[int | None] = ContextVar(
 # normally oriented.  Their extracted conformers are still rigidly
 # canonicalized before publication; only the production-trajectory gate uses
 # the host bilayer rather than requiring every target sterol to point along Z.
-_SIDE_CHAIN_OXYSTEROLS = frozenset({
-    "20AHC", "22RHC", "24SHC", "25OHC", "27OHC",
-})
+_SIDE_CHAIN_OXYSTEROLS = frozenset(
+    {
+        "20AHC",
+        "22RHC",
+        "24SHC",
+        "25OHC",
+        "27OHC",
+    }
+)
 
 # A production trajectory is an ensemble, not a static packing test.  Requiring
 # the single worst molecule in a 128-lipid bilayer to exceed both thresholds
@@ -128,7 +132,9 @@ def _outer_headgroup_anchor(
 ) -> tuple[int, bool]:
     """Return an outward polar anchor and whether the lipid is upper-leaflet."""
     elements = [next((char for char in name.upper() if char.isalpha()), "") for name in atom_names]
-    candidates = [index for index, element in enumerate(elements) if element in {"O", "N", "P", "S"}]
+    candidates = [
+        index for index, element in enumerate(elements) if element in {"O", "N", "P", "S"}
+    ]
     if not candidates:
         candidates = [index for index, element in enumerate(elements) if element != "H"]
     if not candidates:
@@ -149,7 +155,9 @@ def _outer_headgroup_anchor(
 
 
 def _simulation_lipid_resname_map(
-    lipid_names: set[str], force_field: str, lipid_ff: str,
+    lipid_names: set[str],
+    force_field: str,
+    lipid_ff: str,
 ) -> dict[str, str]:
     """Map five-character GROMACS output residue names to registry names."""
     mapping = {name[:5].upper(): name for name in lipid_names}
@@ -182,7 +190,7 @@ class LipidEquilibrationBuilder:
             "coulombtype = PME\nvdwtype = Cut-off\npbc = xyz\n"
         )
         if stage == "em":
-            return "integrator = steep\nemtol = 1000\nemstep = 0.01\n" f"nsteps = {nsteps}\n" + common
+            return f"integrator = steep\nemtol = 1000\nemstep = 0.01\nnsteps = {nsteps}\n" + common
         pressure = ""
         if stage == "npt":
             pressure = (
@@ -190,17 +198,24 @@ class LipidEquilibrationBuilder:
                 "tau-p = 5.0\nref-p = 1.0 1.0\ncompressibility = 4.5e-5 4.5e-5\n"
             )
         return (
-            "integrator = md\ndt = 0.002\n" f"nsteps = {nsteps}\n"
+            "integrator = md\ndt = 0.002\n"
+            f"nsteps = {nsteps}\n"
             "constraints = h-bonds\nconstraint-algorithm = lincs\n"
             "tcoupl = V-rescale\ntc-grps = System\ntau-t = 1.0\n"
             f"ref-t = {temperature:.2f}\ngen-vel = {'yes' if stage == 'nvt' else 'no'}\n"
-            f"gen-temp = {temperature:.2f}\ngen-seed = 20260713\n"
-            + pressure + common
+            f"gen-temp = {temperature:.2f}\ngen-seed = 20260713\n" + pressure + common
         )
 
-    def _run(self, args: list[str], cwd: Path, *, input_text: str | None = None, timeout: int = 3600) -> None:
+    def _run(
+        self, args: list[str], cwd: Path, *, input_text: str | None = None, timeout: int = 3600
+    ) -> None:
         result = subprocess.run(
-            args, cwd=cwd, input=input_text, text=True, capture_output=True, timeout=timeout,
+            args,
+            cwd=cwd,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
         )
         if result.returncode:
             output = (result.stdout + "\n" + result.stderr)[-6000:]
@@ -218,7 +233,9 @@ class LipidEquilibrationBuilder:
             potential = float(potential_matches[-1])
             maximum_force = float(force_matches[-1])
         except ValueError as exc:
-            raise RuntimeError(f"Energy minimization diagnostics are invalid in {log_path.name}") from exc
+            raise RuntimeError(
+                f"Energy minimization diagnostics are invalid in {log_path.name}"
+            ) from exc
         if not math.isfinite(potential) or not math.isfinite(maximum_force):
             raise RuntimeError(
                 f"Energy minimization {log_path.name} left non-finite energy or force; "
@@ -241,8 +258,14 @@ class LipidEquilibrationBuilder:
     def _mdrun(self, stage: str, work: Path, *, timeout: int) -> str:
         """Run one MD stage, preferring CUDA but retrying safely on CPU."""
         base = [
-            self.gmx, "mdrun", "-deffnm", stage,
-            "-ntmpi", "1", "-ntomp", str(self.threads),
+            self.gmx,
+            "mdrun",
+            "-deffnm",
+            stage,
+            "-ntmpi",
+            "1",
+            "-ntomp",
+            str(self.threads),
         ]
         if os.environ.get("GMXBUILDER_LIPID_LIBRARY_GPU", "1") == "1":
             try:
@@ -264,9 +287,22 @@ class LipidEquilibrationBuilder:
                 # are never consumed.
                 cpu_stage = stage + "_cpu"
                 self._run(
-                    [self.gmx, "mdrun", "-s", f"{stage}.tpr", "-deffnm", cpu_stage,
-                     "-ntmpi", "1", "-ntomp", str(self.threads),
-                     "-nb", "cpu", "-pme", "cpu"],
+                    [
+                        self.gmx,
+                        "mdrun",
+                        "-s",
+                        f"{stage}.tpr",
+                        "-deffnm",
+                        cpu_stage,
+                        "-ntmpi",
+                        "1",
+                        "-ntomp",
+                        str(self.threads),
+                        "-nb",
+                        "cpu",
+                        "-pme",
+                        "cpu",
+                    ],
                     work,
                     timeout=timeout,
                 )
@@ -285,9 +321,23 @@ class LipidEquilibrationBuilder:
             try:
                 self._run(
                     [
-                        self.gmx, "genion", "-s", "ions.tpr", "-o", "ionized.gro",
-                        "-p", "topol.top", "-neutral", "-conc", "0.15",
-                        "-pname", "NA", "-nname", "CL", "-rmin", f"{rmin:.2f}",
+                        self.gmx,
+                        "genion",
+                        "-s",
+                        "ions.tpr",
+                        "-o",
+                        "ionized.gro",
+                        "-p",
+                        "topol.top",
+                        "-neutral",
+                        "-conc",
+                        "0.15",
+                        "-pname",
+                        "NA",
+                        "-nname",
+                        "CL",
+                        "-rmin",
+                        f"{rmin:.2f}",
                     ],
                     work,
                     input_text="SOL\n",
@@ -307,8 +357,7 @@ class LipidEquilibrationBuilder:
     def _repack_bootstrap_bilayer(system: System, spacing: float = 1.2) -> None:
         """Rigidly place bootstrap lipids on staggered, clash-free lattices."""
         membrane_components = [
-            component for component in system.components
-            if component.kind == ComponentKind.MEMBRANE
+            component for component in system.components if component.kind == ComponentKind.MEMBRANE
         ]
         if len(membrane_components) != 1:
             raise RuntimeError("Offline lipid equilibration requires one membrane component")
@@ -319,11 +368,25 @@ class LipidEquilibrationBuilder:
         if len(sizes) != upper_count + lower_count or min(upper_count, lower_count) <= 0:
             raise RuntimeError("Membrane lipid partition metadata is inconsistent")
         offsets = np.cumsum([0] + sizes)
-        maximum_xy_span = max(
-            float(np.ptp(system.coordinates[offsets[index]:offsets[index + 1], :2], axis=0).max())
+        # A bounding-box span is not rotation invariant.  Two long lipids at
+        # neighbouring grid points can therefore overlap when their tails
+        # point toward each other even if each X/Y span is smaller than the
+        # lattice spacing.  Bound every molecule by its maximum XY radius
+        # about the same centre used for translation; twice the largest
+        # radius plus a margin guarantees a clash-free initial lattice for
+        # any azimuthal orientation.  Gradual rigid-centre precompression then
+        # returns the system to the target APL before solvent is introduced.
+        maximum_xy_radius = max(
+            float(
+                np.linalg.norm(
+                    system.coordinates[offsets[index] : offsets[index + 1], :2]
+                    - system.coordinates[offsets[index] : offsets[index + 1], :2].mean(axis=0),
+                    axis=1,
+                ).max()
+            )
             for index in range(len(sizes))
         )
-        spacing = max(float(spacing), maximum_xy_span + 0.15)
+        spacing = max(float(spacing), 2.0 * maximum_xy_radius + 0.15)
         side = int(np.ceil(np.sqrt(max(upper_count, lower_count))))
         axis = (np.arange(side, dtype=float) - (side - 1) / 2.0) * spacing
         grid = np.asarray([(x, y) for y in axis for x in axis], dtype=float)
@@ -366,16 +429,18 @@ class LipidEquilibrationBuilder:
             system.coordinates[upper_atoms, 2] += additional_z
             system.coordinates[lower_atoms, 2] -= additional_z
         dimensions = system.structure.dimensions()
-        system.structure.box_vectors = np.diag([
-            box_xy, box_xy, float(dimensions[2]) + 2.0 * additional_z + 0.3,
-        ])
+        system.structure.box_vectors = np.diag(
+            [
+                box_xy,
+                box_xy,
+                float(dimensions[2]) + 2.0 * additional_z + 0.3,
+            ]
+        )
 
     @staticmethod
     def _reimage_bilayer_z(system: System) -> None:
         """Move whole lipids to the nearest intended leaflet periodic image."""
-        component = next(
-            item for item in system.components if item.kind == ComponentKind.MEMBRANE
-        )
+        component = next(item for item in system.components if item.kind == ComponentKind.MEMBRANE)
         sizes = [int(value) for value in component.metadata.get("lipid_sizes", [])]
         upper_count = int(component.metadata.get("n_lipids_upper", 0))
         lower_count = int(component.metadata.get("n_lipids_lower", 0))
@@ -420,9 +485,7 @@ class LipidEquilibrationBuilder:
         test_mode: bool,
     ) -> None:
         """Shrink a safe lattice to target APL using rigid-centre EM cycles."""
-        component = next(
-            item for item in system.components if item.kind == ComponentKind.MEMBRANE
-        )
+        component = next(item for item in system.components if item.kind == ComponentKind.MEMBRANE)
         sizes = [int(value) for value in component.metadata["lipid_sizes"]]
         upper_count = int(component.metadata["n_lipids_upper"])
         target_xy = float(np.sqrt(upper_count * target_apl))
@@ -437,9 +500,7 @@ class LipidEquilibrationBuilder:
                 "water_model": water_model,
             },
         ).write_top(system.structure, topology, system_name="Lipid library precompression")
-        (work / "compress.mdp").write_text(
-            self._mdp("em", 1000 if test_mode else 3000, 310.0)
-        )
+        (work / "compress.mdp").write_text(self._mdp("em", 1000 if test_mode else 3000, 310.0))
         offsets = np.cumsum([0] + sizes)
         cycle = 0
         initial_xy = float(GROReader().read(current).dimensions()[0])
@@ -455,19 +516,42 @@ class LipidEquilibrationBuilder:
             cycle += 1
             if cycle > max_cycles:
                 raise RuntimeError(
-                    "Precompression did not reach the target APL in "
-                    f"{max_cycles} cycles"
+                    f"Precompression did not reach the target APL in {max_cycles} cycles"
                 )
             tpr = work / f"compress_{cycle:02d}.tpr"
             deffnm = f"compress_em_{cycle:02d}"
             self._run(
-                [self.gmx, "grompp", "-f", "compress.mdp", "-c", current.name,
-                 "-p", topology.name, "-o", tpr.name, "-maxwarn", "1"],
+                [
+                    self.gmx,
+                    "grompp",
+                    "-f",
+                    "compress.mdp",
+                    "-c",
+                    current.name,
+                    "-p",
+                    topology.name,
+                    "-o",
+                    tpr.name,
+                    "-maxwarn",
+                    "1",
+                ],
                 work,
             )
             self._run(
-                [self.gmx, "mdrun", "-s", tpr.name, "-deffnm", deffnm,
-                 "-ntmpi", "1", "-ntomp", str(self.threads), "-nb", "cpu"],
+                [
+                    self.gmx,
+                    "mdrun",
+                    "-s",
+                    tpr.name,
+                    "-deffnm",
+                    deffnm,
+                    "-ntmpi",
+                    "1",
+                    "-ntomp",
+                    str(self.threads),
+                    "-nb",
+                    "cpu",
+                ],
                 work,
                 timeout=3600,
             )
@@ -479,10 +563,12 @@ class LipidEquilibrationBuilder:
             # rigid-centre increments keep every intermediate EM finite while
             # still reaching the target well within the 24-cycle guard.
             scale = max(target_xy / old_xy, 0.96)
-            molecule_centers = np.asarray([
-                minimized.coordinates[offsets[index]:offsets[index + 1], :2].mean(axis=0)
-                for index in range(len(sizes))
-            ])
+            molecule_centers = np.asarray(
+                [
+                    minimized.coordinates[offsets[index] : offsets[index + 1], :2].mean(axis=0)
+                    for index in range(len(sizes))
+                ]
+            )
             box_center = molecule_centers.mean(axis=0)
             for molecule_index in range(len(sizes)):
                 indices = slice(offsets[molecule_index], offsets[molecule_index + 1])
@@ -490,11 +576,13 @@ class LipidEquilibrationBuilder:
                 target_center = box_center + (center - box_center) * scale
                 minimized.coordinates[indices, :2] += target_center - center
             dimensions = minimized.dimensions()
-            minimized.box_vectors = np.diag([
-                dimensions[0] * scale,
-                dimensions[1] * scale,
-                dimensions[2],
-            ])
+            minimized.box_vectors = np.diag(
+                [
+                    dimensions[0] * scale,
+                    dimensions[1] * scale,
+                    dimensions[2],
+                ]
+            )
             current = work / f"compress_{cycle:02d}.gro"
             GROWriter.write(minimized, current)
 
@@ -502,13 +590,37 @@ class LipidEquilibrationBuilder:
         # therefore needs one final full EM before water is introduced.
         (work / "compress_final.mdp").write_text(self._mdp("em", 5000, 310.0))
         self._run(
-            [self.gmx, "grompp", "-f", "compress_final.mdp", "-c", current.name,
-             "-p", topology.name, "-o", "compress_final.tpr", "-maxwarn", "1"],
+            [
+                self.gmx,
+                "grompp",
+                "-f",
+                "compress_final.mdp",
+                "-c",
+                current.name,
+                "-p",
+                topology.name,
+                "-o",
+                "compress_final.tpr",
+                "-maxwarn",
+                "1",
+            ],
             work,
         )
         self._run(
-            [self.gmx, "mdrun", "-s", "compress_final.tpr", "-deffnm", "compress_final",
-             "-ntmpi", "1", "-ntomp", str(self.threads), "-nb", "cpu"],
+            [
+                self.gmx,
+                "mdrun",
+                "-s",
+                "compress_final.tpr",
+                "-deffnm",
+                "compress_final",
+                "-ntmpi",
+                "1",
+                "-ntomp",
+                str(self.threads),
+                "-nb",
+                "cpu",
+            ],
             work,
             timeout=7200,
         )
@@ -526,9 +638,7 @@ class LipidEquilibrationBuilder:
         **kwargs,
     ) -> Path:
         """Serialize builders for the same library entry across processes."""
-        safe_name = self.library._safe_component(
-            str(lipid_name).strip().upper(), "lipid name"
-        )
+        safe_name = self.library._safe_component(str(lipid_name).strip().upper(), "lipid name")
         safe_force_field = self.library._safe_component(
             str(force_field).strip().lower(), "force field"
         )
@@ -541,9 +651,7 @@ class LipidEquilibrationBuilder:
         with lock_path.open("a+") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
-                return self._build_once(
-                    lipid_name, force_field, lipid_ff, **kwargs
-                )
+                return self._build_once(lipid_name, force_field, lipid_ff, **kwargs)
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
@@ -570,9 +678,7 @@ class LipidEquilibrationBuilder:
         # in a POPC host so extracted conformers experience a sealed bilayer
         # while still providing >=20 molecules per leaflet for validation.
         host_categories = {"ST", "LPC", "DG", "CER", "GM1", "PIP"}
-        host_lipid = (
-            LipidRegistry.get("POPC") if lipid.category in host_categories else None
-        )
+        host_lipid = LipidRegistry.get("POPC") if lipid.category in host_categories else None
         membrane_lipid_names = {name}
         if host_lipid is not None:
             membrane_lipid_names.add(host_lipid.name)
@@ -591,10 +697,7 @@ class LipidEquilibrationBuilder:
                 "seed": 20260713,
             }
             target_apl = 0.60 * host_lipid.area_per_lipid + 0.40 * lipid.area_per_lipid
-            target_dhh = (
-                0.60 * host_lipid.bilayer_thickness
-                + 0.40 * lipid.bilayer_thickness
-            )
+            target_dhh = 0.60 * host_lipid.bilayer_thickness + 0.40 * lipid.bilayer_thickness
         else:
             membrane_config = {
                 "lipid_type": name,
@@ -618,7 +721,9 @@ class LipidEquilibrationBuilder:
         if force_field == "oplsaa":
             raise ValueError("No general OPLS lipid parameterization backend is installed")
         simulation_resnames = _simulation_lipid_resname_map(
-            membrane_lipid_names, force_field, lipid_ff,
+            membrane_lipid_names,
+            force_field,
+            lipid_ff,
         )
 
         output_dir = self.library.entry_dir(name, force_field, lipid_ff, writable=True)
@@ -636,8 +741,12 @@ class LipidEquilibrationBuilder:
                     "seed": 20260713,
                 },
             )
-            membrane = MembraneBuilder(use_equilibrated_library=False).run(
-                initial, membrane_config,
+            membrane = MembraneBuilder(
+                use_equilibrated_library=False,
+                allow_repairable_core_gap=True,
+            ).run(
+                initial,
+                membrane_config,
             )
             if not membrane.success:
                 raise RuntimeError("Bootstrap membrane failed: " + "; ".join(membrane.log))
@@ -651,7 +760,8 @@ class LipidEquilibrationBuilder:
                 test_mode=test_mode,
             )
             solvated = SolvationBuilder().run(
-                membrane.system, {
+                membrane.system,
+                {
                     "water_model": "tip3p",
                     "box_padding": self._solvent_padding(lipid.charge),
                     "seed": 20260713,
@@ -668,44 +778,133 @@ class LipidEquilibrationBuilder:
                     "lipid_ff": lipid_ff,
                     "water_model": "tip3p",
                 },
-            ).write_top(solvated.system.structure, work / "topol.top", system_name=f"{name} library")
+            ).write_top(
+                solvated.system.structure, work / "topol.top", system_name=f"{name} library"
+            )
 
             # Even smoke mode must perform a real minimisation: the bootstrap
             # bilayer is densely packed and a 100-step EM can leave enormous
             # LJ contacts that make an MD smoke test meaningless.
             (work / "em.mdp").write_text(self._mdp("em", 5000, temperature))
-            self._run([self.gmx, "grompp", "-f", "em.mdp", "-c", "solvated.gro", "-p", "topol.top", "-o", "ions.tpr", "-maxwarn", "1"], work)
+            self._run(
+                [
+                    self.gmx,
+                    "grompp",
+                    "-f",
+                    "em.mdp",
+                    "-c",
+                    "solvated.gro",
+                    "-p",
+                    "topol.top",
+                    "-o",
+                    "ions.tpr",
+                    "-maxwarn",
+                    "1",
+                ],
+                work,
+            )
             # The offline library also builds deliberately extreme pure
             # anionic bilayers.  GROMACS' 0.6-nm default can exhaust the thin
             # solvent slabs before all neutralising ions fit; 0.4 nm remains
             # outside normal first-shell contact while allowing those valid
             # high-charge test systems to be neutralised.
             genion_rmin = self._genion_with_retry(work)
-            (work / "ion_em.mdp").write_text(
-                self._ion_minimization_mdp(test_mode=test_mode)
+            (work / "ion_em.mdp").write_text(self._ion_minimization_mdp(test_mode=test_mode))
+            self._run(
+                [
+                    self.gmx,
+                    "grompp",
+                    "-f",
+                    "ion_em.mdp",
+                    "-c",
+                    "ionized.gro",
+                    "-p",
+                    "topol.top",
+                    "-o",
+                    "em.tpr",
+                    "-maxwarn",
+                    "1",
+                ],
+                work,
             )
-            self._run([self.gmx, "grompp", "-f", "ion_em.mdp", "-c", "ionized.gro", "-p", "topol.top", "-o", "em.tpr", "-maxwarn", "1"], work)
-            self._run([
-                self.gmx, "mdrun", "-deffnm", "em",
-                "-ntmpi", "1", "-ntomp", str(self.threads),
-            ], work)
+            self._run(
+                [
+                    self.gmx,
+                    "mdrun",
+                    "-deffnm",
+                    "em",
+                    "-ntmpi",
+                    "1",
+                    "-ntomp",
+                    str(self.threads),
+                ],
+                work,
+            )
             self._assert_finite_minimization(work / "em.log")
 
             nvt_steps = 100 if test_mode else 50000
             npt_steps = 250 if test_mode else max(50000, int(npt_ps * 500.0))
             (work / "nvt.mdp").write_text(self._mdp("nvt", nvt_steps, temperature))
             (work / "npt.mdp").write_text(self._mdp("npt", npt_steps, temperature))
-            self._run([self.gmx, "grompp", "-f", "nvt.mdp", "-c", "em.gro", "-p", "topol.top", "-o", "nvt.tpr", "-maxwarn", "1"], work)
+            self._run(
+                [
+                    self.gmx,
+                    "grompp",
+                    "-f",
+                    "nvt.mdp",
+                    "-c",
+                    "em.gro",
+                    "-p",
+                    "topol.top",
+                    "-o",
+                    "nvt.tpr",
+                    "-maxwarn",
+                    "1",
+                ],
+                work,
+            )
             nvt_output = self._mdrun("nvt", work, timeout=3600)
-            self._run([self.gmx, "grompp", "-f", "npt.mdp", "-c", f"{nvt_output}.gro", "-p", "topol.top", "-o", "npt.tpr", "-maxwarn", "1"], work)
+            self._run(
+                [
+                    self.gmx,
+                    "grompp",
+                    "-f",
+                    "npt.mdp",
+                    "-c",
+                    f"{nvt_output}.gro",
+                    "-p",
+                    "topol.top",
+                    "-o",
+                    "npt.tpr",
+                    "-maxwarn",
+                    "1",
+                ],
+                work,
+            )
             npt_output = self._mdrun(
-                "npt", work, timeout=7200 if test_mode else 172800,
+                "npt",
+                work,
+                timeout=7200 if test_mode else 172800,
             )
 
             whole = work / "whole.gro"
             self._run(
-                [self.gmx, "trjconv", "-s", "npt.tpr", "-f", f"{npt_output}.gro", "-o", str(whole), "-pbc", "mol", "-center"],
-                work, input_text="System\nSystem\n", timeout=600,
+                [
+                    self.gmx,
+                    "trjconv",
+                    "-s",
+                    "npt.tpr",
+                    "-f",
+                    f"{npt_output}.gro",
+                    "-o",
+                    str(whole),
+                    "-pbc",
+                    "mol",
+                    "-center",
+                ],
+                work,
+                input_text="System\nSystem\n",
+                timeout=600,
             )
             structure = GROReader().read(whole)
             validation_groups: list[list[int]] = []
@@ -714,7 +913,8 @@ class LipidEquilibrationBuilder:
             for index, (resname, resid) in enumerate(zip(structure.resnames, structure.resids)):
                 key = (resname, resid)
                 canonical_resname = simulation_resnames.get(
-                    str(resname).strip().upper(), str(resname).strip().upper(),
+                    str(resname).strip().upper(),
+                    str(resname).strip().upper(),
                 )
                 if canonical_resname not in membrane_lipid_names:
                     if current:
@@ -730,13 +930,10 @@ class LipidEquilibrationBuilder:
             if current:
                 validation_groups.append(current)
             if len(validation_groups) % 2:
-                raise RuntimeError(
-                    "Equilibrated membrane has an odd number of lipid molecules"
-                )
+                raise RuntimeError("Equilibrated membrane has an odd number of lipid molecules")
             leaflet_split = len(validation_groups) // 2
             validation_records = [
-                (indices, index < leaflet_split)
-                for index, indices in enumerate(validation_groups)
+                (indices, index < leaflet_split) for index, indices in enumerate(validation_groups)
             ]
             target_records = [
                 (indices, upper_leaflet)
@@ -744,7 +941,8 @@ class LipidEquilibrationBuilder:
                 if simulation_resnames.get(
                     str(structure.resnames[indices[0]]).strip().upper(),
                     str(structure.resnames[indices[0]]).strip().upper(),
-                ) == name
+                )
+                == name
             ]
             if len(target_records) < MIN_CONFORMERS * 2:
                 raise RuntimeError(
@@ -760,7 +958,9 @@ class LipidEquilibrationBuilder:
                 coords = structure.coordinates[indices].copy()
                 atom_names = [structure.atom_names[index].strip() for index in indices]
                 anchor_index, _ = _outer_headgroup_anchor(
-                    coords, atom_names, box_z / 2.0,
+                    coords,
+                    atom_names,
+                    box_z / 2.0,
                     upper_leaflet=upper_leaflet,
                 )
                 leaflet_flags.append(upper_leaflet)
@@ -773,7 +973,9 @@ class LipidEquilibrationBuilder:
                 # leaflet frame.  This rigid rotation preserves the NPT
                 # internal geometry while making the on-disk contract explicit.
                 coords = orient_lipid_to_outward_normal(
-                    coords, atom_names, upper=True,
+                    coords,
+                    atom_names,
+                    upper=True,
                 )
                 coords -= coords[anchor_index]
                 prepared.append((coords, atom_names))
@@ -783,10 +985,12 @@ class LipidEquilibrationBuilder:
                 raise RuntimeError("Extracted lipid atom order is inconsistent")
             # Deterministic, even sampling from both leaflets.
             selected = np.linspace(0, len(prepared) - 1, 50, dtype=int)
-            staging = Path(tempfile.mkdtemp(
-                prefix=f".{output_dir.name}.building-",
-                dir=output_dir.parent,
-            ))
+            staging = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{output_dir.name}.building-",
+                    dir=output_dir.parent,
+                )
+            )
             for number, index in enumerate(selected):
                 coords, names = prepared[int(index)]
                 np.savez_compressed(
@@ -798,15 +1002,14 @@ class LipidEquilibrationBuilder:
             box_dimensions = structure.dimensions()
             upper_count = int(sum(leaflet_flags))
             lower_count = len(leaflet_flags) - upper_count
-            area_per_lipid = float(
-                box_dimensions[0] * box_dimensions[1] / 64.0
-            )
+            area_per_lipid = float(box_dimensions[0] * box_dimensions[1] / 64.0)
             expected_apl = target_apl
             apl_ratio = area_per_lipid / expected_apl
             head_z = np.asarray([position[2] for position in anchor_positions], dtype=float)
             flags = np.asarray(leaflet_flags, dtype=bool)
             upper_heads = head_z[flags]
             lower_heads = head_z[~flags]
+
             def _circular_mean(values: np.ndarray) -> float:
                 angles = values * (2.0 * np.pi / float(box_dimensions[2]))
                 angle = float(np.arctan2(np.sin(angles).mean(), np.cos(angles).mean()))
@@ -831,14 +1034,14 @@ class LipidEquilibrationBuilder:
             lower_tail_z: list[np.ndarray] = []
             for indices, validation_upper in validation_records:
                 validation_coords = structure.coordinates[indices]
-                validation_names = [
-                    structure.atom_names[index].strip() for index in indices
-                ]
+                validation_names = [structure.atom_names[index].strip() for index in indices]
                 validation_profile = infer_lipid_orientation(
-                    validation_coords, validation_names,
+                    validation_coords,
+                    validation_names,
                 )
                 validation_projection, validation_cosine = outward_orientation(
-                    validation_profile, upper=validation_upper,
+                    validation_profile,
+                    upper=validation_upper,
                 )
                 validation_projections.append(validation_projection)
                 validation_cosines.append(validation_cosine)
@@ -883,8 +1086,7 @@ class LipidEquilibrationBuilder:
                 & (gate_cosines >= MIN_INWARD_COSINE)
             )
             oriented_fraction = (
-                float(gate_orientation_valid.mean())
-                if len(gate_orientation_valid) else 0.0
+                float(gate_orientation_valid.mean()) if len(gate_orientation_valid) else 0.0
             )
             if upper_tail_z and lower_tail_z:
                 upper_inner = float(np.percentile(np.concatenate(upper_tail_z), 1.0))
@@ -892,10 +1094,7 @@ class LipidEquilibrationBuilder:
                 tail_core_gap = upper_inner - lower_inner
             else:
                 tail_core_gap = float("nan")
-            core_passed = bool(
-                np.isfinite(tail_core_gap)
-                and tail_core_gap <= MAX_TAIL_CORE_GAP_NM
-            )
+            core_passed = bool(np.isfinite(tail_core_gap) and tail_core_gap <= MAX_TAIL_CORE_GAP_NM)
             production_quality = (
                 not test_mode
                 and npt_steps * 0.002 >= 500.0
@@ -909,9 +1108,7 @@ class LipidEquilibrationBuilder:
                 "schema_version": SCHEMA_VERSION,
                 "coordinate_handedness": "preserved",
                 "leaflet_transform": "proper_rotation",
-                "status": (
-                    "ready" if test_mode or production_quality else "failed"
-                ),
+                "status": ("ready" if test_mode or production_quality else "failed"),
                 "method": ACCEPTED_METHOD,
                 "lipid_name": name,
                 "canonical_smiles": lipid.smiles,
@@ -932,14 +1129,15 @@ class LipidEquilibrationBuilder:
                         "ratio_percent": 60,
                         "target_ratio_percent": 40,
                     }
-                    if host_lipid is not None else None
+                    if host_lipid is not None
+                    else None
                 ),
                 "quality": {
                     "passed": bool(production_quality),
                     "reason": (
                         "APL, DHH, ensemble lipid orientation and hydrophobic-core seal passed production NPT gates"
-                        if production_quality else
-                        "test mode or a production APL/DHH/orientation/core-seal gate failed"
+                        if production_quality
+                        else "test mode or a production APL/DHH/orientation/core-seal gate failed"
                     ),
                     "area_per_lipid_nm2": area_per_lipid,
                     "expected_area_per_lipid_nm2": expected_apl,
@@ -958,8 +1156,7 @@ class LipidEquilibrationBuilder:
                         "upper_lipids": upper_count,
                         "lower_lipids": lower_count,
                         "minimum_inward_projection_nm": (
-                            float(gate_projections.min())
-                            if len(gate_projections) else None
+                            float(gate_projections.min()) if len(gate_projections) else None
                         ),
                         "minimum_inward_cosine": (
                             float(gate_cosines.min()) if len(gate_cosines) else None

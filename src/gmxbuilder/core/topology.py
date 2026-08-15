@@ -71,6 +71,7 @@ class Improper:
 @dataclass
 class Pair:
     """1-4 non-bonded interaction pair."""
+
     i: int
     j: int
     funct: int = 1
@@ -182,4 +183,5 @@ class Topology:
 
     def copy(self) -> Topology:
         import copy
+
         return copy.deepcopy(self)

@@ -11,9 +11,7 @@ def test_resume_reparses_pdb_for_structure_step(tmp_path, monkeypatch, small_pdb
     """Resume must restore the residue sequence consumed by Step 3."""
     monkeypatch.setattr(server.task_manager, "root", tmp_path)
     task = server.task_manager.create_task(filename="input.pdb")
-    server.task_manager.save_uploaded_pdb(
-        task["task_id"], "input.pdb", small_pdb_file.read_bytes()
-    )
+    server.task_manager.save_uploaded_pdb(task["task_id"], "input.pdb", small_pdb_file.read_bytes())
     server.task_manager.update_state(
         task["task_id"],
         {"pdb_info": {"filename": "input.pdb"}},

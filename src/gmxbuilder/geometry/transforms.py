@@ -52,11 +52,13 @@ def rotation_matrix_from_axis_angle(axis: np.ndarray, angle: float) -> np.ndarra
     s = np.sin(angle)
     x, y, z = axis
 
-    return np.array([
-        [c + x * x * (1 - c),     x * y * (1 - c) - z * s, x * z * (1 - c) + y * s],
-        [y * x * (1 - c) + z * s, c + y * y * (1 - c),     y * z * (1 - c) - x * s],
-        [z * x * (1 - c) - y * s, z * y * (1 - c) + x * s, c + z * z * (1 - c)    ],
-    ])
+    return np.array(
+        [
+            [c + x * x * (1 - c), x * y * (1 - c) - z * s, x * z * (1 - c) + y * s],
+            [y * x * (1 - c) + z * s, c + y * y * (1 - c), y * z * (1 - c) - x * s],
+            [z * x * (1 - c) - y * s, z * y * (1 - c) + x * s, c + z * z * (1 - c)],
+        ]
+    )
 
 
 def rotation_matrix_from_euler(phi: float, theta: float, psi: float) -> np.ndarray:
@@ -65,11 +67,13 @@ def rotation_matrix_from_euler(phi: float, theta: float, psi: float) -> np.ndarr
     c2, s2 = np.cos(theta), np.sin(theta)
     c3, s3 = np.cos(psi), np.sin(psi)
 
-    return np.array([
-        [c1 * c2 * c3 - s1 * s3,  -c1 * c2 * s3 - s1 * c3,  c1 * s2],
-        [s1 * c2 * c3 + c1 * s3,  -s1 * c2 * s3 + c1 * c3,  s1 * s2],
-        [-s2 * c3,                 s2 * s3,                  c2     ],
-    ])
+    return np.array(
+        [
+            [c1 * c2 * c3 - s1 * s3, -c1 * c2 * s3 - s1 * c3, c1 * s2],
+            [s1 * c2 * c3 + c1 * s3, -s1 * c2 * s3 + c1 * c3, s1 * s2],
+            [-s2 * c3, s2 * s3, c2],
+        ]
+    )
 
 
 def align_principal_axis(
@@ -91,5 +95,6 @@ def align_principal_axis(
     rotation_matrix : (3, 3) ndarray
     """
     from gmxbuilder.geometry.align import compute_principal_axes
+
     principal = compute_principal_axes(coords)
     return rotation_matrix_from_vectors(principal, np.asarray(target_axis))

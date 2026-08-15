@@ -30,17 +30,13 @@ def _ligand_system() -> System:
     )
     return System(
         structure=structure,
-        components=[
-            Component("SMALL_MOLECULES", ComponentKind.LIGAND, np.array([0, 1]))
-        ],
+        components=[Component("SMALL_MOLECULES", ComponentKind.LIGAND, np.array([0, 1]))],
     )
 
 
 def test_small_molecule_label_validation_rejects_ambiguous_names():
     try:
-        _normalise_small_molecule_labels(
-            {"AMP": "ligand", "LIG": "LIGAND"}, {"AMP", "LIG"}
-        )
+        _normalise_small_molecule_labels({"AMP": "ligand", "LIG": "LIGAND"}, {"AMP", "LIG"})
     except ValueError as exc:
         assert "used for both" in str(exc)
     else:
@@ -71,9 +67,7 @@ def test_label_persists_and_is_returned_by_forcefield_report(tmp_path, monkeypat
             json={"protein_ff": "amber14sb", "lipid_names": []},
         )
 
-    assert task_manager.get_state(task_id)["small_molecule_labels"] == {
-        "AMP": "Adenosine ligand"
-    }
+    assert task_manager.get_state(task_id)["small_molecule_labels"] == {"AMP": "Adenosine ligand"}
     assert report.status_code == 200, report.text
     payload = report.json()
     assert payload["ligand_names"] == ["AMP"]

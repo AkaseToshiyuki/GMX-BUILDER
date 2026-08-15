@@ -464,20 +464,34 @@ body {
   display: flex; gap: 0; border-radius: var(--radius);
   overflow: hidden; border: 1px solid var(--border);
 }
-.orient-tab {
+.orient-tab,
+.cg-orient-tab {
   flex: 1; padding: 10px 16px; border: none; background: var(--surface);
   font-size: 13px; font-family: inherit; cursor: pointer;
   transition: background .15s; color: var(--text-muted);
 }
-.orient-tab:first-child { border-right: 1px solid var(--border); }
-.orient-tab.active { background: #eff6ff; color: var(--primary); font-weight: 600; }
-.orient-tab:hover:not(.active) { background: #f8fafc; }
+.orient-tab:first-child,
+.cg-orient-tab:first-child { border-right: 1px solid var(--border); }
+.orient-tab.active,
+.cg-orient-tab.active { background: #eff6ff; color: var(--primary); font-weight: 600; }
+.orient-tab:hover:not(.active),
+.cg-orient-tab:hover:not(.active) { background: #f8fafc; }
 .orient-auto-result { margin-top: 8px; }
 .orient-auto-result table { width: 100%; }
 .orient-auto-result td { padding: 6px 10px; font-size: 13px; }
 .orient-auto-result td:first-child { font-weight: 600; color: var(--text-muted); width: 100px; }
 .orient-controls { display: flex; gap: 16px; margin-top: 8px; }
 .orient-controls .field { flex: 1; }
+.readonly-field {
+  min-height: 42px; display: flex; align-items: center; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: var(--text);
+}
+.slider-with-input { display: flex; align-items: center; gap: 10px; }
+.slider-with-input input[type="range"] { flex: 1; min-width: 100px; }
+@media (max-width: 820px) {
+  .orient-controls { flex-direction: column; }
+}
 
 /* Lipid composition editor */
 .lipid-composition { margin-top: 4px; }

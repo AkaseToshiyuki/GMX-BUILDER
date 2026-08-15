@@ -32,13 +32,9 @@ def test_explicit_smiles_stereochemistry_seeds_rtp_ordered_coordinates():
     Chem.AssignStereochemistry(reference, cleanIt=True, force=True)
 
     expected = [
-        atom.GetProp("_CIPCode") for atom in reference.GetAtoms()
-        if atom.HasProp("_CIPCode")
+        atom.GetProp("_CIPCode") for atom in reference.GetAtoms() if atom.HasProp("_CIPCode")
     ]
-    observed = [
-        atom.GetProp("_CIPCode") for atom in target.GetAtoms()
-        if atom.HasProp("_CIPCode")
-    ]
+    observed = [atom.GetProp("_CIPCode") for atom in target.GetAtoms() if atom.HasProp("_CIPCode")]
     assert observed == expected == ["S"]
 
 
@@ -62,7 +58,10 @@ def test_gm1_registry_is_deprotonated_d18_1_18_0_identity():
     assert Descriptors.MolWt(molecule) == pytest.approx(lipid.mass, abs=0.01)
 
     coords, names = build_rdkit_lipid_geometry(
-        "GM1", lipid.smiles, force_field="charmm36m", seed=7,
+        "GM1",
+        lipid.smiles,
+        force_field="charmm36m",
+        seed=7,
     )
     assert coords.shape == (237, 3)
     assert len(names) == len(set(names)) == 237
@@ -96,7 +95,10 @@ def test_rdkit_lipid_matches_charmm_rtp(lipid_name):
 def test_charmm_identity_alias_builds_exact_rtp_geometry(lipid_name, template_name):
     lipid = LipidRegistry.get(lipid_name)
     coords, names = build_rdkit_lipid_geometry(
-        lipid_name, lipid.smiles, force_field="charmm36m", seed=0,
+        lipid_name,
+        lipid.smiles,
+        force_field="charmm36m",
+        seed=0,
         net_charge=lipid.charge,
     )
     template = load_force_field_rtp("charmm36m").get_residue(template_name)
@@ -114,7 +116,10 @@ def test_modular_charmm_lipid_builds_exact_generated_geometry(lipid_name):
 
     lipid = LipidRegistry.get(lipid_name)
     coords, names = build_rdkit_lipid_geometry(
-        lipid_name, lipid.smiles, force_field="charmm36m", seed=0,
+        lipid_name,
+        lipid.smiles,
+        force_field="charmm36m",
+        seed=0,
         net_charge=lipid.charge,
     )
     _template_name, template = lipid_rtp_template(lipid_name, "charmm36m")
@@ -126,6 +131,7 @@ def test_rdkit_builds_geometry_without_rtp(monkeypatch, tmp_path):
     monkeypatch.setenv("GMXBUILDER_GAFF_CHARGE_METHOD", "gas")
     monkeypatch.setenv("GMXBUILDER_GAFF_CACHE", str(tmp_path))
     from gmxbuilder.geometry import rdkit_lipid
+
     rdkit_lipid._build_cached.cache_clear()
     lipid = LipidRegistry.get("CAMP")
     coords, names = build_rdkit_lipid_geometry("CAMP", lipid.smiles, seed=0)
@@ -144,10 +150,13 @@ def test_oxysterol_orientation_uses_ring_hydroxyl_head(monkeypatch, tmp_path, li
     template = prepare_gaff_lipid(lipid_name, lipid.smiles, lipid.charge)
     profile = infer_lipid_orientation(template.coordinates, template.atom_names)
     oriented = orient_lipid_to_outward_normal(
-        template.coordinates, template.atom_names, upper=True,
+        template.coordinates,
+        template.atom_names,
+        upper=True,
     )
     projection, cosine = outward_orientation(
-        infer_lipid_orientation(oriented, template.atom_names), upper=True,
+        infer_lipid_orientation(oriented, template.atom_names),
+        upper=True,
     )
 
     if lipid_name in {"22RHC", "27OHC"}:
@@ -167,17 +176,20 @@ def test_spread_selection_avoids_adjacent_dense_grid_points():
 
 
 def test_spread_selection_treats_opposite_periodic_faces_as_neighbours():
-    points = np.asarray([
-        [-2.95, 0.0], [2.95, 0.0], [0.0, 0.0],
-        [0.0, 2.0], [0.0, -2.0],
-    ])
-    chosen = _select_spread_positions(
-        points, 3, np.random.default_rng(3), box_xy=6.0
+    points = np.asarray(
+        [
+            [-2.95, 0.0],
+            [2.95, 0.0],
+            [0.0, 0.0],
+            [0.0, 2.0],
+            [0.0, -2.0],
+        ]
     )
+    chosen = _select_spread_positions(points, 3, np.random.default_rng(3), box_xy=6.0)
     selected = points[chosen]
     periodic_distances = []
     for index, first in enumerate(selected):
-        for second in selected[index + 1:]:
+        for second in selected[index + 1 :]:
             delta = first - second
             delta -= 6.0 * np.round(delta / 6.0)
             periodic_distances.append(np.linalg.norm(delta))
@@ -188,7 +200,10 @@ def test_spread_selection_treats_opposite_periodic_faces_as_neighbours():
 def test_gaff_tail_alignment_never_introduces_intramolecular_overlap():
     lipid = LipidRegistry.get("DPPS")
     coords, names = build_rdkit_lipid_geometry(
-        "DPPS", lipid.smiles, force_field="amber14sb", seed=0,
+        "DPPS",
+        lipid.smiles,
+        force_field="amber14sb",
+        seed=0,
         net_charge=lipid.charge,
     )
 
@@ -212,7 +227,10 @@ def test_rtp_tail_alignment_falls_back_when_it_creates_overlap(monkeypatch):
     monkeypatch.setattr(module, "_align_tail_subtrees", collapsed)
     lipid = LipidRegistry.get("POPC")
     coords, names = module.build_rdkit_lipid_geometry(
-        "POPC", lipid.smiles, force_field="charmm36m", seed=928,
+        "POPC",
+        lipid.smiles,
+        force_field="charmm36m",
+        seed=928,
     )
 
     assert not module._has_intramolecular_overlap(coords)
@@ -242,7 +260,10 @@ def test_phospholipid_conformations_are_not_all_trans_rods(lipid_name):
 def test_charmm_sphingomyelin_tails_are_extended_and_inward(lipid_name):
     lipid = LipidRegistry.get(lipid_name)
     coords, names = build_rdkit_lipid_geometry(
-        lipid_name, lipid.smiles, force_field="charmm36m", seed=0,
+        lipid_name,
+        lipid.smiles,
+        force_field="charmm36m",
+        seed=0,
     )
     index = {name: number for number, name in enumerate(names)}
     f_terminal = max(

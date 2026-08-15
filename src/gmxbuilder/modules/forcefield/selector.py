@@ -32,8 +32,18 @@ class ForceFieldSelector(BaseModule):
     def validate_config(self, config: dict) -> bool:
         self.validate_config_keys(
             config,
-            {"name", "lipid_names", "lipid_ff", "ligand_ff", "ligand_charges", "ligand_pH",
-             "cgenff_parameters", "water_model", "system_name", "seed"},
+            {
+                "name",
+                "lipid_names",
+                "lipid_ff",
+                "ligand_ff",
+                "ligand_charges",
+                "ligand_pH",
+                "cgenff_parameters",
+                "water_model",
+                "system_name",
+                "seed",
+            },
         )
         name = config.get("name", self._DEFAULT_FF)
         if not isinstance(name, str):
@@ -42,6 +52,7 @@ class ForceFieldSelector(BaseModule):
         if not name:
             raise ModuleConfigError("Force field name must not be empty")
         from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
+
         if name.lower() not in ForceFieldRegistry.list():
             available = ", ".join(ForceFieldRegistry.list())
             raise ModuleConfigError(
@@ -53,6 +64,7 @@ class ForceFieldSelector(BaseModule):
                 WaterRegistry,
                 water_model_supported,
             )
+
             water_name = str(configured_water).strip().lower()
             try:
                 WaterRegistry.get(water_name)
@@ -60,8 +72,7 @@ class ForceFieldSelector(BaseModule):
                 raise ModuleConfigError(str(exc)) from exc
             if not water_model_supported(name, water_name):
                 raise ModuleConfigError(
-                    f"Water model {water_name!r} is not bundled for force "
-                    f"field {name!r}"
+                    f"Water model {water_name!r} is not bundled for force field {name!r}"
                 )
         lipid_names = config.get("lipid_names", [])
         if not isinstance(lipid_names, (list, tuple)) or not all(
@@ -100,8 +111,13 @@ class ForceFieldSelector(BaseModule):
         if system_name is not None:
             if not isinstance(system_name, str) or not system_name.strip():
                 raise ModuleConfigError("system_name must be a non-empty string")
-            if any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in system_name):
-                raise ModuleConfigError("system_name may contain only letters, numbers, '_' and '-'")
+            if any(
+                ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                for ch in system_name
+            ):
+                raise ModuleConfigError(
+                    "system_name may contain only letters, numbers, '_' and '-'"
+                )
         return True
 
     def run(self, system: System, config: dict) -> ModuleResult:
@@ -125,11 +141,13 @@ class ForceFieldSelector(BaseModule):
                     f"Nucleic-acid force-field selection is unavailable: "
                     f"{capability_reason}. Select CHARMM36m."
                 )
-            unsupported = sorted({
-                str(residue)
-                for component in nucleic_components
-                for residue in component.metadata.get("unsupported_residues", [])
-            })
+            unsupported = sorted(
+                {
+                    str(residue)
+                    for component in nucleic_components
+                    for residue in component.metadata.get("unsupported_residues", [])
+                }
+            )
             if unsupported:
                 raise ModuleConfigError(
                     "Modified or noncanonical nucleotide residue(s) require an "
@@ -137,8 +155,7 @@ class ForceFieldSelector(BaseModule):
                     "converted to canonical chemistry: " + ", ".join(unsupported)
                 )
             polymer_types = {
-                str(component.metadata.get("polymer_type", ""))
-                for component in nucleic_components
+                str(component.metadata.get("polymer_type", "")) for component in nucleic_components
             }
             if "modified" in polymer_types:
                 raise ModuleConfigError(
@@ -151,8 +168,7 @@ class ForceFieldSelector(BaseModule):
                     str(component.metadata.get("polymer_type", ""))
                 )
             hybrid_chains = sorted(
-                chain or "?" for chain, types in types_by_chain.items()
-                if len(types) > 1
+                chain or "?" for chain, types in types_by_chain.items() if len(types) > 1
             )
             if hybrid_chains:
                 raise ModuleConfigError(
@@ -174,7 +190,9 @@ class ForceFieldSelector(BaseModule):
         if not isinstance(lipid_names, (list, tuple)):
             raise ModuleConfigError("forcefield.lipid_names must be a list")
         from gmxbuilder.modules.forcefield.compatibility import (
-            compatibility_report, enabled_values, molecule_groups,
+            compatibility_report,
+            enabled_values,
+            molecule_groups,
         )
 
         report = compatibility_report(system, requested_ff, lipid_names)
@@ -183,7 +201,8 @@ class ForceFieldSelector(BaseModule):
         ligand_ff = str(config.get("ligand_ff", "none" if not ligand_names else "")).lower()
         if lipid_ff not in enabled_values(report["lipid_options"]):
             reasons = "; ".join(
-                option.get("reason", "") for option in report["lipid_options"]
+                option.get("reason", "")
+                for option in report["lipid_options"]
                 if option.get("reason")
             )
             raise ModuleConfigError(
@@ -192,7 +211,8 @@ class ForceFieldSelector(BaseModule):
             )
         if ligand_ff not in enabled_values(report["ligand_options"]):
             reasons = "; ".join(
-                option.get("reason", "") for option in report["ligand_options"]
+                option.get("reason", "")
+                for option in report["ligand_options"]
                 if option.get("reason")
             )
             raise ModuleConfigError(
@@ -203,7 +223,9 @@ class ForceFieldSelector(BaseModule):
         system = system.copy()
         ligand_parameters: dict[str, dict] = {}
         if ligand_ff == "gaff2":
-            charges = {str(name).upper(): value for name, value in config.get("ligand_charges", {}).items()}
+            charges = {
+                str(name).upper(): value for name, value in config.get("ligand_charges", {}).items()
+            }
             missing_charges = [name for name in ligand_names if name not in charges]
             if missing_charges:
                 raise ModuleConfigError(
@@ -212,7 +234,9 @@ class ForceFieldSelector(BaseModule):
                 )
             ligand_pH = float(config.get("ligand_pH", 7.0))
             system, ligand_parameters = self._parameterize_gaff2_ligands(
-                system, charges, ligand_pH,
+                system,
+                charges,
+                ligand_pH,
             )
         elif ligand_ff == "rtp":
             system, ligand_parameters = self._prepare_rtp_ligands(system, requested_ff)
@@ -225,11 +249,12 @@ class ForceFieldSelector(BaseModule):
             if missing_packages:
                 raise ModuleConfigError(
                     "Input molecule(s) are incompatible with CGenFF until the matching "
-                    "ParamChem MOL2 and STR files are uploaded: "
-                    + ", ".join(missing_packages)
+                    "ParamChem MOL2 and STR files are uploaded: " + ", ".join(missing_packages)
                 )
             system, ligand_parameters = self._parameterize_cgenff_ligands(
-                system, packages, requested_ff,
+                system,
+                packages,
+                requested_ff,
             )
             high_penalty = {
                 name: float(parameters["maximum_penalty"])
@@ -269,6 +294,7 @@ class ForceFieldSelector(BaseModule):
         system.metadata["force_field"] = ff_name
         system.metadata["requested_force_field"] = requested_ff
         from gmxbuilder.modules.forcefield.catalog import get_force_field_profile
+
         profile = get_force_field_profile(ff_name)
         system.metadata["force_field_release"] = profile.release
         system.metadata["force_field_family"] = profile.family
@@ -278,11 +304,13 @@ class ForceFieldSelector(BaseModule):
         system.metadata["ligand_ff"] = ligand_ff
         system.metadata["gaff_lipids"] = (
             sorted({str(name).strip().upper() for name in lipid_names})
-            if lipid_ff == "gaff2" else []
+            if lipid_ff == "gaff2"
+            else []
         )
         system.metadata["lipid21_lipids"] = (
             sorted({str(name).strip().upper() for name in lipid_names})
-            if lipid_ff == "lipid21" else []
+            if lipid_ff == "lipid21"
+            else []
         )
         system.metadata["selected_lipid_names"] = sorted(
             {str(name).strip().upper() for name in lipid_names}
@@ -316,8 +344,7 @@ class ForceFieldSelector(BaseModule):
             )
         if lipid_ff == "gaff2":
             log.append(
-                f"Compatibility policy: protein force field {ff_name}; "
-                "selected lipids use GAFF2"
+                f"Compatibility policy: protein force field {ff_name}; selected lipids use GAFF2"
             )
         elif lipid_ff == "lipid21":
             log.append(
@@ -341,12 +368,12 @@ class ForceFieldSelector(BaseModule):
         )
 
     @staticmethod
-    def _kabsch_transform(source: np.ndarray, target: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
+    def _kabsch_transform(
+        source: np.ndarray, target: np.ndarray, coordinates: np.ndarray
+    ) -> np.ndarray:
         source_center = source.mean(axis=0)
         target_center = target.mean(axis=0)
-        u, _singular, vt = np.linalg.svd(
-            (source - source_center).T @ (target - target_center)
-        )
+        u, _singular, vt = np.linalg.svd((source - source_center).T @ (target - target_center))
         rotation = u @ vt
         if np.linalg.det(rotation) < 0:
             u[:, -1] *= -1
@@ -355,7 +382,10 @@ class ForceFieldSelector(BaseModule):
 
     @classmethod
     def _parameterize_gaff2_ligands(
-        cls, system: System, charges: dict[str, int], target_pH: float,
+        cls,
+        system: System,
+        charges: dict[str, int],
+        target_pH: float,
     ):
         from gmxbuilder.core.component import Component
         from gmxbuilder.core.structure import Structure
@@ -365,22 +395,38 @@ class ForceFieldSelector(BaseModule):
         groups = molecule_groups(system)
         templates = {
             name: prepare_gaff_molecule(
-                name, system.structure, instances[0], charges[name], target_pH=target_pH,
+                name,
+                system.structure,
+                instances[0],
+                charges[name],
+                target_pH=target_pH,
             )
             for name, instances in groups.items()
         }
         instance_by_first = {
             indices[0]: (name, indices)
-            for name, instances in groups.items() for indices in instances
+            for name, instances in groups.items()
+            for indices in instances
         }
-        instance_atoms = {index for _name, indices in instance_by_first.values() for index in indices}
+        instance_atoms = {
+            index for _name, indices in instance_by_first.values() for index in indices
+        }
         old_to_new: dict[int, int] = {}
         ligand_new_indices: list[int] = []
         coords: list[np.ndarray] = []
-        fields = {key: [] for key in (
-            "atom_names", "resnames", "resids", "chain_ids", "segids",
-            "elements", "occupancies", "tempfactors",
-        )}
+        fields = {
+            key: []
+            for key in (
+                "atom_names",
+                "resnames",
+                "resids",
+                "chain_ids",
+                "segids",
+                "elements",
+                "occupancies",
+                "tempfactors",
+            )
+        }
 
         def append_old(index: int):
             old_to_new[index] = len(coords)
@@ -397,10 +443,13 @@ class ForceFieldSelector(BaseModule):
         for index in sorted(instance_by_first):
             name, indices = instance_by_first[index]
             template = templates[name]
-            if tuple(system.structure.atom_names[i].strip() for i in indices) != template.atom_names[:len(indices)]:
+            if (
+                tuple(system.structure.atom_names[i].strip() for i in indices)
+                != template.atom_names[: len(indices)]
+            ):
                 raise ModuleConfigError(f"GAFF2 atom order mismatch for {name}")
             transformed = cls._kabsch_transform(
-                template.coordinates[:len(indices)],
+                template.coordinates[: len(indices)],
                 system.structure.coordinates[indices],
                 template.coordinates,
             )
@@ -434,22 +483,30 @@ class ForceFieldSelector(BaseModule):
             if component.kind == ComponentKind.UNKNOWN:
                 continue
             mapped = [old_to_new[int(index)] for index in component.atom_indices]
-            new_components.append(Component(
-                name=component.name, kind=component.kind,
-                atom_indices=np.asarray(mapped, dtype=int), metadata=dict(component.metadata),
-            ))
-        new_components.append(Component(
-            name="LIGANDS", kind=ComponentKind.LIGAND,
-            atom_indices=np.asarray(sorted(ligand_new_indices), dtype=int),
-            metadata={
-                "molecule_charges": dict(charges),
-                "n_molecules": sum(len(instances) for instances in groups.values()),
-            },
-        ))
+            new_components.append(
+                Component(
+                    name=component.name,
+                    kind=component.kind,
+                    atom_indices=np.asarray(mapped, dtype=int),
+                    metadata=dict(component.metadata),
+                )
+            )
+        new_components.append(
+            Component(
+                name="LIGANDS",
+                kind=ComponentKind.LIGAND,
+                atom_indices=np.asarray(sorted(ligand_new_indices), dtype=int),
+                metadata={
+                    "molecule_charges": dict(charges),
+                    "n_molecules": sum(len(instances) for instances in groups.values()),
+                },
+            )
+        )
         system.components = new_components
         parameters = {
             name: {
-                "source": "gaff2", "net_charge": int(charges[name]),
+                "source": "gaff2",
+                "net_charge": int(charges[name]),
                 "charge_method": templates[name].charge_method,
                 "molecule_type": templates[name].name,
                 "itp_path": str(templates[name].itp_path),
@@ -472,6 +529,7 @@ class ForceFieldSelector(BaseModule):
         # loader removes hydrogens, so a later enhancement must add them from
         # the matching HDB before enabling this path.
         from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+
         rtp = load_force_field_rtp(force_field)
         for name, instances in groups.items():
             expected = {atom[0].strip() for atom in rtp.get_residue(name)["atoms"]}
@@ -510,7 +568,8 @@ class ForceFieldSelector(BaseModule):
         }
         instance_by_first = {
             indices[0]: (name, indices)
-            for name, instances in groups.items() for indices in instances
+            for name, instances in groups.items()
+            for indices in instances
         }
         instance_atoms = {
             index for _name, indices in instance_by_first.values() for index in indices
@@ -518,10 +577,19 @@ class ForceFieldSelector(BaseModule):
         old_to_new: dict[int, int] = {}
         ligand_new_indices: list[int] = []
         coordinates: list[np.ndarray] = []
-        fields = {key: [] for key in (
-            "atom_names", "resnames", "resids", "chain_ids", "segids",
-            "elements", "occupancies", "tempfactors",
-        )}
+        fields = {
+            key: []
+            for key in (
+                "atom_names",
+                "resnames",
+                "resids",
+                "chain_ids",
+                "segids",
+                "elements",
+                "occupancies",
+                "tempfactors",
+            )
+        }
 
         def append_old(index: int, *, atom_name: str | None = None):
             old_to_new[index] = len(coordinates)
@@ -537,13 +605,12 @@ class ForceFieldSelector(BaseModule):
         for first_index in sorted(instance_by_first):
             name, indices = instance_by_first[first_index]
             template = templates[name]
-            observed = {
-                system.structure.atom_names[index].strip(): index for index in indices
-            }
+            observed = {system.structure.atom_names[index].strip(): index for index in indices}
             if len(observed) != len(indices):
                 raise ModuleConfigError(f"CGenFF molecule {name} has duplicate PDB atom names")
             template_heavy = {
-                atom for atom, element in zip(template.atom_names, template.elements)
+                atom
+                for atom, element in zip(template.atom_names, template.elements)
                 if element != "H"
             }
             if set(observed) != template_heavy:
@@ -557,10 +624,12 @@ class ForceFieldSelector(BaseModule):
                 index for index, element in enumerate(template.elements) if element != "H"
             ]
             source = template.coordinates[heavy_positions]
-            target = np.asarray([
-                system.coordinates[observed[template.atom_names[index]]]
-                for index in heavy_positions
-            ])
+            target = np.asarray(
+                [
+                    system.coordinates[observed[template.atom_names[index]]]
+                    for index in heavy_positions
+                ]
+            )
             transformed = cls._kabsch_transform(source, target, template.coordinates)
             start = len(coordinates)
             for template_index, (atom, element) in enumerate(
@@ -597,22 +666,26 @@ class ForceFieldSelector(BaseModule):
             if component.kind == ComponentKind.UNKNOWN:
                 continue
             mapped = [old_to_new[int(index)] for index in component.atom_indices]
-            components.append(Component(
-                name=component.name,
-                kind=component.kind,
-                atom_indices=np.asarray(mapped, dtype=int),
-                metadata=dict(component.metadata),
-            ))
+            components.append(
+                Component(
+                    name=component.name,
+                    kind=component.kind,
+                    atom_indices=np.asarray(mapped, dtype=int),
+                    metadata=dict(component.metadata),
+                )
+            )
         charges = {name: template.net_charge for name, template in templates.items()}
-        components.append(Component(
-            name="LIGANDS",
-            kind=ComponentKind.LIGAND,
-            atom_indices=np.asarray(sorted(ligand_new_indices), dtype=int),
-            metadata={
-                "molecule_charges": charges,
-                "n_molecules": sum(len(instances) for instances in groups.values()),
-            },
-        ))
+        components.append(
+            Component(
+                name="LIGANDS",
+                kind=ComponentKind.LIGAND,
+                atom_indices=np.asarray(sorted(ligand_new_indices), dtype=int),
+                metadata={
+                    "molecule_charges": charges,
+                    "n_molecules": sum(len(instances) for instances in groups.values()),
+                },
+            )
+        )
         system.components = components
         parameters = {
             name: {

@@ -11,7 +11,10 @@ from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.coarse_grained.backend import build_with_coby, normalize_solvation
 from gmxbuilder.modules.coarse_grained.assets import load_manifest
 from gmxbuilder.modules.coarse_grained.common import (
-    molecule_type_charges, molecules_table, strict_bool, system_from_gro,
+    molecule_type_charges,
+    molecules_table,
+    strict_bool,
+    system_from_gro,
 )
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
@@ -21,7 +24,9 @@ class CGSystemCheckModule(BaseModule):
     description = "Build and validate the exact Martini 3 system to export"
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {"salt_molarity", "confirm_system", "seed", "_task_dir", "_step_dir"})
+        self.validate_config_keys(
+            config, {"salt_molarity", "confirm_system", "seed", "_task_dir", "_step_dir"}
+        )
         if strict_bool(config, "confirm_system", False):
             raise ModuleConfigError(
                 "confirm_system cannot be set during construction; inspect the exact "
@@ -32,11 +37,14 @@ class CGSystemCheckModule(BaseModule):
     def run(self, system, config: dict) -> ModuleResult:
         output = system.copy()
         previous = dict(output.metadata.get("cg_solvation_config") or {})
-        normalized = normalize_solvation({
-            "include_solvent": previous.get("include_solvent", True),
-            "salt_molarity": config.get("salt_molarity", previous.get("salt_molarity", 0.15)),
-            "padding_nm": previous.get("padding_nm", 2.0),
-        }, output.metadata)
+        normalized = normalize_solvation(
+            {
+                "include_solvent": previous.get("include_solvent", True),
+                "salt_molarity": config.get("salt_molarity", previous.get("salt_molarity", 0.15)),
+                "padding_nm": previous.get("padding_nm", 2.0),
+            },
+            output.metadata,
+        )
         output.metadata["cg_solvation_config"] = normalized
         if normalized["include_solvent"]:
             gro, top, _log = build_with_coby(output, config, solvate=True, final_salt=True)
@@ -59,13 +67,12 @@ class CGSystemCheckModule(BaseModule):
         if normalized["include_solvent"] and residue_counts["W"] == 0:
             raise ModuleConfigError("Solvated CG system contains no Martini water")
         charge_by_type = {"W": 0.0, "NA": 1.0, "CL": -1.0}
-        charge_by_type.update({
-            name: float(values["charge"])
-            for name, values in load_manifest()["lipids"].items()
-        })
-        charge_by_type.update(molecule_type_charges(
-            dict(output.metadata.get("cg_topology_texts") or {}).values()
-        ))
+        charge_by_type.update(
+            {name: float(values["charge"]) for name, values in load_manifest()["lipids"].items()}
+        )
+        charge_by_type.update(
+            molecule_type_charges(dict(output.metadata.get("cg_topology_texts") or {}).values())
+        )
         unknown_types = sorted(name for name in molecule_counts if name not in charge_by_type)
         if unknown_types:
             raise ModuleConfigError(
@@ -73,7 +80,9 @@ class CGSystemCheckModule(BaseModule):
             )
         net_charge = sum(charge_by_type[name] * count for name, count in molecule_counts.items())
         if abs(net_charge) > 1e-4:
-            raise ModuleConfigError(f"Final Martini system is not neutral (net charge {net_charge:+.4f} e)")
+            raise ModuleConfigError(
+                f"Final Martini system is not neutral (net charge {net_charge:+.4f} e)"
+            )
 
         actual_salt = None
         if normalized["include_solvent"]:
@@ -107,9 +116,7 @@ class CGSystemCheckModule(BaseModule):
                 raise ModuleConfigError("Final CG bilayer contains no validated membrane beads")
             orientation = self._validate_bilayer_orientation(built)
             requested = int(
-                (output.metadata.get("cg_environment_config") or {}).get(
-                    "n_lipids_per_leaflet", 0
-                )
+                (output.metadata.get("cg_environment_config") or {}).get("n_lipids_per_leaflet", 0)
             )
             if requested and (
                 orientation["upper_leaflet_lipids"] != requested
@@ -125,29 +132,39 @@ class CGSystemCheckModule(BaseModule):
             if normalized["include_solvent"]:
                 solvent_layers = self._validate_solvent_layers(built, orientation)
             protein_placement = self._report_protein_placement(built, orientation)
-        built.metadata.update({
-            "cg_scientific_check": {
-                "passed": True,
-                "box_nm": lengths.tolist(),
-                "molecule_counts": dict(molecule_counts),
-                "net_charge_e": net_charge,
-                "target_salt_molarity": normalized["salt_molarity"] if normalized["include_solvent"] else None,
-                "actual_salt_molarity": actual_salt,
-                "bilayer_orientation": orientation,
-                "solvent_layers": solvent_layers,
-                "protein_placement": protein_placement,
-                "coordinate_source": "cg_system checkpoint",
-            },
-            # The exact checkpoint is now available for inspection.  A separate
-            # confirmation request flips this flag without rebuilding coordinates.
-            "system_confirmed": False,
-        })
-        return ModuleResult(True, built, [
-            "Final Martini 3 coordinates and topology passed structural checks",
-            f"Target NaCl concentration: {normalized['salt_molarity']:.3f} M" if normalized["include_solvent"] else "Dry bilayer: no water or ions",
-            f"Exact export checkpoint contains {built.num_atoms} beads",
-            "Inspect this exact checkpoint and confirm it before finalization",
-        ])
+        built.metadata.update(
+            {
+                "cg_scientific_check": {
+                    "passed": True,
+                    "box_nm": lengths.tolist(),
+                    "molecule_counts": dict(molecule_counts),
+                    "net_charge_e": net_charge,
+                    "target_salt_molarity": normalized["salt_molarity"]
+                    if normalized["include_solvent"]
+                    else None,
+                    "actual_salt_molarity": actual_salt,
+                    "bilayer_orientation": orientation,
+                    "solvent_layers": solvent_layers,
+                    "protein_placement": protein_placement,
+                    "coordinate_source": "cg_system checkpoint",
+                },
+                # The exact checkpoint is now available for inspection.  A separate
+                # confirmation request flips this flag without rebuilding coordinates.
+                "system_confirmed": False,
+            }
+        )
+        return ModuleResult(
+            True,
+            built,
+            [
+                "Final Martini 3 coordinates and topology passed structural checks",
+                f"Target NaCl concentration: {normalized['salt_molarity']:.3f} M"
+                if normalized["include_solvent"]
+                else "Dry bilayer: no water or ions",
+                f"Exact export checkpoint contains {built.num_atoms} beads",
+                "Inspect this exact checkpoint and confirm it before finalization",
+            ],
+        )
 
     @staticmethod
     def _validate_bilayer_orientation(system) -> dict:
@@ -179,10 +196,10 @@ class CGSystemCheckModule(BaseModule):
         evaluated = 0
         center_markers = [
             structure.coordinates[index, 2]
-            for molecule in molecules for index in molecule
-            if str(structure.atom_names[index]).upper() in set(
-                lipid_manifest[str(structure.resnames[index]).upper()]["midplane_beads"]
-            )
+            for molecule in molecules
+            for index in molecule
+            if str(structure.atom_names[index]).upper()
+            in set(lipid_manifest[str(structure.resnames[index]).upper()]["midplane_beads"])
         ]
         if not center_markers:
             raise ModuleConfigError("Martini lipid manifest has no usable midplane beads")
@@ -191,12 +208,8 @@ class CGSystemCheckModule(BaseModule):
             names = {str(structure.atom_names[index]).upper(): index for index in molecule}
             lipid_name = str(structure.resnames[molecule[0]]).upper()
             definition = lipid_manifest[lipid_name]
-            head_candidates = [
-                names[name] for name in definition["head_beads"] if name in names
-            ]
-            tail_candidates = [
-                names[name] for name in definition["tail_beads"] if name in names
-            ]
+            head_candidates = [names[name] for name in definition["head_beads"] if name in names]
+            tail_candidates = [names[name] for name in definition["tail_beads"] if name in names]
             if not head_candidates or not tail_candidates:
                 raise ModuleConfigError(
                     f"Cannot validate {lipid_name}: expected head/tail beads from "
@@ -238,10 +251,14 @@ class CGSystemCheckModule(BaseModule):
     def _validate_solvent_layers(system, orientation: dict) -> dict:
         """Require a genuine solvent region outside both bilayer interfaces."""
         structure = system.structure
-        water_indices = np.array([
-            index for index, name in enumerate(structure.resnames)
-            if str(name).strip().upper() == "W"
-        ], dtype=np.int64)
+        water_indices = np.array(
+            [
+                index
+                for index, name in enumerate(structure.resnames)
+                if str(name).strip().upper() == "W"
+            ],
+            dtype=np.int64,
+        )
         if water_indices.size == 0:
             raise ModuleConfigError("Solvated bilayer contains no Martini water beads")
         water_z = structure.coordinates[water_indices, 2]
@@ -269,16 +286,23 @@ class CGSystemCheckModule(BaseModule):
         """Report membrane spanning and enforce it for explicit TM-helix mode."""
         structure = system.structure
         protein = next(
-            (component for component in system.components
-             if component.kind == ComponentKind.PROTEIN),
+            (
+                component
+                for component in system.components
+                if component.kind == ComponentKind.PROTEIN
+            ),
             None,
         )
         if protein is None or len(protein.atom_indices) == 0:
             return None
-        bb_indices = np.array([
-            int(index) for index in protein.atom_indices
-            if str(structure.atom_names[int(index)]).strip().upper() == "BB"
-        ], dtype=np.int64)
+        bb_indices = np.array(
+            [
+                int(index)
+                for index in protein.atom_indices
+                if str(structure.atom_names[int(index)]).strip().upper() == "BB"
+            ],
+            dtype=np.int64,
+        )
         if bb_indices.size == 0:
             raise ModuleConfigError("Mapped membrane protein contains no Martini BB beads")
         bb_z = structure.coordinates[bb_indices, 2]
@@ -299,7 +323,8 @@ class CGSystemCheckModule(BaseModule):
             "backbone_z_max_nm": float(np.max(bb_z)),
             "spans_both_headgroup_planes": spans,
             "interpretation": (
-                "required and passed" if model == "tm_helix"
+                "required and passed"
+                if model == "tm_helix"
                 else "reported for review; folded proteins require visual orientation confirmation"
             ),
         }

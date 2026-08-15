@@ -60,12 +60,10 @@ def test_protonation_recalculation_is_visible_and_bound_to_current_ph():
 def test_modification_payload_excludes_forcefield_derived_display_metadata():
     app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
 
-    serializer = app.split(
-        "function serializeStructureModifications()", 1
-    )[1].split("// -------------------------------------------------------------------", 1)[0]
-    structure_config = app.split("config.structure = {", 1)[1].split(
-        "// Orientation", 1
+    serializer = app.split("function serializeStructureModifications()", 1)[1].split(
+        "// -------------------------------------------------------------------", 1
     )[0]
+    structure_config = app.split("config.structure = {", 1)[1].split("// Orientation", 1)[0]
 
     assert "return { index: mod.index, patch_id: mod.patch_id };" in serializer
     assert "charge_shift" not in serializer
@@ -73,13 +71,9 @@ def test_modification_payload_excludes_forcefield_derived_display_metadata():
     assert "modifications: serializeStructureModifications()" in structure_config
     assert "modifications: _procModifications" not in structure_config
     assert "hydrateModificationMetadata();" in app
-    restore = app.split("async function resumeTask", 1)[1].split(
-        "async function loadOptions", 1
-    )[0]
+    restore = app.split("async function resumeTask", 1)[1].split("async function loadOptions", 1)[0]
     assert "taskState.step_forcefield_config || taskState.forcefield" in restore
-    assert restore.index("resumedProteinForceField.value") < restore.index(
-        "showUploadInfo(info)"
-    )
+    assert restore.index("resumedProteinForceField.value") < restore.index("showUploadInfo(info)")
 
 
 def test_uploaded_modifications_are_auto_selected_and_require_review():
@@ -127,20 +121,39 @@ def test_simulation_parameter_editor_covers_common_and_expert_controls():
     app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
 
     for control in (
-        "em-constraints", "eq-enabled-",
-        "eq-tau-t-", "eq-temperature-", "eq-constraints-",
+        "em-constraints",
+        "eq-enabled-",
+        "eq-tau-t-",
+        "eq-temperature-",
+        "eq-constraints-",
         "eq-pcoupl-type-",
-        "eq-comm-mode-", "eq-comm-grps-", "eq-nstxout-compressed-",
-        "eq-nstvout-", "eq-nstfout-", "eq-nstenergy-", "eq-nstlog-",
-        "prod-enabled-", "prod-temperature-", "prod-constraints-",
-        "prod-repeat-", "prod-pcoupl-type-",
-        "prod-tau-p-", "prod-comm-mode-", "prod-comm-grps-", "prod-nstxout-compressed-",
-        "prod-nstvout-", "prod-nstfout-", "prod-nstenergy-",
-        "em-mdp-overrides", "parseMdpOverrides", "sim-hw-gpu-count",
+        "eq-comm-mode-",
+        "eq-comm-grps-",
+        "eq-nstxout-compressed-",
+        "eq-nstvout-",
+        "eq-nstfout-",
+        "eq-nstenergy-",
+        "eq-nstlog-",
+        "prod-enabled-",
+        "prod-temperature-",
+        "prod-constraints-",
+        "prod-repeat-",
+        "prod-pcoupl-type-",
+        "prod-tau-p-",
+        "prod-comm-mode-",
+        "prod-comm-grps-",
+        "prod-nstxout-compressed-",
+        "prod-nstvout-",
+        "prod-nstfout-",
+        "prod-nstenergy-",
+        "em-mdp-overrides",
+        "parseMdpOverrides",
+        "sim-hw-gpu-count",
     ):
         assert control in app
-    assert 'System — all atoms (recommended)' in app
+    assert "System — all atoms" in app
     assert '"SOLU_MEMB SOLV"' in app
+    assert 'state.taskType.pipeline !== "liquid"' not in app
     assert 'id.indexOf("eq-ensemble-") === 0' in app
     assert app.count('copy.dt_unit = "fs"') == 2
     assert "Enable at least one equilibration stage" in app

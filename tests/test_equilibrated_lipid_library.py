@@ -36,16 +36,26 @@ def test_side_chain_oxysterol_gate_uses_oriented_host_bilayer():
     host_cosine = np.asarray([0.9, 0.8])
 
     passed, profile, gate_projection, _ = _orientation_gate(
-        "24SHC", all_projection, all_cosine, host_projection, host_cosine,
-        upper_count=26, lower_count=26,
+        "24SHC",
+        all_projection,
+        all_cosine,
+        host_projection,
+        host_cosine,
+        upper_count=26,
+        lower_count=26,
     )
     assert passed
     assert profile.startswith("host-bilayer")
     assert np.array_equal(gate_projection, host_projection)
 
     standard_passed, _, _, _ = _orientation_gate(
-        "CHOL", all_projection, all_cosine, host_projection, host_cosine,
-        upper_count=26, lower_count=26,
+        "CHOL",
+        all_projection,
+        all_cosine,
+        host_projection,
+        host_cosine,
+        upper_count=26,
+        lower_count=26,
     )
     assert not standard_passed
 
@@ -53,9 +63,12 @@ def test_side_chain_oxysterol_gate_uses_oriented_host_bilayer():
 def test_side_chain_oxysterol_gate_rejects_disordered_host():
     passed, _, _, _ = _orientation_gate(
         "25OHC",
-        np.asarray([0.7, -0.02]), np.asarray([0.8, -0.03]),
-        np.asarray([0.7, -0.02]), np.asarray([0.8, -0.03]),
-        upper_count=26, lower_count=26,
+        np.asarray([0.7, -0.02]),
+        np.asarray([0.8, -0.03]),
+        np.asarray([0.7, -0.02]),
+        np.asarray([0.8, -0.03]),
+        upper_count=26,
+        lower_count=26,
     )
     assert not passed
 
@@ -67,8 +80,13 @@ def test_production_orientation_gate_uses_ensemble_fraction_not_single_outlier()
     cosines[0] = -0.2
 
     passed, profile, _, _ = _orientation_gate(
-        "CHOL", projections, cosines, np.empty(0), np.empty(0),
-        upper_count=50, lower_count=50,
+        "CHOL",
+        projections,
+        cosines,
+        np.empty(0),
+        np.empty(0),
+        upper_count=50,
+        lower_count=50,
     )
 
     assert passed
@@ -83,8 +101,13 @@ def test_production_orientation_gate_rejects_more_than_two_percent_outliers():
     cosines[:3] = -0.2
 
     passed, _, _, _ = _orientation_gate(
-        "CHOL", projections, cosines, np.empty(0), np.empty(0),
-        upper_count=50, lower_count=50,
+        "CHOL",
+        projections,
+        cosines,
+        np.empty(0),
+        np.empty(0),
+        upper_count=50,
+        lower_count=50,
     )
 
     assert not passed
@@ -94,40 +117,46 @@ def _write_entry(root, *, method=ACCEPTED_METHOD, quality=True, family="charmm36
     directory = root / family / "POPC"
     directory.mkdir(parents=True)
     names = ["P", "O1", "C1", "C2", "C3"]
-    coords = np.asarray([
-        [0.0, 0.0, 0.8],
-        [0.1, 0.0, 0.7],
-        [0.0, 0.0, 0.1],
-        [0.1, 0.0, -0.3],
-        [-0.1, 0.0, -0.7],
-    ])
+    coords = np.asarray(
+        [
+            [0.0, 0.0, 0.8],
+            [0.1, 0.0, 0.7],
+            [0.0, 0.0, 0.1],
+            [0.1, 0.0, -0.3],
+            [-0.1, 0.0, -0.7],
+        ]
+    )
     for index in range(MIN_CONFORMERS):
         np.savez_compressed(
             directory / f"conf_{index:04d}.npz",
             coords=coords,
             atom_names=np.asarray(names),
         )
-    (directory / "metadata.json").write_text(json.dumps({
-        "schema_version": SCHEMA_VERSION,
-        "coordinate_handedness": "preserved",
-        "leaflet_transform": "proper_rotation",
-        "status": "ready",
-        "method": method,
-        "parameter_family": family,
-        "force_field": "charmm36m",
-        "lipid_ff": "charmm36m",
-        "canonical_smiles": LipidRegistry.get("POPC").smiles,
-        "topology_sha256": topology_signature(names, "charmm36m", "charmm36m"),
-        "atom_names": names,
-        "n_conformations": MIN_CONFORMERS,
-        "quality": {
-            "passed": quality,
-            "orientation": {
-                "passed": quality,
-                "n_lipids_checked": MIN_CONFORMERS,
-            },
-        },
-    }))
+    (directory / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "coordinate_handedness": "preserved",
+                "leaflet_transform": "proper_rotation",
+                "status": "ready",
+                "method": method,
+                "parameter_family": family,
+                "force_field": "charmm36m",
+                "lipid_ff": "charmm36m",
+                "canonical_smiles": LipidRegistry.get("POPC").smiles,
+                "topology_sha256": topology_signature(names, "charmm36m", "charmm36m"),
+                "atom_names": names,
+                "n_conformations": MIN_CONFORMERS,
+                "quality": {
+                    "passed": quality,
+                    "orientation": {
+                        "passed": quality,
+                        "n_lipids_checked": MIN_CONFORMERS,
+                    },
+                },
+            }
+        )
+    )
     return directory
 
 
@@ -135,7 +164,9 @@ def test_numeric_gaff_sterol_output_name_maps_back_to_registry(monkeypatch):
     monkeypatch.setenv("GMXBUILDER_GAFF_CHARGE_METHOD", "bcc")
 
     mapping = _simulation_lipid_resname_map(
-        {"POPC", "20AHC"}, "amber14sb", "gaff2",
+        {"POPC", "20AHC"},
+        "amber14sb",
+        "gaff2",
     )
 
     assert mapping["L_20A"] == "20AHC"
@@ -187,6 +218,71 @@ def test_strict_library_recomputes_topology_signature(tmp_path):
     assert not EquilibratedLipidLibrary([tmp_path]).has("POPC", "charmm36m")
 
 
+def test_current_production_gate_failure_is_classified_unavailable(tmp_path):
+    directory = _write_entry(tmp_path)
+    failed = directory.with_name(directory.name + ".failed")
+    directory.rename(failed)
+    metadata_path = failed / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(
+        {
+            "status": "failed",
+            "test_mode": False,
+            "npt_ps": 1000.0,
+        }
+    )
+    metadata["quality"]["passed"] = False
+    metadata_path.write_text(json.dumps(metadata))
+    library = EquilibratedLipidLibrary([tmp_path])
+
+    failure = library.inspect_failure(
+        "POPC",
+        "charmm36m",
+        "charmm36m",
+        min_npt_ps=1000.0,
+    )
+
+    assert failure is not None
+    assert failure.path == failed
+    assert (
+        library.inspect_failure(
+            "POPC",
+            "charmm36m",
+            "charmm36m",
+            min_npt_ps=1001.0,
+        )
+        is None
+    )
+
+
+def test_stale_or_identity_mismatched_failure_is_not_terminal(tmp_path):
+    directory = _write_entry(tmp_path)
+    failed = directory.with_name(directory.name + ".failed")
+    directory.rename(failed)
+    metadata_path = failed / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(
+        {
+            "status": "failed",
+            "test_mode": False,
+            "npt_ps": 1000.0,
+            "canonical_smiles": "C",
+            "schema_version": SCHEMA_VERSION - 1,
+        }
+    )
+    metadata["quality"]["passed"] = False
+    metadata_path.write_text(json.dumps(metadata))
+
+    assert (
+        EquilibratedLipidLibrary([tmp_path]).inspect_failure(
+            "POPC",
+            "charmm36m",
+            "charmm36m",
+        )
+        is None
+    )
+
+
 def test_strict_library_rechecks_selected_conformer_direction(tmp_path):
     directory = _write_entry(tmp_path)
     for path in directory.glob("conf_*.npz"):
@@ -223,7 +319,10 @@ def test_custom_lipid_parser_detects_registered_structure_before_building():
     popc = LipidRegistry.get("POPC")
     result = parse_custom_lipid(popc.smiles, "DUPL")
     assert result["is_existing"] is True
-    assert any(match["name"] == "POPC" and match["match"] == "exact" for match in result["registered_matches"])
+    assert any(
+        match["name"] == "POPC" and match["match"] == "exact"
+        for match in result["registered_matches"]
+    )
     assert find_registered_lipid_matches(popc.smiles)
     assert result["canonical_smiles"]
     assert result["inchi_key"]
@@ -240,24 +339,25 @@ def test_offline_repack_moves_whole_lipids_to_staggered_lattices():
             resnames=["TEST"] * 16,
             resids=np.repeat(np.arange(1, 9), 2).tolist(),
         ),
-        components=[Component(
-            "MEMBRANE_TEST",
-            ComponentKind.MEMBRANE,
-            np.arange(16),
-            metadata={
-                "lipid_sizes": [2] * 8,
-                "n_lipids_upper": 4,
-                "n_lipids_lower": 4,
-            },
-        )],
+        components=[
+            Component(
+                "MEMBRANE_TEST",
+                ComponentKind.MEMBRANE,
+                np.arange(16),
+                metadata={
+                    "lipid_sizes": [2] * 8,
+                    "n_lipids_upper": 4,
+                    "n_lipids_lower": 4,
+                },
+            )
+        ],
     )
     before = np.linalg.norm(system.coordinates[0] - system.coordinates[1])
     LipidEquilibrationBuilder._repack_bootstrap_bilayer(system, spacing=1.2)
     after = np.linalg.norm(system.coordinates[0] - system.coordinates[1])
-    centers = np.asarray([
-        system.coordinates[index:index + 2, :2].mean(axis=0)
-        for index in range(0, 8, 2)
-    ])
+    centers = np.asarray(
+        [system.coordinates[index : index + 2, :2].mean(axis=0) for index in range(0, 8, 2)]
+    )
     distances = np.linalg.norm(centers[:, None] - centers[None], axis=2)
     distances[distances == 0] = np.inf
     upper_inner = float(system.coordinates[:8, 2].min())
@@ -267,30 +367,70 @@ def test_offline_repack_moves_whole_lipids_to_staggered_lattices():
     assert upper_inner - lower_inner >= 0.18 - 1e-8
 
 
+def test_offline_repack_spacing_uses_rotation_invariant_molecular_radius():
+    molecule = np.asarray(
+        [
+            [-1.0, -1.0, 0.0],
+            [1.0, 1.0, -0.2],
+        ]
+    )
+    coordinates = np.vstack([molecule for _ in range(8)])
+    system = System(
+        Structure(
+            coordinates=coordinates,
+            box_vectors=np.eye(3) * 4.0,
+            atom_names=["P", "C1"] * 8,
+            resnames=["TEST"] * 16,
+            resids=np.repeat(np.arange(1, 9), 2).tolist(),
+        ),
+        components=[
+            Component(
+                "MEMBRANE_TEST",
+                ComponentKind.MEMBRANE,
+                np.arange(16),
+                metadata={
+                    "lipid_sizes": [2] * 8,
+                    "n_lipids_upper": 4,
+                    "n_lipids_lower": 4,
+                },
+            )
+        ],
+    )
+    expected_spacing = 2.0 * np.sqrt(2.0) + 0.15
+
+    LipidEquilibrationBuilder._repack_bootstrap_bilayer(system, spacing=1.2)
+
+    assert system.structure.dimensions()[0] == pytest.approx(2.0 * expected_spacing)
+
+
 def test_offline_reimage_moves_whole_lipids_to_intended_z_images():
     upper_molecule = np.asarray([[0.0, 0.0, 0.4], [0.1, 0.0, 0.0]])
     lower_molecule = np.asarray([[0.0, 0.0, -0.4], [0.1, 0.0, 0.0]])
-    coordinates = np.vstack((
-        upper_molecule + [0.0, 0.0, 6.0],
-        lower_molecule - [0.0, 0.0, 6.0],
-    ))
+    coordinates = np.vstack(
+        (
+            upper_molecule + [0.0, 0.0, 6.0],
+            lower_molecule - [0.0, 0.0, 6.0],
+        )
+    )
     system = System(
         Structure(
             coordinates=coordinates,
             box_vectors=np.diag([4.0, 4.0, 6.0]),
             atom_names=["O1", "C1"] * 2,
         ),
-        components=[Component(
-            "MEMBRANE_TEST",
-            ComponentKind.MEMBRANE,
-            np.arange(4),
-            metadata={
-                "lipid_sizes": [2, 2],
-                "n_lipids_upper": 1,
-                "n_lipids_lower": 1,
-                "bilayer_thickness": 3.8,
-            },
-        )],
+        components=[
+            Component(
+                "MEMBRANE_TEST",
+                ComponentKind.MEMBRANE,
+                np.arange(4),
+                metadata={
+                    "lipid_sizes": [2, 2],
+                    "n_lipids_upper": 1,
+                    "n_lipids_lower": 1,
+                    "bilayer_thickness": 3.8,
+                },
+            )
+        ],
     )
     internal_before = np.linalg.norm(system.coordinates[0] - system.coordinates[1])
 
@@ -311,7 +451,9 @@ def test_offline_reimage_moves_whole_lipids_to_intended_z_images():
     ],
 )
 def test_headgroup_anchor_uses_outward_polar_geometry_not_gaff_atom_numbering(
-    coordinates, expected_index, upper,
+    coordinates,
+    expected_index,
+    upper,
 ):
     index, is_upper = _outer_headgroup_anchor(
         coordinates,

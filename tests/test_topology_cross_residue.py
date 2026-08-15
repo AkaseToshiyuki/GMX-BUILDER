@@ -40,16 +40,23 @@ def test_charmm_mixed_membrane_blocks_keep_each_lipid_identity():
         resids=[1, 1, 2, 2],
         elements=["C", "C", "C", "O"],
     )
-    system = System(structure, components=[Component(
-        "MEMBRANE", ComponentKind.MEMBRANE, np.arange(4),
-        metadata={"n_lipids_upper": 1, "n_lipids_lower": 1,
-                  "lipid_sizes": [2, 2]},
-    )])
+    system = System(
+        structure,
+        components=[
+            Component(
+                "MEMBRANE",
+                ComponentKind.MEMBRANE,
+                np.arange(4),
+                metadata={"n_lipids_upper": 1, "n_lipids_lower": 1, "lipid_sizes": [2, 2]},
+            )
+        ],
+    )
 
     topology = CHARMM36mForceField().build_system_topology(system)
 
     assert [block.type_name for block in topology.molecule_blocks] == [
-        "POPC", "CHOL",
+        "POPC",
+        "CHOL",
     ]
 
 
@@ -121,9 +128,7 @@ def test_generated_terms_use_force_field_bonded_functions(
 def test_single_residue_does_not_resolve_missing_neighbour(tmp_path):
     structure = _ala_gly_structure()
     path = tmp_path / "single.itp"
-    TopologyWriter("charmm36m")._write_protein_itp_for_indices(
-        structure, path, list(range(5))
-    )
+    TopologyWriter("charmm36m")._write_protein_itp_for_indices(structure, path, list(range(5)))
     assert all(6 not in pair for pair in _bond_pairs(path))
 
 
@@ -174,38 +179,33 @@ def test_lipid_without_force_field_parameters_fails_explicitly(tmp_path):
         resids=[1],
     )
     with pytest.raises(TopologyError, match="no charmm36m RTP.*Amber99SB-ILDN"):
-        TopologyWriter("charmm36m")._write_lipid_itp(
-            "20AHC", structure, tmp_path / "20AHC.itp"
-        )
+        TopologyWriter("charmm36m")._write_lipid_itp("20AHC", structure, tmp_path / "20AHC.itp")
 
 
 def test_cross_chain_disulfide_merges_molecule_and_persists_explicit_bond(tmp_path):
-    system = StructureProcessor().run(
-        _disulfide_system(cross_chain=True),
-        {
-            "skip_protonation": True,
-            "prepare_standard_termini": False,
-            "crosslinks": [
-                {"type": "disulfide", "first_index": 0, "second_index": 1}
-            ],
-        },
-    ).system
+    system = (
+        StructureProcessor()
+        .run(
+            _disulfide_system(cross_chain=True),
+            {
+                "skip_protonation": True,
+                "prepare_standard_termini": False,
+                "crosslinks": [{"type": "disulfide", "first_index": 0, "second_index": 1}],
+            },
+        )
+        .system
+    )
     checkpoint = tmp_path / "checkpoint"
     system.save_checkpoint(checkpoint)
     restored = type(system).load_checkpoint(checkpoint)
-    sulphurs = [
-        index for index, name in enumerate(restored.structure.atom_names)
-        if name == "SG"
-    ]
+    sulphurs = [index for index, name in enumerate(restored.structure.atom_names) if name == "SG"]
     assert len(sulphurs) == 2
-    assert any(
-        {bond.i, bond.j} == set(sulphurs) for bond in restored.topology.bonds
-    )
+    assert any({bond.i, bond.j} == set(sulphurs) for bond in restored.topology.bonds)
 
     restored = ForceFieldAssigner().run(restored, {}).system
-    assert any(
-        {bond.i, bond.j} == set(sulphurs) for bond in restored.topology.bonds
-    ), "Final force-field assignment must not discard the saved SG-SG bond"
+    assert any({bond.i, bond.j} == set(sulphurs) for bond in restored.topology.bonds), (
+        "Final force-field assignment must not discard the saved SG-SG bond"
+    )
 
     top_path = tmp_path / "topol.top"
     writer = TopologyWriter("amber14sb")
@@ -220,10 +220,8 @@ def test_cross_chain_disulfide_merges_molecule_and_persists_explicit_bond(tmp_pa
     assert not (tmp_path / "topol_Protein_chain_B.itp").exists()
     assert "Protein_chain_A_B" in top_path.read_text()
 
-    merged_indices = writer._get_protein_chains(
-        restored.structure, {"CYX"}, restored.topology
-    )[0][1]
-    local_sulphurs = {
-        merged_indices.index(index) + 1 for index in sulphurs
-    }
+    merged_indices = writer._get_protein_chains(restored.structure, {"CYX"}, restored.topology)[0][
+        1
+    ]
+    local_sulphurs = {merged_indices.index(index) + 1 for index in sulphurs}
     assert any(set(pair) == local_sulphurs for pair in _bond_pairs(combined_itp))

@@ -28,33 +28,75 @@ from gmxbuilder.geometry.align import compute_principal_axes, orient_protein_to_
 # Jayasinghe, Hristova & White, JMB 312:927 (2001).
 # ---------------------------------------------------------------------------
 _WW_TRANSFER: dict[str, float] = {
-    "ALA":  0.17,  "ARG":  0.81,  "ASN":  0.42,  "ASP":  1.23,
-    "CYS": -0.24,  "GLN":  0.58,  "GLU":  0.11,  "GLY":  0.01,
-    "HIS":  0.96,  "ILE": -0.31,  "LEU": -0.56,  "LYS":  0.99,
-    "MET": -0.22,  "PHE": -1.13,  "PRO":  0.45,  "SER":  0.13,
-    "THR":  0.14,  "TRP": -1.85,  "TYR": -0.94,  "VAL": -0.07,
+    "ALA": 0.17,
+    "ARG": 0.81,
+    "ASN": 0.42,
+    "ASP": 1.23,
+    "CYS": -0.24,
+    "GLN": 0.58,
+    "GLU": 0.11,
+    "GLY": 0.01,
+    "HIS": 0.96,
+    "ILE": -0.31,
+    "LEU": -0.56,
+    "LYS": 0.99,
+    "MET": -0.22,
+    "PHE": -1.13,
+    "PRO": 0.45,
+    "SER": 0.13,
+    "THR": 0.14,
+    "TRP": -1.85,
+    "TYR": -0.94,
+    "VAL": -0.07,
     # Protonated variants
-    "ASH":  1.23,  "GLH":  0.11,  "CYX": -0.24,
-    "HID":  0.96,  "HIE":  0.96,  "HIP":  0.96,
-    "LYN":  0.99,
+    "ASH": 1.23,
+    "GLH": 0.11,
+    "CYX": -0.24,
+    "HID": 0.96,
+    "HIE": 0.96,
+    "HIP": 0.96,
+    "LYN": 0.99,
     # PTM / modified residues (estimated from parent + group hydrophobicity)
-    "SEP":  0.63,  "TPO":  0.64,  "PTR": -0.44,  # phosphorylated → strongly hydrophilic
-    "S1P": 0.63, "T1P": 0.64, "Y1P": -0.44,
-    "ALY":  0.49,  "SLY":  0.49,  "BLY":  0.49,  # acylated LYS → less hydrophilic
-    "CLY":  0.49,  "CRY":  0.49,  "PLY":  0.49,  "GRY":  0.49,
-    "KME":  0.99,  "KM2":  0.99,  "KM3":  0.99,  # legacy catalogue labels
-    "MLZ":  0.99,  "MLY":  0.99,  "M3L":  0.99,  # methylated LYS retains +1
-    "RME":  0.81,  "RM2":  0.81, "2MR": 0.81, "DA2": 0.81,
-    "CSO":  0.26,  "CSD":  0.76,  "CSX":  1.26,  # oxidized CYS → progressively hydrophilic
-    "CSN": -0.24,  "SNC": -0.24, "SMC": -0.24,
+    "SEP": 0.63,
+    "TPO": 0.64,
+    "PTR": -0.44,  # phosphorylated → strongly hydrophilic
+    "S1P": 0.63,
+    "T1P": 0.64,
+    "Y1P": -0.44,
+    "ALY": 0.49,
+    "SLY": 0.49,
+    "BLY": 0.49,  # acylated LYS → less hydrophilic
+    "CLY": 0.49,
+    "CRY": 0.49,
+    "PLY": 0.49,
+    "GRY": 0.49,
+    "KME": 0.99,
+    "KM2": 0.99,
+    "KM3": 0.99,  # legacy catalogue labels
+    "MLZ": 0.99,
+    "MLY": 0.99,
+    "M3L": 0.99,  # methylated LYS retains +1
+    "RME": 0.81,
+    "RM2": 0.81,
+    "2MR": 0.81,
+    "DA2": 0.81,
+    "CSO": 0.26,
+    "CSD": 0.76,
+    "CSX": 1.26,  # oxidized CYS → progressively hydrophilic
+    "CSN": -0.24,
+    "SNC": -0.24,
+    "SMC": -0.24,
     "OCS": 1.26,  # anionic cysteinesulfonate is strongly water-facing
-    "CIR":  0.81,  # citrulline → similar to ARG
+    "CIR": 0.81,  # citrulline → similar to ARG
     "TYS": -1.44,  # sulfated TYR → more hydrophilic than TYR
-    "SAC":  0.13,  "OAS": 0.13, "TAC":  0.14,
-    "GCS":  0.63,  "GCT":  0.64,  # O-GlcNAc → hydrophilic
+    "SAC": 0.13,
+    "OAS": 0.13,
+    "TAC": 0.14,
+    "GCS": 0.63,
+    "GCT": 0.64,  # O-GlcNAc → hydrophilic
     "MSE": -0.22,  # selenomethionine → similar to MET
     "WOH": -1.35,  # oxidized TRP → slightly less hydrophobic
-    "PCA":  0.01,  # pyroglutamate → similar to GLN
+    "PCA": 0.01,  # pyroglutamate → similar to GLN
     "KCX": 1.49,  # anionic N-zeta-carboxylysine
     "NIY": -0.44,  # neutral nitro group reduces TYR membrane preference
 }
@@ -231,8 +273,7 @@ def _scan_ppm_z_and_tilt(
     if rotation_center is None:
         rotation_center = coords.mean(axis=0)
 
-    for axis in [np.array([1.0, 0.0, 0.0], dtype=float),
-                 np.array([0.0, 1.0, 0.0], dtype=float)]:
+    for axis in [np.array([1.0, 0.0, 0.0], dtype=float), np.array([0.0, 1.0, 0.0], dtype=float)]:
         for deg in np.linspace(0, max_tilt, n_scans // 2):
             angle = np.radians(deg)
             R = rotation_matrix_from_axis_angle(axis, angle)
@@ -291,9 +332,14 @@ def _find_best_ppm_orientation(
     residue_coords, energies = _get_residue_coords_and_energies(structure)
     if residue_coords is None or len(residue_coords) < 3:
         com_z = structure.center_of_geometry()[2]
-        return (np.array([0.0, 0.0, 1.0], dtype=float),
-                -com_z, np.array([1.0, 0.0, 0.0], dtype=float),
-                0.0, 0.0, float("inf"))
+        return (
+            np.array([0.0, 0.0, 1.0], dtype=float),
+            -com_z,
+            np.array([1.0, 0.0, 0.0], dtype=float),
+            0.0,
+            0.0,
+            float("inf"),
+        )
 
     # A confident hydrophobic alpha-helical bundle defines the membrane normal
     # more directly than whole-protein PCA, which is biased by soluble domains.
@@ -310,8 +356,7 @@ def _find_best_ppm_orientation(
     rotation_center = structure.center_of_geometry()
 
     best_overall_score = float("inf")
-    best_result = (axes[0].copy(), 0.0,
-                   np.array([1.0, 0.0, 0.0], dtype=float), 0.0, 0.0)
+    best_result = (axes[0].copy(), 0.0, np.array([1.0, 0.0, 0.0], dtype=float), 0.0, 0.0)
 
     for axis_idx in range(len(axes)):
         cand_axis = axes[axis_idx].copy()
@@ -320,14 +365,16 @@ def _find_best_ppm_orientation(
 
         # Align candidate axis to Z
         rot = rotation_matrix_from_vectors(cand_axis, target_z)
-        rotated_res = (
-            (residue_coords - rotation_center) @ rot.T + rotation_center
-        )
+        rotated_res = (residue_coords - rotation_center) @ rot.T + rotation_center
 
         # Z-offset + tilt scan
         z_off, tilt_vec, tilt_angle, score = _scan_ppm_z_and_tilt(
-            rotated_res, energies, half_thickness,
-            max_tilt, n_scans, tilt_improvement_threshold,
+            rotated_res,
+            energies,
+            half_thickness,
+            max_tilt,
+            n_scans,
+            tilt_improvement_threshold,
             rotation_center=rotation_center,
         )
 
@@ -398,8 +445,13 @@ def apply_auto_orientation(
     """Apply one canonical automatic orientation and return its parameters."""
     coords = structure.coordinates
     if len(coords) < 2:
-        return {"z_offset": 0.0, "tilt_radians": 0.0, "tilt_phi_radians": 0.0,
-                "azimuth_radians": 0.0, "score": float("nan")}
+        return {
+            "z_offset": 0.0,
+            "tilt_radians": 0.0,
+            "tilt_phi_radians": 0.0,
+            "azimuth_radians": 0.0,
+            "score": float("nan"),
+        }
 
     z_off = 0.0
     tilt_vec = np.array([1.0, 0.0, 0.0])
@@ -407,24 +459,24 @@ def apply_auto_orientation(
     score = float("nan")
 
     if method == "ppm":
-        best_axis, z_off, tilt_vec, tilt_angle, _phi_z, score = (
-            _find_best_ppm_orientation(structure, half_thickness=half_thickness)
+        best_axis, z_off, tilt_vec, tilt_angle, _phi_z, score = _find_best_ppm_orientation(
+            structure, half_thickness=half_thickness
         )
         structure.rotate(rotation_matrix_from_vectors(best_axis, target_axis))
     elif method == "hmoment":
         z_off, direction, _ = compute_hydrophobic_moment_orientation(
-            structure, half_thickness=half_thickness,
+            structure,
+            half_thickness=half_thickness,
         )
         structure.rotate(rotation_matrix_from_vectors(direction, target_axis))
     elif method == "tmd":
         z_off, best_axis, _ = compute_tmd_orientation(
-            structure, half_thickness=half_thickness,
+            structure,
+            half_thickness=half_thickness,
         )
         structure.rotate(rotation_matrix_from_vectors(best_axis, target_axis))
     elif method == "pca":
-        structure.rotate(
-            orient_protein_to_membrane(coords, method="pca", target_axis=target_axis)
-        )
+        structure.rotate(orient_protein_to_membrane(coords, method="pca", target_axis=target_axis))
         z_off = float(-structure.center_of_geometry()[2])
     elif method == "com":
         z_off = float(-structure.center_of_geometry()[2])
@@ -438,7 +490,8 @@ def apply_auto_orientation(
 
     tilt_phi = (
         float(np.mod(np.arctan2(-tilt_vec[0], tilt_vec[1]), 2 * np.pi))
-        if tilt_angle > 0.01 else 0.0
+        if tilt_angle > 0.01
+        else 0.0
     )
     return {
         "z_offset": float(z_off),
@@ -482,7 +535,9 @@ def orient_protein(
     structure : Structure (same object, mutated)
     """
     apply_auto_orientation(
-        structure, method=method, target_axis=target_axis,
+        structure,
+        method=method,
+        target_axis=target_axis,
         half_thickness=half_thickness,
     )
     return structure
@@ -513,6 +568,7 @@ def compute_embedding_depth(
     if method in ("ppm", "hydrophobic"):
         # Create a temporary structure for PPM
         from gmxbuilder.core.structure import Structure as S
+
         # NOTE: Dummy 10 nm box — fine for non-PBC scoring, but
         # coordinate wrapping may shift atoms if used in PBC context.
         tmp = S(coordinates=protein_coords, box_vectors=np.eye(3) * 10.0)
@@ -532,21 +588,51 @@ def compute_embedding_depth(
 # Eisenberg consensus hydrophobicity scale (Eisenberg et al., JMB 179:125, 1984).
 # Positive = hydrophobic.  Used for the hydrophobic-moment method.
 _EISENBERG: dict[str, float] = {
-    "ALA": 0.62, "ARG": -2.53, "ASN": -0.78, "ASP": -0.90,
-    "CYS": 0.29, "GLN": -0.85, "GLU": -0.74, "GLY": 0.48,
-    "HIS": -0.40, "ILE": 1.38, "LEU": 1.06, "LYS": -1.50,
-    "MET": 0.64, "PHE": 1.19, "PRO": 0.12, "SER": -0.18,
-    "THR": -0.05, "TRP": 0.81, "TYR": 0.26, "VAL": 1.08,
+    "ALA": 0.62,
+    "ARG": -2.53,
+    "ASN": -0.78,
+    "ASP": -0.90,
+    "CYS": 0.29,
+    "GLN": -0.85,
+    "GLU": -0.74,
+    "GLY": 0.48,
+    "HIS": -0.40,
+    "ILE": 1.38,
+    "LEU": 1.06,
+    "LYS": -1.50,
+    "MET": 0.64,
+    "PHE": 1.19,
+    "PRO": 0.12,
+    "SER": -0.18,
+    "THR": -0.05,
+    "TRP": 0.81,
+    "TYR": 0.26,
+    "VAL": 1.08,
 }
 
 # Kyte-Doolittle hydropathy index (Kyte & Doolittle, JMB 157:105, 1982).
 # Used for transmembrane-domain detection via sliding-window scan.
 _KD: dict[str, float] = {
-    "ALA": 1.8, "ARG": -4.5, "ASN": -3.5, "ASP": -3.5,
-    "CYS": 2.5, "GLN": -3.5, "GLU": -3.5, "GLY": -0.4,
-    "HIS": -3.2, "ILE": 4.5, "LEU": 3.8, "LYS": -3.9,
-    "MET": 1.9, "PHE": 2.8, "PRO": -1.6, "SER": -0.8,
-    "THR": -0.7, "TRP": -0.9, "TYR": -1.3, "VAL": 4.2,
+    "ALA": 1.8,
+    "ARG": -4.5,
+    "ASN": -3.5,
+    "ASP": -3.5,
+    "CYS": 2.5,
+    "GLN": -3.5,
+    "GLU": -3.5,
+    "GLY": -0.4,
+    "HIS": -3.2,
+    "ILE": 4.5,
+    "LEU": 3.8,
+    "LYS": -3.9,
+    "MET": 1.9,
+    "PHE": 2.8,
+    "PRO": -1.6,
+    "SER": -0.8,
+    "THR": -0.7,
+    "TRP": -0.9,
+    "TYR": -1.3,
+    "VAL": 4.2,
 }
 
 # KD threshold: window average ≥ this → predicted TM helix
@@ -571,10 +657,7 @@ def _residue_records(
     records: list[tuple[str, int, str, np.ndarray]] = []
     for (rname, rid, cid), indices in groups.items():
         ca_index = next(
-            (
-                index for index in indices
-                if structure.atom_names[index].strip().upper() == "CA"
-            ),
+            (index for index in indices if structure.atom_names[index].strip().upper() == "CA"),
             None,
         )
         coordinate = (
@@ -631,10 +714,9 @@ def _analyze_tm_helix_bundle(
         if len(chain_records) < window_size:
             continue
         coords = np.asarray([record[3] for record in chain_records])
-        hydropathy = np.asarray([
-            _KD.get(record[0].strip().upper(), 0.0)
-            for record in chain_records
-        ])
+        hydropathy = np.asarray(
+            [_KD.get(record[0].strip().upper(), 0.0) for record in chain_records]
+        )
         for start in range(len(chain_records) - window_size + 1):
             stop = start + window_size
             window_coords = coords[start:stop]
@@ -652,10 +734,7 @@ def _analyze_tm_helix_bundle(
                 continue
             linearity = float(eigenvalues[-1] / total_variance)
             end_to_end = float(np.linalg.norm(window_coords[-1] - window_coords[0]))
-            if (
-                linearity < linearity_threshold
-                or end_to_end < 0.09 * (window_size - 1)
-            ):
+            if linearity < linearity_threshold or end_to_end < 0.09 * (window_size - 1):
                 continue
             axes.append(eigenvectors[:, -1])
             weights.append(linearity * mean_hydropathy)
@@ -694,6 +773,7 @@ def _analyze_tm_helix_bundle(
 # ---------------------------------------------------------------------------
 # Hydrophobic Moment
 # ---------------------------------------------------------------------------
+
 
 def compute_hydrophobic_moment_orientation(
     structure: Structure,
@@ -741,16 +821,20 @@ def compute_hydrophobic_moment_orientation(
         R = np.eye(3)
     else:
         from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
+
         R = rotation_matrix_from_vectors(moment_dir, z_axis)
 
     # Apply rotation to a copy for Z-scan
     rotation_center = structure.center_of_geometry()
     rotated = (coords_all - rotation_center) @ R.T + rotation_center
-    tmp = Structure(coordinates=rotated, box_vectors=structure.box_vectors.copy(),
-                    atom_names=structure.atom_names.copy() if len(structure.atom_names) else None,
-                    resnames=structure.resnames.copy() if len(structure.resnames) else None,
-                    resids=structure.resids.copy() if len(structure.resids) else None,
-                    chain_ids=structure.chain_ids.copy() if len(structure.chain_ids) else None)
+    tmp = Structure(
+        coordinates=rotated,
+        box_vectors=structure.box_vectors.copy(),
+        atom_names=structure.atom_names.copy() if len(structure.atom_names) else None,
+        resnames=structure.resnames.copy() if len(structure.resnames) else None,
+        resids=structure.resids.copy() if len(structure.resids) else None,
+        chain_ids=structure.chain_ids.copy() if len(structure.chain_ids) else None,
+    )
 
     # Scan Z-offset using Wimley-White score — full protein Z-extent
     z_all = tmp.coordinates[:, 2]
@@ -775,6 +859,7 @@ def compute_hydrophobic_moment_orientation(
 # TMD (Trans-Membrane Domain) detection
 # ---------------------------------------------------------------------------
 
+
 def _score_tmd_for_axis(
     structure: Structure,
     axis: np.ndarray,
@@ -792,6 +877,7 @@ def _score_tmd_for_axis(
     quality  : float       lower = tighter TM-residue Z-clustering
     """
     from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
+
     target_z = np.array([0.0, 0.0, 1.0], dtype=float)
     if np.abs(np.dot(axis, target_z)) > 0.999:
         rot = np.eye(3)
@@ -799,9 +885,7 @@ def _score_tmd_for_axis(
         rot = rotation_matrix_from_vectors(axis, target_z)
 
     rotation_center = structure.center_of_geometry()
-    coords_all = (
-        (structure.coordinates - rotation_center) @ rot.T + rotation_center
-    )
+    coords_all = (structure.coordinates - rotation_center) @ rot.T + rotation_center
     tmp = Structure(
         coordinates=coords_all,
         box_vectors=structure.box_vectors.copy(),
@@ -904,6 +988,7 @@ def compute_tmd_orientation(
 # COM (Centre-of-Mass)
 # ---------------------------------------------------------------------------
 
+
 def compute_com_orientation(
     structure: Structure,
     half_thickness: float | None = None,
@@ -939,10 +1024,7 @@ _ALGORITHM_LABELS = {
 
 def list_orientation_algorithms() -> list[dict]:
     """Return available orientation algorithms with metadata."""
-    return [
-        {"id": aid, "label": _ALGORITHM_LABELS.get(aid, aid)}
-        for aid in _ALGORITHMS
-    ]
+    return [{"id": aid, "label": _ALGORITHM_LABELS.get(aid, aid)} for aid in _ALGORITHMS]
 
 
 def compute_orientation(
@@ -968,7 +1050,6 @@ def compute_orientation(
     func = _ALGORITHMS.get(algorithm)
     if func is None:
         raise ValueError(
-            f"Unknown orientation algorithm {algorithm!r}. "
-            f"Available: {list(_ALGORITHMS)}"
+            f"Unknown orientation algorithm {algorithm!r}. Available: {list(_ALGORITHMS)}"
         )
     return func(structure, half_thickness=half_thickness)

@@ -103,11 +103,22 @@ def _rewrite_itp(text: str, lipid_name: str, names: list[str]) -> tuple[str, dic
         raise RuntimeError(f"{lipid_name}: topology/coordinate atom-count mismatch")
     sections["atoms"] = rewritten_atoms
     sections["moleculetype"] = [
-        "[ moleculetype ]", "; Name nrexcl", f"{lipid_name} 3",
+        "[ moleculetype ]",
+        "; Name nrexcl",
+        f"{lipid_name} 3",
     ]
     order = [
-        "moleculetype", "atoms", "bonds", "pairs", "angles", "dihedrals",
-        "cmap", "constraints", "settles", "exclusions", "position_restraints",
+        "moleculetype",
+        "atoms",
+        "bonds",
+        "pairs",
+        "angles",
+        "dihedrals",
+        "cmap",
+        "constraints",
+        "settles",
+        "exclusions",
+        "position_restraints",
     ]
     output = [
         "; Exact Amber Lipid21 v1.0 topology converted by ParmEd",
@@ -123,7 +134,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tleap", default=shutil.which("tleap"))
     parser.add_argument(
-        "--output", type=Path,
+        "--output",
+        type=Path,
         default=Path(__file__).resolve().parents[1] / "src/gmxbuilder/data/lipid21",
     )
     args = parser.parse_args()
@@ -146,15 +158,19 @@ def main() -> None:
                 "saveAmberParm M molecule.prmtop molecule.inpcrd\nquit\n"
             )
             result = subprocess.run(
-                [args.tleap, "-f", str(leap_input)], cwd=work,
-                text=True, capture_output=True,
+                [args.tleap, "-f", str(leap_input)],
+                cwd=work,
+                text=True,
+                capture_output=True,
             )
             if result.returncode:
                 raise RuntimeError(f"tleap failed for {name}:\n{result.stdout}\n{result.stderr}")
             structure = parmed.load_file(
                 str(work / "molecule.prmtop"), str(work / "molecule.inpcrd")
             )
-            residue_indices = {id(residue): index for index, residue in enumerate(structure.residues)}
+            residue_indices = {
+                id(residue): index for index, residue in enumerate(structure.residues)
+            }
             names = [
                 _mapped_name(atom.name, residue_indices[id(atom.residue)], name)
                 for atom in structure.atoms
@@ -172,7 +188,8 @@ def main() -> None:
             structure.save(str(gromacs_top), format="gromacs", overwrite=True)
             itp, atomtypes = _rewrite_itp(gromacs_top.read_text(), name, names)
             conflict = {
-                key for key, value in atomtypes.items()
+                key
+                for key, value in atomtypes.items()
                 if key in all_atomtypes and all_atomtypes[key] != value
             }
             if conflict:

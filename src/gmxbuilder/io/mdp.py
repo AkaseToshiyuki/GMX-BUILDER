@@ -67,15 +67,11 @@ class MDPWriter:
         schedule_source = _default_schedule(params) if eq_stages is None else eq_stages
         hydrated_schedule: list[dict] = []
         for source_index, stage in enumerate(schedule_source):
-            ensemble = str(
-                stage.get("ensemble", "nvt" if source_index < 2 else "npt")
-            ).lower()
+            ensemble = str(stage.get("ensemble", "nvt" if source_index < 2 else "npt")).lower()
             hydrated = _stage_defaults(params, ensemble)
             hydrated.update(copy.deepcopy(stage))
             hydrated_schedule.append(hydrated)
-        schedule = [
-            stage for stage in hydrated_schedule if stage.get("enabled", True)
-        ]
+        schedule = [stage for stage in hydrated_schedule if stage.get("enabled", True)]
         # Convert the explicitly declared unit exactly once.  Never infer a
         # timestep unit from magnitude: 0.5 can legitimately mean either
         # 0.5 fs or 0.5 ps and the latter is unsafe for atomistic MD.
@@ -98,14 +94,13 @@ class MDPWriter:
         if minimization is not None:
             minim_config.update(copy.deepcopy(minimization))
         minim = _build_minim(params, minim_config)
-        minim = _apply_mdp_overrides(
-            minim, minim_config.get("mdp_overrides", {})
-        )
+        minim = _apply_mdp_overrides(minim, minim_config.get("mdp_overrides", {}))
         paths.append(self._write(output_dir / "mini.mdp", minim))
 
         # ---- Stages 1-N: Equilibration ----
         enabled_schedule = [
-            (index, stage) for index, stage in enumerate(hydrated_schedule)
+            (index, stage)
+            for index, stage in enumerate(hydrated_schedule)
             if stage.get("enabled", True)
         ]
         for active_index, (source_index, _source_stage) in enumerate(enabled_schedule):
@@ -125,9 +120,7 @@ class MDPWriter:
             paths.append(self._write(output_dir / f"equili_{stage_num}.mdp", content))
 
         # ---- Production ----
-        production_source = (
-            _default_production(params) if prod_iters is None else prod_iters
-        )
+        production_source = _default_production(params) if prod_iters is None else prod_iters
         production: list[dict] = []
         for stage in production_source:
             if not stage.get("enabled", True):
@@ -162,25 +155,23 @@ class MDPWriter:
             raise ValueError("MDP parameters must be an object")
         unknown_global = sorted(set(params) - _GLOBAL_KEYS)
         if unknown_global:
-            raise ValueError(
-                "unknown global MDP setting(s): " + ", ".join(unknown_global)
-            )
+            raise ValueError("unknown global MDP setting(s): " + ", ".join(unknown_global))
         _validate_stage(params, "global settings")
         if params.get("pcoupl_type", "auto") not in {"auto", "isotropic", "semisotropic"}:
             raise ValueError("global settings pcoupl_type must be auto, isotropic, or semisotropic")
         has_membrane = bool(params.get("has_membrane", True))
-        _validate_comm_groups(
-            params.get("comm_grps", "System"), has_membrane, "global settings"
-        )
+        _validate_comm_groups(params.get("comm_grps", "System"), has_membrane, "global settings")
         for key in ("em_nsteps", "em_nstlist"):
             if key in params:
                 value = _finite_number(params[key], f"global settings {key}")
                 if isinstance(params[key], bool) or not value.is_integer() or value < 1:
-                    raise ValueError(
-                        f"global settings {key} must be a positive integer"
-                    )
-        if params.get("em_constraints", "h-bonds") not in {
-            "none", "h-bonds", "all-bonds", "h-angles", "all-angles"
+                    raise ValueError(f"global settings {key} must be a positive integer")
+        if params.get("em_constraints", "none") not in {
+            "none",
+            "h-bonds",
+            "all-bonds",
+            "h-angles",
+            "all-angles",
         }:
             raise ValueError("global settings em_constraints value is not supported")
         if params.get("em_integrator", "steep") not in {"steep", "cg"}:
@@ -190,24 +181,28 @@ class MDPWriter:
             if isinstance(params["gen_seed"], bool) or not seed.is_integer() or seed < -1:
                 raise ValueError("global settings gen_seed must be an integer of -1 or greater")
         if "n_tc_groups" in params:
-            groups = _finite_number(
-                params["n_tc_groups"], "global settings n_tc_groups"
-            )
+            groups = _finite_number(params["n_tc_groups"], "global settings n_tc_groups")
             if not groups.is_integer() or not 1 <= groups <= 3:
                 raise ValueError("global settings n_tc_groups must be 1, 2, or 3")
         for flag in (
-            "has_membrane", "protein_position_restraints",
-            "lipid_position_restraints", "lipid_dihedral_restraints",
+            "has_membrane",
+            "protein_position_restraints",
+            "lipid_position_restraints",
+            "lipid_dihedral_restraints",
         ):
             if flag in params and not isinstance(params[flag], bool):
                 raise ValueError(f"global settings {flag} must be true or false")
         for key in (
-            "em_ftol", "em_step", "temperature", "rlist", "rvdw",
-            "rcoulomb", "fourierspacing", "compressibility",
+            "em_ftol",
+            "em_step",
+            "temperature",
+            "rlist",
+            "rvdw",
+            "rcoulomb",
+            "fourierspacing",
+            "compressibility",
         ):
-            if key in params and _finite_number(
-                params[key], f"global settings {key}"
-            ) <= 0:
+            if key in params and _finite_number(params[key], f"global settings {key}") <= 0:
                 raise ValueError(f"global settings {key} must be positive")
         _validate_nonbond_geometry(params, "global settings")
         for label, stages in (("equilibration", eq_stages), ("production", prod_iters)):
@@ -223,15 +218,12 @@ class MDPWriter:
                 unknown_stage = sorted(set(stage) - _STAGE_KEYS)
                 if unknown_stage:
                     raise ValueError(
-                        f"unknown {label} stage {index} setting(s): "
-                        + ", ".join(unknown_stage)
+                        f"unknown {label} stage {index} setting(s): " + ", ".join(unknown_stage)
                     )
                 if "enabled" in stage and not isinstance(stage["enabled"], bool):
                     raise ValueError(f"{label} stage {index} enabled must be true or false")
                 if label == "equilibration" and "repeat" in stage:
-                    raise ValueError(
-                        f"{label} stage {index} repeat is only valid for production"
-                    )
+                    raise ValueError(f"{label} stage {index} repeat is only valid for production")
                 if not stage.get("enabled", True):
                     continue
                 _validate_stage(stage, f"{label} stage {index}")
@@ -278,16 +270,12 @@ class MDPWriter:
             raise ValueError("simulation parameters must be an object")
         unknown = sorted(set(raw) - _SIMULATION_CONFIG_KEYS)
         if unknown:
-            raise ValueError(
-                "unknown simulation setting(s): " + ", ".join(unknown)
-            )
+            raise ValueError("unknown simulation setting(s): " + ", ".join(unknown))
         schema_version = raw.get("schema_version", 1)
         if isinstance(schema_version, bool) or schema_version not in {1, 2}:
             raise ValueError("simulation schema_version must be 1 or 2")
         if schema_version == 2:
-            misplaced = sorted(
-                set(raw) & (_GLOBAL_KEYS | {"system_name", "mdp_overrides_text"})
-            )
+            misplaced = sorted(set(raw) & (_GLOBAL_KEYS | {"system_name", "mdp_overrides_text"}))
             if misplaced:
                 raise ValueError(
                     "schema version 2 requires MDP values to belong to "
@@ -306,11 +294,7 @@ class MDPWriter:
             if key in raw and key not in mdp_context:
                 mdp_context[key] = raw[key]
 
-        legacy_stage = {
-            key: copy.deepcopy(raw[key])
-            for key in _LEGACY_STAGE_KEYS
-            if key in raw
-        }
+        legacy_stage = {key: copy.deepcopy(raw[key]) for key in _LEGACY_STAGE_KEYS if key in raw}
         legacy_overrides = copy.deepcopy(raw.get("mdp_overrides", {}))
 
         eq_source = raw.get("eq_stages")
@@ -365,9 +349,7 @@ class MDPWriter:
                 raise ValueError("minimization settings must be an object")
             minim.update(copy.deepcopy(explicit_minim))
 
-        MDPWriter.validate_protocol(
-            mdp_context, eq_stages, prod_iters, minim
-        )
+        MDPWriter.validate_protocol(mdp_context, eq_stages, prod_iters, minim)
         return {
             "schema_version": 2,
             "minimization": minim,
@@ -390,44 +372,142 @@ _MDP_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 _INDEX_GROUP = re.compile(r"^[A-Za-z][A-Za-z0-9_+-]*$")
 _BASE_COM_GROUPS = frozenset({"System", "SOLU", "SOLV"})
 _MEMBRANE_COM_GROUPS = frozenset({"MEMB", "SOLU_MEMB"})
-_STAGE_KEYS = frozenset({
-    "enabled", "repeat", "bb", "sc", "lipid", "dih", "dt", "dt_unit",
-    "dt_fs", "nsteps",
-    "ensemble", "tcoupl", "tau_t", "temperature", "comm_mode", "comm_grps",
-    "nstcomm", "constraints", "pcoupl", "pcoupl_type", "tau_p", "ref_p",
-    "compress", "nstlist", "nstxout_compressed", "nstxout", "nstvout",
-    "nstfout", "nstcalcenergy", "nstenergy", "nstlog", "mdp_overrides",
-    "rlist", "vdw_modifier", "rvdw_switch", "rvdw", "rcoulomb",
-    "fourierspacing", "dispcorr", "gen_seed",
-})
-_NONBOND_KEYS = frozenset({
-    "rlist", "vdw_modifier", "rvdw_switch", "rvdw", "rcoulomb",
-    "fourierspacing", "dispcorr", "nstlist",
-})
-_MINIMIZATION_KEYS = frozenset({
-    "integrator", "nsteps", "emtol", "emstep", "nstlist", "constraints",
-    "bb", "sc", "lipid", "dih", "mdp_overrides",
-}) | _NONBOND_KEYS
-_GLOBAL_KEYS = (_STAGE_KEYS - {"enabled", "repeat"}) | frozenset({
-    "em_nsteps", "em_nstlist", "em_constraints", "em_ftol", "em_step",
-    "em_integrator", "em_overrides", "eq_nsteps", "prod_nsteps",
-    "production_nsteps", "force_field", "force_field_family", "has_membrane",
-    "n_tc_groups", "protein_position_restraints", "lipid_position_restraints",
-    "lipid_dihedral_restraints", "compressibility", "gen_seed",
-})
-_CONTEXT_KEYS = frozenset({
-    "force_field", "force_field_family", "has_membrane", "n_tc_groups",
-    "protein_position_restraints", "lipid_position_restraints",
-    "lipid_dihedral_restraints",
-})
-_LEGACY_STAGE_KEYS = (_STAGE_KEYS - {
-    "enabled", "repeat", "bb", "sc", "lipid", "dih", "dt", "dt_unit",
-    "dt_fs", "nsteps", "ensemble", "mdp_overrides",
-})
-_SIMULATION_CONFIG_KEYS = frozenset({
-    "schema_version", "minimization", "eq_stages", "prod_iters", "hardware",
-    "system_name", "mdp_overrides_text",
-}) | _GLOBAL_KEYS
+_STAGE_KEYS = frozenset(
+    {
+        "enabled",
+        "repeat",
+        "bb",
+        "sc",
+        "lipid",
+        "dih",
+        "dt",
+        "dt_unit",
+        "dt_fs",
+        "nsteps",
+        "ensemble",
+        "tcoupl",
+        "tau_t",
+        "temperature",
+        "comm_mode",
+        "comm_grps",
+        "nstcomm",
+        "constraints",
+        "pcoupl",
+        "pcoupl_type",
+        "tau_p",
+        "ref_p",
+        "compress",
+        "nstlist",
+        "nstxout_compressed",
+        "nstxout",
+        "nstvout",
+        "nstfout",
+        "nstcalcenergy",
+        "nstenergy",
+        "nstlog",
+        "mdp_overrides",
+        "rlist",
+        "vdw_modifier",
+        "rvdw_switch",
+        "rvdw",
+        "rcoulomb",
+        "fourierspacing",
+        "dispcorr",
+        "gen_seed",
+    }
+)
+_NONBOND_KEYS = frozenset(
+    {
+        "rlist",
+        "vdw_modifier",
+        "rvdw_switch",
+        "rvdw",
+        "rcoulomb",
+        "fourierspacing",
+        "dispcorr",
+        "nstlist",
+    }
+)
+_MINIMIZATION_KEYS = (
+    frozenset(
+        {
+            "integrator",
+            "nsteps",
+            "emtol",
+            "emstep",
+            "nstlist",
+            "constraints",
+            "bb",
+            "sc",
+            "lipid",
+            "dih",
+            "mdp_overrides",
+        }
+    )
+    | _NONBOND_KEYS
+)
+_GLOBAL_KEYS = (_STAGE_KEYS - {"enabled", "repeat"}) | frozenset(
+    {
+        "em_nsteps",
+        "em_nstlist",
+        "em_constraints",
+        "em_ftol",
+        "em_step",
+        "em_integrator",
+        "em_overrides",
+        "eq_nsteps",
+        "prod_nsteps",
+        "production_nsteps",
+        "force_field",
+        "force_field_family",
+        "has_membrane",
+        "n_tc_groups",
+        "protein_position_restraints",
+        "lipid_position_restraints",
+        "lipid_dihedral_restraints",
+        "compressibility",
+        "gen_seed",
+    }
+)
+_CONTEXT_KEYS = frozenset(
+    {
+        "force_field",
+        "force_field_family",
+        "has_membrane",
+        "n_tc_groups",
+        "protein_position_restraints",
+        "lipid_position_restraints",
+        "lipid_dihedral_restraints",
+    }
+)
+_LEGACY_STAGE_KEYS = _STAGE_KEYS - {
+    "enabled",
+    "repeat",
+    "bb",
+    "sc",
+    "lipid",
+    "dih",
+    "dt",
+    "dt_unit",
+    "dt_fs",
+    "nsteps",
+    "ensemble",
+    "mdp_overrides",
+}
+_SIMULATION_CONFIG_KEYS = (
+    frozenset(
+        {
+            "schema_version",
+            "minimization",
+            "eq_stages",
+            "prod_iters",
+            "hardware",
+            "system_name",
+            "mdp_overrides_text",
+        }
+    )
+    | _GLOBAL_KEYS
+)
 
 
 def _finite_number(value: object, label: str) -> float:
@@ -445,9 +525,7 @@ def _declared_timestep_unit(stage: dict, label: str) -> str:
     has_unit = "dt_unit" in stage
     has_legacy = "dt_fs" in stage
     if has_unit and has_legacy:
-        raise ValueError(
-            f"{label} must use dt_unit or legacy dt_fs, not both"
-        )
+        raise ValueError(f"{label} must use dt_unit or legacy dt_fs, not both")
     if has_unit:
         unit = str(stage["dt_unit"]).strip().lower()
         if unit not in {"fs", "ps"}:
@@ -457,9 +535,7 @@ def _declared_timestep_unit(stage: dict, label: str) -> str:
         if not isinstance(stage["dt_fs"], bool):
             raise ValueError(f"{label} dt_fs must be true or false")
         return "fs" if stage["dt_fs"] else "ps"
-    raise ValueError(
-        f"{label} timestep requires an explicit dt_unit ('fs' or 'ps')"
-    )
+    raise ValueError(f"{label} timestep requires an explicit dt_unit ('fs' or 'ps')")
 
 
 def _convert_timestep_to_ps(stage: dict) -> None:
@@ -499,20 +575,15 @@ def _validate_comm_groups(value: object, has_membrane: bool, label: str) -> None
     unknown = sorted(set(groups) - available)
     if unknown:
         raise ValueError(
-            f"{label} comm_grps references unavailable index group(s): "
-            + ", ".join(unknown)
+            f"{label} comm_grps references unavailable index group(s): " + ", ".join(unknown)
         )
     if "System" in groups and len(groups) != 1:
         raise ValueError(f"{label} comm_grps cannot combine System with another group")
     if "SOLU_MEMB" in groups and ({"SOLU", "MEMB"} & set(groups)):
-        raise ValueError(
-            f"{label} comm_grps cannot overlap SOLU_MEMB with SOLU or MEMB"
-        )
+        raise ValueError(f"{label} comm_grps cannot overlap SOLU_MEMB with SOLU or MEMB")
 
 
-def _validate_override_comm_groups(
-    overrides: dict | None, has_membrane: bool, label: str
-) -> None:
+def _validate_override_comm_groups(overrides: dict | None, has_membrane: bool, label: str) -> None:
     if not overrides:
         return
     for key, value in overrides.items():
@@ -536,16 +607,23 @@ def _validate_overrides(overrides: dict, label: str) -> None:
 def _validate_stage(stage: dict, label: str) -> None:
     if "enabled" in stage and not isinstance(stage["enabled"], bool):
         raise ValueError(f"{label} enabled must be true or false")
-    for key in ("nsteps", "nstcomm", "nstxout", "nstvout", "nstfout",
-                "nstxout_compressed", "nstcalcenergy", "nstenergy", "nstlog"):
+    for key in (
+        "nsteps",
+        "nstcomm",
+        "nstxout",
+        "nstvout",
+        "nstfout",
+        "nstxout_compressed",
+        "nstcalcenergy",
+        "nstenergy",
+        "nstlog",
+    ):
         if key in stage:
             value = stage[key]
             number = _finite_number(value, f"{label} {key}")
             if isinstance(value, bool) or not number.is_integer() or number < 0:
                 raise ValueError(f"{label} {key} must be a non-negative integer")
-    if "nsteps" in stage and _finite_number(
-        stage["nsteps"], f"{label} nsteps"
-    ) < 1:
+    if "nsteps" in stage and _finite_number(stage["nsteps"], f"{label} nsteps") < 1:
         raise ValueError(f"{label} nsteps must be positive")
     if "repeat" in stage:
         value = stage["repeat"]
@@ -570,34 +648,60 @@ def _validate_stage(stage: dict, label: str) -> None:
     if stage.get("ensemble", "npt") not in {"nvt", "npt"}:
         raise ValueError(f"{label} ensemble must be nvt or npt")
     if str(stage.get("tcoupl", "v-rescale")).lower() not in {
-        "v-rescale", "nose-hoover", "berendsen", "no",
+        "v-rescale",
+        "nose-hoover",
+        "berendsen",
+        "no",
     }:
         raise ValueError(f"{label} tcoupl value is not supported")
     if str(stage.get("pcoupl", "C-rescale")).lower() not in {
-        "c-rescale", "berendsen", "parrinello-rahman", "no",
+        "c-rescale",
+        "berendsen",
+        "parrinello-rahman",
+        "no",
     }:
         raise ValueError(f"{label} pcoupl value is not supported")
     if stage.get("constraints", "h-bonds") not in {
-        "none", "h-bonds", "all-bonds", "h-angles", "all-angles"
+        "none",
+        "h-bonds",
+        "all-bonds",
+        "h-angles",
+        "all-angles",
     }:
         raise ValueError(f"{label} constraints value is not supported")
     if str(stage.get("vdw_modifier", "Potential-shift")).lower() not in {
-        "potential-shift", "force-switch", "potential-switch", "none",
+        "potential-shift",
+        "force-switch",
+        "potential-switch",
+        "none",
     }:
         raise ValueError(f"{label} vdw_modifier value is not supported")
     if str(stage.get("dispcorr", "no")).lower() not in {
-        "no", "none", "ener", "enerpres",
+        "no",
+        "none",
+        "ener",
+        "enerpres",
     }:
         raise ValueError(f"{label} dispcorr value is not supported")
     for key in (
-        "tau_t", "tau_p", "temperature", "rlist", "rvdw", "rcoulomb",
-        "fourierspacing", "compress",
+        "tau_t",
+        "tau_p",
+        "temperature",
+        "rlist",
+        "rvdw",
+        "rcoulomb",
+        "fourierspacing",
+        "compress",
     ):
         if key in stage and _finite_number(stage[key], f"{label} {key}") <= 0:
             raise ValueError(f"{label} {key} must be positive")
     if "ref_p" in stage:
         _finite_number(stage["ref_p"], f"{label} ref_p")
-    if stage.get("comm_mode", "linear") != "none" and "nstcomm" in stage and int(stage["nstcomm"]) < 1:
+    if (
+        stage.get("comm_mode", "linear") != "none"
+        and "nstcomm" in stage
+        and int(stage["nstcomm"]) < 1
+    ):
         raise ValueError(f"{label} nstcomm must be positive when COM removal is enabled")
     for key in ("bb", "sc", "lipid", "dih"):
         if key in stage and _finite_number(stage[key], f"{label} {key}") < 0:
@@ -613,9 +717,7 @@ def _validate_minimization(minimization: dict | None, params: dict) -> None:
         raise ValueError("minimization settings must be an object")
     unknown = sorted(set(minimization) - _MINIMIZATION_KEYS)
     if unknown:
-        raise ValueError(
-            "unknown minimization setting(s): " + ", ".join(unknown)
-        )
+        raise ValueError("unknown minimization setting(s): " + ", ".join(unknown))
     if minimization.get("integrator", "steep") not in {"steep", "cg"}:
         raise ValueError("minimization integrator must be steep or cg")
     for key in ("nsteps", "nstlist"):
@@ -626,29 +728,26 @@ def _validate_minimization(minimization: dict | None, params: dict) -> None:
         if isinstance(value, bool) or not number.is_integer() or number < 1:
             raise ValueError(f"minimization {key} must be a positive integer")
     for key in ("emtol", "emstep", "rlist", "rvdw", "rcoulomb", "fourierspacing"):
-        if key in minimization and _finite_number(
-            minimization[key], f"minimization {key}"
-        ) <= 0:
+        if key in minimization and _finite_number(minimization[key], f"minimization {key}") <= 0:
             raise ValueError(f"minimization {key} must be positive")
-    if minimization.get("constraints", "h-bonds") not in {
-        "none", "h-bonds", "all-bonds", "h-angles", "all-angles"
+    if minimization.get("constraints", "none") not in {
+        "none",
+        "h-bonds",
+        "all-bonds",
+        "h-angles",
+        "all-angles",
     }:
         raise ValueError("minimization constraints value is not supported")
     for key in ("bb", "sc", "lipid", "dih"):
-        if key in minimization and _finite_number(
-            minimization[key], f"minimization {key}"
-        ) < 0:
+        if key in minimization and _finite_number(minimization[key], f"minimization {key}") < 0:
             raise ValueError(f"minimization {key} restraint must be non-negative")
     _validate_nonbond_geometry(minimization, "minimization")
-    _validate_overrides(
-        minimization.get("mdp_overrides", {}), "minimization MDP overrides"
-    )
+    _validate_overrides(minimization.get("mdp_overrides", {}), "minimization MDP overrides")
     if _force_field_family(params) == "charmm" and str(
         minimization.get("dispcorr", "no")
     ).lower() not in {"no", "none"}:
         raise ValueError(
-            "CHARMM36/CHARMM36m requires DispCorr=no with its force-switch "
-            "non-bonded protocol"
+            "CHARMM36/CHARMM36m requires DispCorr=no with its force-switch non-bonded protocol"
         )
 
 
@@ -657,7 +756,9 @@ def _apply_mdp_overrides(content: str, overrides: dict | None) -> str:
     if not overrides:
         return content
     _validate_overrides(overrides, "MDP overrides")
-    normalized = {str(key).lower().replace("_", "-"): str(value) for key, value in overrides.items()}
+    normalized = {
+        str(key).lower().replace("_", "-"): str(value) for key, value in overrides.items()
+    }
     seen: set[str] = set()
     output = []
     assignment = re.compile(r"^(\s*)([A-Za-z][A-Za-z0-9_-]*)(\s*=\s*)(.*)$")
@@ -678,6 +779,7 @@ def _apply_mdp_overrides(content: str, overrides: dict | None) -> str:
 # =============================================================================
 # Default restraint schedule — decaying over 6 stages
 # =============================================================================
+
 
 def _force_field_family(params: dict) -> str:
     family = str(params.get("force_field_family", "")).strip().lower()
@@ -715,6 +817,7 @@ def _nonbond_defaults(params: dict) -> dict[str, object]:
 
 def _stage_defaults(params: dict, ensemble: str) -> dict[str, object]:
     has_membrane = bool(params.get("has_membrane", True))
+    default_comm_groups = "SOLU_MEMB SOLV" if has_membrane else "SOLU SOLV"
     values: dict[str, object] = {
         "enabled": True,
         "bb": 4000 if has_membrane else 400,
@@ -725,7 +828,10 @@ def _stage_defaults(params: dict, ensemble: str) -> dict[str, object]:
         "tau_t": 1.0,
         "temperature": params.get("temperature", 310.15),
         "comm_mode": "linear",
-        "comm_grps": "SOLU_MEMB SOLV" if has_membrane else "SOLU SOLV",
+        # Keep the embedded solute and membrane in one COM-removal group while
+        # treating solvent separately.  Non-membrane systems use solute and
+        # solvent groups.  See internal_docs/MDP_PROTOCOL_DECISIONS.md.
+        "comm_grps": default_comm_groups,
         "nstcomm": 100,
         "constraints": "h-bonds",
         "nstlist": 20,
@@ -741,13 +847,15 @@ def _stage_defaults(params: dict, ensemble: str) -> dict[str, object]:
         **_nonbond_defaults(params),
     }
     if ensemble == "npt":
-        values.update({
-            "pcoupl": "C-rescale",
-            "pcoupl_type": "semisotropic" if has_membrane else "isotropic",
-            "tau_p": 5.0,
-            "ref_p": 1.0,
-            "compress": "4.5e-5",
-        })
+        values.update(
+            {
+                "pcoupl": "C-rescale",
+                "pcoupl_type": "semisotropic" if has_membrane else "isotropic",
+                "tau_p": 5.0,
+                "ref_p": 1.0,
+                "compress": "4.5e-5",
+            }
+        )
     return values
 
 
@@ -770,6 +878,7 @@ def _default_minimization(params: dict) -> dict[str, object]:
     values["nstlist"] = 10
     return values
 
+
 def _default_schedule(params: dict) -> list[dict]:
     """Return a system-specific equilibration protocol.
 
@@ -780,46 +889,119 @@ def _default_schedule(params: dict) -> list[dict]:
     NOTE: dt values are in PS (GROMACS convention), not fs.
     """
     if not params.get("has_membrane", True):
-        return [{
-            "bb": 400, "sc": 40, "lipid": 0, "dih": 0,
-            "dt": 0.001, "dt_unit": "ps", "nsteps": 125000, "ensemble": "nvt",
-            "comm_grps": "SOLU SOLV",
-            "nstxout_compressed": 5000,
-        }]
+        return [
+            {
+                "bb": 400,
+                "sc": 40,
+                "lipid": 0,
+                "dih": 0,
+                "dt": 0.001,
+                "dt_unit": "ps",
+                "nsteps": 250000,
+                "ensemble": "nvt",
+                "comm_grps": "SOLU SOLV",
+                "nstxout_compressed": 5000,
+            }
+        ]
     return [
-        {"bb":4000, "sc":2000, "lipid":1000, "dih":1000, "dt":0.001, "dt_unit":"ps", "nsteps":125000, "ensemble":"nvt", "comm_grps":"SOLU_MEMB SOLV"},
-        {"bb":2000, "sc":1000, "lipid":400,  "dih":400,  "dt":0.001, "dt_unit":"ps", "nsteps":125000, "ensemble":"nvt", "comm_grps":"SOLU_MEMB SOLV"},
-        {"bb":1000, "sc":500,  "lipid":400,  "dih":200,  "dt":0.001, "dt_unit":"ps", "nsteps":125000, "ensemble":"npt", "comm_grps":"SOLU_MEMB SOLV"},
-        {"bb":500,  "sc":200,  "lipid":200,  "dih":200,  "dt":0.002, "dt_unit":"ps", "nsteps":250000, "ensemble":"npt", "comm_grps":"SOLU_MEMB SOLV"},
-        {"bb":200,  "sc":50,   "lipid":40,   "dih":100,  "dt":0.002, "dt_unit":"ps", "nsteps":250000, "ensemble":"npt", "comm_grps":"SOLU_MEMB SOLV"},
-        {"bb":50,   "sc":0,    "lipid":0,    "dih":0,    "dt":0.002, "dt_unit":"ps", "nsteps":250000, "ensemble":"npt", "comm_grps":"SOLU_MEMB SOLV"},
+        {
+            "bb": 4000,
+            "sc": 2000,
+            "lipid": 1000,
+            "dih": 1000,
+            "dt": 0.001,
+            "dt_unit": "ps",
+            "nsteps": 125000,
+            "ensemble": "nvt",
+            "comm_grps": "SOLU_MEMB SOLV",
+        },
+        {
+            "bb": 2000,
+            "sc": 1000,
+            "lipid": 400,
+            "dih": 400,
+            "dt": 0.001,
+            "dt_unit": "ps",
+            "nsteps": 125000,
+            "ensemble": "nvt",
+            "comm_grps": "SOLU_MEMB SOLV",
+        },
+        {
+            "bb": 1000,
+            "sc": 500,
+            "lipid": 400,
+            "dih": 200,
+            "dt": 0.001,
+            "dt_unit": "ps",
+            "nsteps": 125000,
+            "ensemble": "npt",
+            "comm_grps": "SOLU_MEMB SOLV",
+        },
+        {
+            "bb": 500,
+            "sc": 200,
+            "lipid": 200,
+            "dih": 200,
+            "dt": 0.002,
+            "dt_unit": "ps",
+            "nsteps": 250000,
+            "ensemble": "npt",
+            "comm_grps": "SOLU_MEMB SOLV",
+        },
+        {
+            "bb": 200,
+            "sc": 50,
+            "lipid": 40,
+            "dih": 100,
+            "dt": 0.002,
+            "dt_unit": "ps",
+            "nsteps": 250000,
+            "ensemble": "npt",
+            "comm_grps": "SOLU_MEMB SOLV",
+        },
+        {
+            "bb": 50,
+            "sc": 0,
+            "lipid": 0,
+            "dih": 0,
+            "dt": 0.002,
+            "dt_unit": "ps",
+            "nsteps": 250000,
+            "ensemble": "npt",
+            "comm_grps": "SOLU_MEMB SOLV",
+        },
     ]
 
 
 def _default_production(params: dict) -> list[dict]:
     """Return restart-friendly production chunks for the system class."""
     if params.get("has_membrane", True):
-        return [{
-            "nsteps": params.get("prod_nsteps", 5_000_000),
+        return [
+            {
+                "nsteps": params.get("prod_nsteps", 5_000_000),
+                "dt": 0.002,
+                "dt_unit": "ps",
+                "repeat": 5,
+                "nstxout_compressed": 10_000,
+                "comm_grps": "SOLU_MEMB SOLV",
+            }
+        ]
+    return [
+        {
+            "nsteps": params.get("prod_nsteps", 500_000),
             "dt": 0.002,
             "dt_unit": "ps",
-            "repeat": 5,
-            "nstxout_compressed": 10_000,
-            "comm_grps": "SOLU_MEMB SOLV",
-        }]
-    return [{
-        "nsteps": params.get("prod_nsteps", 500_000),
-        "dt": 0.002,
-        "dt_unit": "ps",
-        "repeat": 10,
-        "nstxout_compressed": 50_000,
-        "comm_grps": "SOLU SOLV",
-    }]
+            "repeat": 10,
+            "nstxout_compressed": 50_000,
+            "comm_grps": "SOLU SOLV",
+        }
+    ]
 
 
 # =============================================================================
 # Common MDP sections
 # =============================================================================
+
 
 def _nonbond_params(params: dict, nstlist: int = 20, stage: dict | None = None) -> str:
     """Return force-field-specific non-bonded defaults.
@@ -840,8 +1022,7 @@ def _nonbond_params(params: dict, nstlist: int = 20, stage: dict | None = None) 
     dispcorr = str(selected("dispcorr"))
     if family == "charmm" and dispcorr.lower() not in {"no", "none"}:
         raise ValueError(
-            "CHARMM36/CHARMM36m requires DispCorr=no with its force-switch "
-            "non-bonded protocol"
+            "CHARMM36/CHARMM36m requires DispCorr=no with its force-switch non-bonded protocol"
         )
     switch_line = ""
     rvdw_switch = selected("rvdw_switch")
@@ -849,14 +1030,14 @@ def _nonbond_params(params: dict, nstlist: int = 20, stage: dict | None = None) 
         switch_line = f"\nrvdw_switch             = {rvdw_switch}"
     return f""";
 cutoff-scheme           = Verlet
-nstlist                 = {stage.get('nstlist', nstlist)}
-rlist                   = {selected('rlist')}
+nstlist                 = {stage.get("nstlist", nstlist)}
+rlist                   = {selected("rlist")}
 vdwtype                 = Cut-off
-vdw-modifier            = {selected('vdw_modifier')}{switch_line}
-rvdw                    = {selected('rvdw')}
+vdw-modifier            = {selected("vdw_modifier")}{switch_line}
+rvdw                    = {selected("rvdw")}
 coulombtype             = PME
-rcoulomb                = {selected('rcoulomb')}
-fourierspacing          = {stage.get('fourierspacing', params.get('fourierspacing', 0.12))}
+rcoulomb                = {selected("rcoulomb")}
+fourierspacing          = {stage.get("fourierspacing", params.get("fourierspacing", 0.12))}
 DispCorr                = {dispcorr}"""
 
 
@@ -876,10 +1057,11 @@ def _temp_coupling(params: dict, stage: dict | None = None) -> str:
     ref_t = stage.get("temperature", params.get("temperature", 310.15))
     ref_t_vals = " ".join(str(ref_t) for _ in range(n_groups))
     return f""";
-	tcoupl                  = {stage.get('tcoupl', params.get('tcoupl', 'v-rescale'))}
+	tcoupl                  = {stage.get("tcoupl", params.get("tcoupl", "v-rescale"))}
 	tc-grps                 = {grps}
-	tau-t                   = {' '.join([str(stage.get('tau_t', 1.0))] * n_groups)}
+	tau-t                   = {" ".join([str(stage.get("tau_t", 1.0))] * n_groups)}
 	ref-t                   = {ref_t_vals}"""
+
 
 def _pressure_coupling(params: dict, stage: dict | None = None) -> str:
     """Semi-isotropic pressure coupling for membrane systems."""
@@ -900,11 +1082,11 @@ def _pressure_coupling(params: dict, stage: dict | None = None) -> str:
         "surface-tension": "Surface-Tension",
     }.get(str(pcoupl_type).lower(), str(pcoupl_type))
     return f""";
-pcoupl                  = {stage.get('pcoupl', params.get('pcoupl', 'C-rescale'))}
+pcoupl                  = {stage.get("pcoupl", params.get("pcoupl", "C-rescale"))}
 pcoupltype              = {rendered_type}
-tau-p                   = {stage.get('tau_p', params.get('tau_p', 5.0))}
+tau-p                   = {stage.get("tau_p", params.get("tau_p", 5.0))}
 compressibility         = {comp_str}
-ref-p                   = {str(ref_p) + '  ' + str(ref_p) if pcoupl_type == 'semisotropic' else str(ref_p)}
+ref-p                   = {str(ref_p) + "  " + str(ref_p) if pcoupl_type == "semisotropic" else str(ref_p)}
 refcoord-scaling        = com"""
 
 
@@ -918,10 +1100,12 @@ def _define_macros(rst: dict, params: dict) -> str:
     if protein_restraints or lipid_restraints:
         macros.append("-DPOSRES")
     if protein_restraints:
-        macros.extend([
-            f"-DPOSRES_FC_BB={rst['bb']:.1f}",
-            f"-DPOSRES_FC_SC={rst['sc']:.1f}",
-        ])
+        macros.extend(
+            [
+                f"-DPOSRES_FC_BB={rst['bb']:.1f}",
+                f"-DPOSRES_FC_SC={rst['sc']:.1f}",
+            ]
+        )
     if lipid_restraints:
         macros.append(f"-DPOSRES_FC_LIPID={rst['lipid']:.1f}")
     if lipid_dihedrals:
@@ -933,13 +1117,13 @@ def _define_macros(rst: dict, params: dict) -> str:
 
 def _output_control(params: dict, stage: dict | None = None) -> str:
     stage = stage or {}
-    return f"""nstxout-compressed      = {stage.get('nstxout_compressed', params.get('nstxout_compressed', 5000))}
-nstxout                 = {stage.get('nstxout', params.get('nstxout', 0))}
-nstvout                 = {stage.get('nstvout', params.get('nstvout', 0))}
-nstfout                 = {stage.get('nstfout', params.get('nstfout', 0))}
-nstcalcenergy           = {stage.get('nstcalcenergy', params.get('nstcalcenergy', 100))}
-nstenergy               = {stage.get('nstenergy', params.get('nstenergy', 1000))}
-nstlog                  = {stage.get('nstlog', params.get('nstlog', 1000))}"""
+    return f"""nstxout-compressed      = {stage.get("nstxout_compressed", params.get("nstxout_compressed", 5000))}
+nstxout                 = {stage.get("nstxout", params.get("nstxout", 0))}
+nstvout                 = {stage.get("nstvout", params.get("nstvout", 0))}
+nstfout                 = {stage.get("nstfout", params.get("nstfout", 0))}
+nstcalcenergy           = {stage.get("nstcalcenergy", params.get("nstcalcenergy", 100))}
+nstenergy               = {stage.get("nstenergy", params.get("nstenergy", 1000))}
+nstlog                  = {stage.get("nstlog", params.get("nstlog", 1000))}"""
 
 
 def _com_motion(params: dict | None = None, stage: dict | None = None) -> str:
@@ -948,8 +1132,8 @@ def _com_motion(params: dict | None = None, stage: dict | None = None) -> str:
     stage = stage or {}
     grps = stage.get("comm_grps", params.get("comm_grps", "System"))
     return f""";
-nstcomm                 = {stage.get('nstcomm', params.get('nstcomm', 100))}
-comm-mode               = {stage.get('comm_mode', params.get('comm_mode', 'linear'))}
+nstcomm                 = {stage.get("nstcomm", params.get("nstcomm", 100))}
+comm-mode               = {stage.get("comm_mode", params.get("comm_mode", "linear"))}
 comm-grps               = {grps}"""
 
 
@@ -957,16 +1141,17 @@ comm-grps               = {grps}"""
 # Stage builders
 # =============================================================================
 
+
 def _build_minim(params: dict, minimization: dict) -> str:
     return f"""; Energy Minimization — generated by GMXBUILDER
 {_define_macros(minimization, params)}
-integrator              = {minimization.get('integrator', 'steep')}
-emtol                   = {minimization.get('emtol', 1000.0)}
-emstep                  = {minimization.get('emstep', 0.01)}
-nsteps                  = {minimization.get('nsteps', 50000 if params.get('has_membrane', True) else 5000)}
-{_nonbond_params(params, nstlist=int(minimization.get('nstlist', 10)), stage=minimization)}
+integrator              = {minimization.get("integrator", "steep")}
+emtol                   = {minimization.get("emtol", 1000.0)}
+emstep                  = {minimization.get("emstep", 0.01)}
+nsteps                  = {minimization.get("nsteps", 50000 if params.get("has_membrane", True) else 5000)}
+{_nonbond_params(params, nstlist=int(minimization.get("nstlist", 10)), stage=minimization)}
 ;
-constraints             = {minimization.get('constraints', 'h-bonds')}
+constraints             = {minimization.get("constraints", "none")}
 constraint-algorithm    = Lincs
 ;
 tcoupl                  = no
@@ -975,7 +1160,9 @@ continuation            = no
 """
 
 
-def _build_nvt(params: dict, rst: dict, dt: float, nsteps: int, is_first: bool, stage_num: int) -> str:
+def _build_nvt(
+    params: dict, rst: dict, dt: float, nsteps: int, is_first: bool, stage_num: int
+) -> str:
     lines = [f"; NVT Equilibration Stage {stage_num} — generated by GMXBUILDER"]
     lines.append(_define_macros(rst, params))
     lines.append("integrator              = md")
@@ -985,7 +1172,9 @@ def _build_nvt(params: dict, rst: dict, dt: float, nsteps: int, is_first: bool, 
     lines.append(_nonbond_params(params, stage=rst))
     lines.append(_temp_coupling(params, rst))
     lines.append(";")
-    lines.append(f"constraints             = {rst.get('constraints', params.get('constraints', 'h-bonds'))}")
+    lines.append(
+        f"constraints             = {rst.get('constraints', params.get('constraints', 'h-bonds'))}"
+    )
     lines.append("constraint-algorithm    = Lincs")
     lines.append(_com_motion(params, rst))
 
@@ -1024,7 +1213,9 @@ def _build_npt(
     lines.append(_temp_coupling(params, rst))
     lines.append(_pressure_coupling(params, rst))
     lines.append(";")
-    lines.append(f"constraints             = {rst.get('constraints', params.get('constraints', 'h-bonds'))}")
+    lines.append(
+        f"constraints             = {rst.get('constraints', params.get('constraints', 'h-bonds'))}"
+    )
     lines.append("constraint-algorithm    = Lincs")
     if is_first:
         seed = rst.get("gen_seed", params.get("gen_seed", -1))

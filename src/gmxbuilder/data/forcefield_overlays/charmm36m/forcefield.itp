@@ -1,0 +1,18 @@
+; Base asset: official CHARMM36 July 2022 GROMACS port.
+; GMXBUILDER adds only the cited plasmalogen bonded extension below.
+#define _FF_CHARMM
+
+[ defaults ]
+; nbfunc  comb-rule  gen-pairs  fudgeLJ  fudgeQQ
+       1          2        yes      1.0      1.0
+
+#include "ffnonbonded.itp"
+#include "ffbonded.itp"
+#include "gmxbuilder-plasmalogen-bonded.itp"
+
+#ifdef USE_OLD_C36
+#error This port does not support the old CHARMM36 CMAP parameters.
+#endif
+
+#include "cmap.itp"
+#include "nbfix.itp"

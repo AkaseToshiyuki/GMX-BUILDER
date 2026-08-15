@@ -25,30 +25,52 @@ _BACKBONE = {"N", "CA", "C", "O"}
 # every observed atom must still have at least one intact path to CA.
 _SIDECHAIN_PARENTS: dict[str, dict[str, str]] = {
     "ALA": {"CB": "CA"},
-    "ARG": {"CB": "CA", "CG": "CB", "CD": "CG", "NE": "CD", "CZ": "NE",
-            "NH1": "CZ", "NH2": "CZ"},
+    "ARG": {"CB": "CA", "CG": "CB", "CD": "CG", "NE": "CD", "CZ": "NE", "NH1": "CZ", "NH2": "CZ"},
     "ASN": {"CB": "CA", "CG": "CB", "OD1": "CG", "ND2": "CG"},
     "ASP": {"CB": "CA", "CG": "CB", "OD1": "CG", "OD2": "CG"},
     "CYS": {"CB": "CA", "SG": "CB"},
     "GLN": {"CB": "CA", "CG": "CB", "CD": "CG", "OE1": "CD", "NE2": "CD"},
     "GLU": {"CB": "CA", "CG": "CB", "CD": "CG", "OE1": "CD", "OE2": "CD"},
     "GLY": {},
-    "HIS": {"CB": "CA", "CG": "CB", "ND1": "CG", "CD2": "CG",
-            "CE1": "ND1", "NE2": "CE1"},
+    "HIS": {"CB": "CA", "CG": "CB", "ND1": "CG", "CD2": "CG", "CE1": "ND1", "NE2": "CE1"},
     "ILE": {"CB": "CA", "CG1": "CB", "CG2": "CB", "CD1": "CG1"},
     "LEU": {"CB": "CA", "CG": "CB", "CD1": "CG", "CD2": "CG"},
     "LYS": {"CB": "CA", "CG": "CB", "CD": "CG", "CE": "CD", "NZ": "CE"},
     "MET": {"CB": "CA", "CG": "CB", "SD": "CG", "CE": "SD"},
-    "PHE": {"CB": "CA", "CG": "CB", "CD1": "CG", "CD2": "CG",
-            "CE1": "CD1", "CE2": "CD2", "CZ": "CE1"},
+    "PHE": {
+        "CB": "CA",
+        "CG": "CB",
+        "CD1": "CG",
+        "CD2": "CG",
+        "CE1": "CD1",
+        "CE2": "CD2",
+        "CZ": "CE1",
+    },
     "PRO": {"CB": "CA", "CG": "CB", "CD": "CG"},
     "SER": {"CB": "CA", "OG": "CB"},
     "THR": {"CB": "CA", "OG1": "CB", "CG2": "CB"},
-    "TRP": {"CB": "CA", "CG": "CB", "CD1": "CG", "CD2": "CG",
-            "NE1": "CD1", "CE2": "NE1", "CE3": "CD2", "CZ2": "CE2",
-            "CZ3": "CE3", "CH2": "CZ2"},
-    "TYR": {"CB": "CA", "CG": "CB", "CD1": "CG", "CD2": "CG",
-            "CE1": "CD1", "CE2": "CD2", "CZ": "CE1", "OH": "CZ"},
+    "TRP": {
+        "CB": "CA",
+        "CG": "CB",
+        "CD1": "CG",
+        "CD2": "CG",
+        "NE1": "CD1",
+        "CE2": "NE1",
+        "CE3": "CD2",
+        "CZ2": "CE2",
+        "CZ3": "CE3",
+        "CH2": "CZ2",
+    },
+    "TYR": {
+        "CB": "CA",
+        "CG": "CB",
+        "CD1": "CG",
+        "CD2": "CG",
+        "CE1": "CD1",
+        "CE2": "CD2",
+        "CZ": "CE1",
+        "OH": "CZ",
+    },
     "VAL": {"CB": "CA", "CG1": "CB", "CG2": "CB"},
 }
 
@@ -109,16 +131,14 @@ def assess_repairable_missing_atoms(
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             blockers.append(
-                f"{chain or '?'}:{resid} {resname} has duplicate atom names "
-                f"{','.join(duplicates)}"
+                f"{chain or '?'}:{resid} {resname} has duplicate atom names {','.join(duplicates)}"
             )
             continue
 
         missing_backbone = sorted(_BACKBONE - observed)
         if missing_backbone:
             blockers.append(
-                f"{chain or '?'}:{resid} {resname} missing backbone "
-                f"{','.join(missing_backbone)}"
+                f"{chain or '?'}:{resid} {resname} missing backbone {','.join(missing_backbone)}"
             )
             continue
 
@@ -160,9 +180,11 @@ def find_repairable_missing_atoms(
         preview = "; ".join(blockers[:10])
         suffix = f"; and {len(blockers) - 10} more" if len(blockers) > 10 else ""
         raise ModuleConfigError(
-            "Protein damage requires user review: " + preview + suffix
+            "Protein damage requires user review: "
+            + preview
+            + suffix
             + ". Automatic repair is limited to complete backbones with an unbroken "
-              "partial side chain. Upload a repaired model for ambiguous residues."
+            "partial side chain. Upload a repaired model for ambiguous residues."
         )
     return candidates
 
@@ -170,9 +192,7 @@ def find_repairable_missing_atoms(
 def _structure_from_fixer(fixer, original: Structure) -> Structure:
     from openmm import unit
 
-    coordinates = np.asarray(
-        fixer.positions.value_in_unit(unit.nanometer), dtype=np.float64
-    )
+    coordinates = np.asarray(fixer.positions.value_in_unit(unit.nanometer), dtype=np.float64)
     atoms = list(fixer.topology.atoms())
     if len(atoms) != len(coordinates):
         raise ModuleConfigError("PDBFixer returned inconsistent atom and coordinate counts")
@@ -265,9 +285,7 @@ def _validate_repair(
             )
 
     expected_added = {
-        (*residue_key, atom)
-        for residue_key, atoms in candidates.items()
-        for atom in atoms
+        (*residue_key, atom) for residue_key, atoms in candidates.items() for atom in atoms
     }
     actual_added = set(repaired_by_key) - set(original_by_key)
     if actual_added != expected_added:
@@ -287,9 +305,11 @@ def _validate_repair(
         for old_key, old_index in original_by_key.items():
             if key[:3] == old_key[:3]:
                 continue
-            distance = float(np.linalg.norm(
-                repaired.coordinates[new_index] - repaired.coordinates[repaired_by_key[old_key]]
-            ))
+            distance = float(
+                np.linalg.norm(
+                    repaired.coordinates[new_index] - repaired.coordinates[repaired_by_key[old_key]]
+                )
+            )
             if distance < 0.075:
                 raise ModuleConfigError(
                     f"Automatic repair created a severe clash: {key[0] or '?'}:{key[1]} "
@@ -309,10 +329,12 @@ def _validate_repair(
                 raise ModuleConfigError(
                     f"Automatic repair could not validate parent {parent} for {resname} {atom}"
                 )
-            distance = float(np.linalg.norm(
-                repaired.coordinates[repaired_by_key[atom_key]]
-                - repaired.coordinates[repaired_by_key[parent_key]]
-            ))
+            distance = float(
+                np.linalg.norm(
+                    repaired.coordinates[repaired_by_key[atom_key]]
+                    - repaired.coordinates[repaired_by_key[parent_key]]
+                )
+            )
             if not 0.08 <= distance <= 0.25:
                 raise ModuleConfigError(
                     f"Automatic repair produced invalid {resname} {parent}-{atom} bond "
@@ -333,9 +355,11 @@ def repair_standard_protein_heavy_atoms(
         preview = "; ".join(blockers[:10])
         suffix = f"; and {len(blockers) - 10} more" if len(blockers) > 10 else ""
         raise ModuleConfigError(
-            "Protein damage requires user review: " + preview + suffix
+            "Protein damage requires user review: "
+            + preview
+            + suffix
             + ". Automatic repair is limited to complete backbones with an unbroken "
-              "partial side chain. Upload a repaired model for ambiguous residues."
+            "partial side chain. Upload a repaired model for ambiguous residues."
         )
     if not candidates:
         return structure, []
@@ -387,17 +411,13 @@ def repair_standard_protein_heavy_atoms(
                     (*residue_key, str(atom.name).strip().upper()) for atom in chosen
                 )
 
-        expected_names = {
-            (*key, atom) for key, atoms in candidates.items() for atom in atoms
-        }
+        expected_names = {(*key, atom) for key, atoms in candidates.items() for atom in atoms}
         if selected_names != expected_names:
             unavailable = sorted(expected_names - selected_names)
             detail = ", ".join(
                 f"{key[0] or '?'}:{key[1]} {key[2]} {key[3]}" for key in unavailable[:10]
             )
-            raise ModuleConfigError(
-                "PDBFixer has no matching standard template for: " + detail
-            )
+            raise ModuleConfigError("PDBFixer has no matching standard template for: " + detail)
 
         fixer.missingAtoms = selected
         fixer.missingTerminals = {}
@@ -424,6 +444,7 @@ def repair_report(records: Iterable[RepairRecord]) -> dict:
         "validation": (
             "Existing coordinates preserved; atom identities, covalent distances, "
             "and severe external clashes checked."
-            if records else "No missing standard protein heavy atoms detected."
+            if records
+            else "No missing standard protein heavy atoms detected."
         ),
     }

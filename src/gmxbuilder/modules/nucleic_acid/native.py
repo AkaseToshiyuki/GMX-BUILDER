@@ -103,7 +103,7 @@ def _sanitize_itp(text: str) -> str:
     match = re.search(r"(?m)^\s*\[\s*moleculetype\s*]\s*$", text)
     if not match:
         raise ModuleConfigError("Generated nucleic-acid ITP is incomplete")
-    body = text[match.start():]
+    body = text[match.start() :]
     # A single-chain pdb2gmx run writes the molecule directly into the master
     # topology.  Remove its subsequent water/ion/system sections while
     # retaining the molecule's POSRES include.
@@ -114,7 +114,7 @@ def _sanitize_itp(text: str) -> str:
     system_section = re.search(r"(?m)^\s*\[\s*system\s*]\s*$", body)
     stops = [item.start() for item in (water_include, system_section) if item]
     if stops:
-        body = body[:min(stops)]
+        body = body[: min(stops)]
     return "; Native GROMACS/CHARMM36 nucleic-acid topology\n" + body.rstrip() + "\n"
 
 
@@ -132,31 +132,33 @@ def _sanitize_posre(text: str, itp_text: str) -> str:
             except ValueError:
                 continue
     backbone = {
-        "P", "O1P", "O2P", "OP1", "OP2", "O5'", "C5'", "C4'",
-        "O4'", "C1'", "C2'", "O2'", "C3'", "O3'",
+        "P",
+        "O1P",
+        "O2P",
+        "OP1",
+        "OP2",
+        "O5'",
+        "C5'",
+        "C4'",
+        "O4'",
+        "C1'",
+        "C2'",
+        "O2'",
+        "C3'",
+        "O3'",
     }
-    lines = text[match.start():].splitlines()
+    lines = text[match.start() :].splitlines()
     rewritten: list[str] = []
     for line in lines:
         clean = line.split(";", 1)[0].strip()
         fields = clean.split()
         if len(fields) >= 5 and fields[0].isdigit() and fields[1].isdigit():
             atom_index = int(fields[0])
-            macro = (
-                "POSRES_FC_BB"
-                if atom_names.get(atom_index, "") in backbone
-                else "POSRES_FC_SC"
-            )
-            rewritten.append(
-                f"{atom_index:6d}    1  {macro:>16s} {macro:>16s} {macro:>16s}"
-            )
+            macro = "POSRES_FC_BB" if atom_names.get(atom_index, "") in backbone else "POSRES_FC_SC"
+            rewritten.append(f"{atom_index:6d}    1  {macro:>16s} {macro:>16s} {macro:>16s}")
         else:
             rewritten.append(line)
-    return (
-        "; Native nucleic-acid heavy-atom restraints\n"
-        + "\n".join(rewritten).rstrip()
-        + "\n"
-    )
+    return "; Native nucleic-acid heavy-atom restraints\n" + "\n".join(rewritten).rstrip() + "\n"
 
 
 def _replace_molecule_type(text: str, old: str, new: str) -> str:
@@ -173,7 +175,9 @@ def _replace_molecule_type(text: str, old: str, new: str) -> str:
             if clean:
                 fields = line.split()
                 if fields[0] != old:
-                    raise ModuleConfigError("Generated nucleic-acid molecule name changed unexpectedly")
+                    raise ModuleConfigError(
+                        "Generated nucleic-acid molecule name changed unexpectedly"
+                    )
                 lines[index] = line.replace(old, new, 1)
                 replaced = True
     if not replaced:
@@ -225,8 +229,14 @@ def _make_polymer_molecules_contiguous(system: System) -> None:
     old_to_new = {old: new for new, old in enumerate(order)}
     system.structure.coordinates = system.structure.coordinates[order]
     for name in (
-        "atom_names", "resnames", "resids", "chain_ids", "segids",
-        "elements", "occupancies", "tempfactors",
+        "atom_names",
+        "resnames",
+        "resids",
+        "chain_ids",
+        "segids",
+        "elements",
+        "occupancies",
+        "tempfactors",
     ):
         values = getattr(system.structure, name)
         setattr(system.structure, name, [values[index] for index in order])
@@ -270,9 +280,20 @@ def _prepare_component(
         input_pdb = work / "nucleic.pdb"
         PDBWriter.write(source, input_pdb, title="Canonical nucleic acid")
         command = [
-            gmx, "pdb2gmx", "-f", str(input_pdb), "-o", "processed.gro",
-            "-p", "native.top", "-ff", force_field, "-water", "tip3p",
-            "-ignh", "-ter",
+            gmx,
+            "pdb2gmx",
+            "-f",
+            str(input_pdb),
+            "-o",
+            "processed.gro",
+            "-p",
+            "native.top",
+            "-ff",
+            force_field,
+            "-water",
+            "tip3p",
+            "-ignh",
+            "-ter",
         ]
         env = os.environ.copy()
         env["GMXLIB"] = str(work)
@@ -314,8 +335,7 @@ def _prepare_component(
             )
         processed_path = work / "processed.gro"
         candidates = sorted(
-            path for path in work.glob("*.itp")
-            if not path.name.startswith("posre")
+            path for path in work.glob("*.itp") if not path.name.startswith("posre")
         )
         if not processed_path.is_file() or len(candidates) > 1:
             raise ModuleConfigError(
@@ -377,18 +397,25 @@ def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
     for ordinal, component in enumerate(
         sorted(components, key=lambda item: min(map(int, item.atom_indices))), start=1
     ):
-        result, native = _prepare_component(
-            system.structure, component, force_field, ordinal
-        )
+        result, native = _prepare_component(system.structure, component, force_field, ordinal)
         first = min(map(int, component.atom_indices))
         prepared[first] = (component, result, native)
         replaced.update(map(int, component.atom_indices))
 
     coordinates: list[np.ndarray] = []
-    fields = {name: [] for name in (
-        "atom_names", "resnames", "resids", "chain_ids", "segids",
-        "elements", "occupancies", "tempfactors",
-    )}
+    fields = {
+        name: []
+        for name in (
+            "atom_names",
+            "resnames",
+            "resids",
+            "chain_ids",
+            "segids",
+            "elements",
+            "occupancies",
+            "tempfactors",
+        )
+    }
     old_to_new: dict[int, int] = {}
     new_nucleic: dict[int, Component] = {}
 
@@ -408,11 +435,13 @@ def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
             atom_indices = np.arange(start, len(coordinates), dtype=int)
             native["atom_indices"] = atom_indices.tolist()
             metadata = dict(old_component.metadata)
-            metadata.update({
-                "native_topology": native,
-                "net_charge": native["net_charge"],
-                "prepared": True,
-            })
+            metadata.update(
+                {
+                    "native_topology": native,
+                    "net_charge": native["net_charge"],
+                    "prepared": True,
+                }
+            )
             new_nucleic[id(old_component)] = Component(
                 name=old_component.name,
                 kind=ComponentKind.NUCLEIC_ACID,
@@ -437,17 +466,20 @@ def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
             mapped = [old_to_new[int(index)] for index in component.atom_indices]
         except KeyError as exc:
             raise ModuleConfigError("Component indices overlap a nucleic-acid polymer") from exc
-        rebuilt.append(Component(
-            name=component.name,
-            kind=component.kind,
-            atom_indices=np.asarray(mapped, dtype=int),
-            metadata=dict(component.metadata),
-        ))
+        rebuilt.append(
+            Component(
+                name=component.name,
+                kind=component.kind,
+                atom_indices=np.asarray(mapped, dtype=int),
+                metadata=dict(component.metadata),
+            )
+        )
     system.components = rebuilt
     _make_polymer_molecules_contiguous(system)
     native_records = [
         component.metadata["native_topology"]
-        for component in rebuilt if component.kind == ComponentKind.NUCLEIC_ACID
+        for component in rebuilt
+        if component.kind == ComponentKind.NUCLEIC_ACID
     ]
     system.metadata["native_nucleic_topologies"] = native_records
     log = [

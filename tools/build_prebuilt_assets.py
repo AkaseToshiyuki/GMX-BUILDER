@@ -25,8 +25,12 @@ from gmxbuilder.modules.membrane.equilibrated_library import (
 from gmxbuilder.modules.membrane.lipids import LipidRegistry
 
 
-ASSET_VERSION = 2
+ASSET_VERSION = 3
 FORCE_FIELDS = ("amber14sb", "charmm36m", "charmm36")
+PUBLIC_ASSET_URL = (
+    "https://media.githubusercontent.com/media/AkaseToshiyuki/GMX-BUILDER/"
+    "main/src/gmxbuilder/data/prebuilt_assets/"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -52,7 +56,9 @@ def _add_deterministic(bundle: tarfile.TarFile, path: Path, root: Path) -> None:
 
 
 def build_archive(
-    lipid_source: Path, gaff_source: Path, destination: Path,
+    lipid_source: Path,
+    gaff_source: Path,
+    destination: Path,
 ) -> dict:
     library = EquilibratedLipidLibrary([lipid_source])
     strict_entries: dict[tuple[str, str], Path] = {}
@@ -61,13 +67,13 @@ def build_archive(
         if not job["ready"]:
             continue
         entry = library.inspect(
-            job["lipid_name"], job["force_field"], job["lipid_ff"],
+            job["lipid_name"],
+            job["force_field"],
+            job["lipid_ff"],
         )
         if entry is None:
             raise RuntimeError(f"Validated entry disappeared: {job}")
-        strict_entries[
-            (job["parameter_family"], job["lipid_name"])
-        ] = entry.path
+        strict_entries[(job["parameter_family"], job["lipid_name"])] = entry.path
 
     if not strict_entries:
         raise RuntimeError("No validated lipid conformer libraries are available")
@@ -79,8 +85,7 @@ def build_archive(
         capable, reason = gaff_lipid_capability(name)
         if not capable:
             raise RuntimeError(
-                f"Validated Amber/GAFF2 entry has no usable GAFF capability for "
-                f"{name}: {reason}"
+                f"Validated Amber/GAFF2 entry has no usable GAFF capability for {name}: {reason}"
             )
         lipid = LipidRegistry.get(name)
         safe_name = _safe_name(name)
@@ -109,12 +114,8 @@ def build_archive(
         gaff_files = len([path for path in gaff_root.rglob("*") if path.is_file()])
         contents = {
             "compatible_force_field_jobs": len(coverage),
-            "validated_force_field_jobs": sum(
-                bool(job["ready"]) for job in coverage
-            ),
-            "unavailable_force_field_jobs": sum(
-                not bool(job["ready"]) for job in coverage
-            ),
+            "validated_force_field_jobs": sum(bool(job["ready"]) for job in coverage),
+            "unavailable_force_field_jobs": sum(not bool(job["ready"]) for job in coverage),
             "strict_library_entries": len(strict_entries),
             "strict_library_files": strict_files,
             "conformations": conformers,
@@ -129,6 +130,7 @@ def build_archive(
         "library_schema_version": LIBRARY_SCHEMA_VERSION,
         "software_version": __version__,
         "archive": destination.name,
+        "download_url": PUBLIC_ASSET_URL + destination.name,
         "archive_bytes": destination.stat().st_size,
         "archive_sha256": _sha256(destination),
         "contents": contents,
@@ -148,18 +150,24 @@ def build_archive(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--lipid-source", type=Path,
+        "--lipid-source",
+        type=Path,
         default=Path.home() / ".cache" / "gmxbuilder" / "lipid_equilibrated",
     )
     parser.add_argument(
-        "--gaff-source", type=Path,
+        "--gaff-source",
+        type=Path,
         default=Path.home() / ".cache" / "gmxbuilder" / "gaff2",
     )
     parser.add_argument(
-        "--destination", type=Path,
+        "--destination",
+        type=Path,
         default=(
             Path(__file__).resolve().parents[1]
-            / "src" / "gmxbuilder" / "data" / "prebuilt_assets"
+            / "src"
+            / "gmxbuilder"
+            / "data"
+            / "prebuilt_assets"
             / f"gmxbuilder-lipid-assets-v{ASSET_VERSION}.tar.xz"
         ),
     )

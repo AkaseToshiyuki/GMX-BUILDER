@@ -56,7 +56,9 @@ def test_method_four_generates_tetrahedral_methyl_geometry():
         method=4,
     )
 
-    directions = [(position - control) / np.linalg.norm(position - control) for position in positions]
+    directions = [
+        (position - control) / np.linalg.norm(position - control) for position in positions
+    ]
     axis = np.array([1.0, 0.0, 0.0])
     assert len(directions) == 3
     for direction in directions:

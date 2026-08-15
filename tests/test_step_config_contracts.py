@@ -27,9 +27,9 @@ def _one_unknown_molecule():
         elements=["C"],
     )
     system = System(structure=structure)
-    system.add_component(Component(
-        name="UNKNOWN", kind=ComponentKind.UNKNOWN, atom_indices=np.array([0])
-    ))
+    system.add_component(
+        Component(name="UNKNOWN", kind=ComponentKind.UNKNOWN, atom_indices=np.array([0]))
+    )
     return system
 
 
@@ -59,55 +59,70 @@ def test_orientation_rejects_invalid_hydrophobic_half_thickness(value):
         OrientModule().validate_config({"method": "ppm", "half_thickness": value})
 
 
-@pytest.mark.parametrize("key,value", [
-    ("tilt", float("nan")),
-    ("z_offset", "not-a-number"),
-    ("phi", float("inf")),
-])
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("tilt", float("nan")),
+        ("z_offset", "not-a-number"),
+        ("phi", float("inf")),
+    ],
+)
 def test_manual_orientation_rejects_nonfinite_values(key, value):
     with pytest.raises(ModuleConfigError, match="finite number"):
         OrientModule().validate_config({"method": "manual", key: value})
 
 
-@pytest.mark.parametrize("updates", [
-    {"lipid_composition": {
-        "upper": [{"name": "POPC", "ratio": 100}],
-        "lower": [],
-    }},
-    {"lipid_type": "POPC", "box_padding": 2.0, "pad": 3.0},
-    {"lipid_type": "POPC", "bilayer_size": [8.0, float("nan")]},
-    {"lipid_type": "POPC", "orient_method": "unknown"},
-    {"lipid_type": "POPC", "embed_method": "unknown"},
-    {"lipid_type": "POPC", "seed": 1.25},
-])
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {
+            "lipid_composition": {
+                "upper": [{"name": "POPC", "ratio": 100}],
+                "lower": [],
+            }
+        },
+        {"lipid_type": "POPC", "box_padding": 2.0, "pad": 3.0},
+        {"lipid_type": "POPC", "bilayer_size": [8.0, float("nan")]},
+        {"lipid_type": "POPC", "orient_method": "unknown"},
+        {"lipid_type": "POPC", "embed_method": "unknown"},
+        {"lipid_type": "POPC", "seed": 1.25},
+    ],
+)
 def test_membrane_rejects_ambiguous_or_nonfinite_geometry_config(updates):
     with pytest.raises(ModuleConfigError):
         MembraneBuilder().validate_config(updates)
 
 
 def test_membrane_omitted_lower_leaflet_remains_explicit_symmetric_mode():
-    assert MembraneBuilder().validate_config({
-        "lipid_composition": {
-            "upper": [{"name": "POPC", "ratio": 100}],
+    assert MembraneBuilder().validate_config(
+        {
+            "lipid_composition": {
+                "upper": [{"name": "POPC", "ratio": 100}],
+            },
+            "bilayer_size": [8.0, 9.0],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"modifications": ["bad"], "skip_protonation": True},
+        {
+            "modifications": [{"index": 0, "patch_id": "X", "ignored": True}],
+            "skip_protonation": True,
         },
-        "bilayer_size": [8.0, 9.0],
-    })
-
-
-@pytest.mark.parametrize("config", [
-    {"modifications": ["bad"], "skip_protonation": True},
-    {"modifications": [{"index": 0, "patch_id": "X", "ignored": True}],
-     "skip_protonation": True},
-    {"crosslinks": [{"type": "disulfide", "first_index": 0,
-                     "second_index": 1, "ignored": True}]},
-    {"crosslinks": [{"type": "unknown", "first_index": 0,
-                     "second_index": 1}]},
-    {"crosslinks": [{"type": "disulfide", "first_index": 0,
-                     "second_index": True}]},
-    {"termini": {"A": []}, "skip_protonation": True},
-    {"termini": {"A": {"nter": "ACE", "ignored": "X"}},
-     "skip_protonation": True},
-])
+        {
+            "crosslinks": [
+                {"type": "disulfide", "first_index": 0, "second_index": 1, "ignored": True}
+            ]
+        },
+        {"crosslinks": [{"type": "unknown", "first_index": 0, "second_index": 1}]},
+        {"crosslinks": [{"type": "disulfide", "first_index": 0, "second_index": True}]},
+        {"termini": {"A": []}, "skip_protonation": True},
+        {"termini": {"A": {"nter": "ACE", "ignored": "X"}}, "skip_protonation": True},
+    ],
+)
 def test_structure_rejects_malformed_nested_chemistry_config(config):
     with pytest.raises(ModuleConfigError):
         StructureProcessor().validate_config(config)
@@ -128,12 +143,12 @@ def test_structure_accepts_minimal_forcefield_derived_modification_contract():
 
 
 def test_structure_accepts_minimal_disulfide_crosslink_contract():
-    assert StructureProcessor().validate_config({
-        "crosslinks": [
-            {"type": "disulfide", "first_index": 4, "second_index": 17}
-        ],
-        "skip_protonation": True,
-    })
+    assert StructureProcessor().validate_config(
+        {
+            "crosslinks": [{"type": "disulfide", "first_index": 4, "second_index": 17}],
+            "skip_protonation": True,
+        }
+    )
 
 
 def test_structure_rejects_client_supplied_modification_charge_shift():
@@ -151,8 +166,10 @@ def test_structure_rejects_client_supplied_modification_charge_shift():
 def test_forcefield_rejects_incompatible_unparameterized_input_molecule():
     module = ForceFieldSelector()
     config = {
-        "name": "charmm36m", "lipid_names": ["POPC"],
-        "lipid_ff": "charmm36m", "ligand_ff": "cgenff",
+        "name": "charmm36m",
+        "lipid_names": ["POPC"],
+        "lipid_ff": "charmm36m",
+        "ligand_ff": "cgenff",
     }
     module.validate_config(config)
     with pytest.raises(ModuleConfigError, match="incompatible"):
@@ -160,12 +177,14 @@ def test_forcefield_rejects_incompatible_unparameterized_input_molecule():
 
 
 def test_membrane_requires_forcefield_reconfirmation_when_family_changes(empty_system):
-    empty_system.metadata.update({
-        "requested_force_field": "charmm36m",
-        "force_field": "charmm36m",
-        "lipid_ff": "charmm36m",
-        "selected_lipid_names": ["POPC"],
-    })
+    empty_system.metadata.update(
+        {
+            "requested_force_field": "charmm36m",
+            "force_field": "charmm36m",
+            "lipid_ff": "charmm36m",
+            "selected_lipid_names": ["POPC"],
+        }
+    )
     config = {
         "lipid_composition": {
             "upper": [{"name": "20AHC", "ratio": 100}],
@@ -178,23 +197,27 @@ def test_membrane_requires_forcefield_reconfirmation_when_family_changes(empty_s
 
 
 def test_membrane_rejects_changed_unvalidated_amber_gaff2_lipid(empty_system):
-    empty_system.metadata.update({
-        "force_field": "amber14sb",
-        "lipid_ff": "gaff2",
-        "selected_lipid_names": ["POPC"],
-        "gaff_lipids": ["POPC"],
-    })
+    empty_system.metadata.update(
+        {
+            "force_field": "amber14sb",
+            "lipid_ff": "gaff2",
+            "selected_lipid_names": ["POPC"],
+            "gaff_lipids": ["POPC"],
+        }
+    )
 
     with pytest.raises(ModuleConfigError, match="CHARMM36m"):
         _reconcile_lipid_selection(empty_system, ["POPC", "CAMP"])
 
 
 def test_membrane_revalidates_changed_supported_charmm_mixture(empty_system):
-    empty_system.metadata.update({
-        "force_field": "charmm36m",
-        "lipid_ff": "charmm36m",
-        "selected_lipid_names": ["POPC"],
-    })
+    empty_system.metadata.update(
+        {
+            "force_field": "charmm36m",
+            "lipid_ff": "charmm36m",
+            "selected_lipid_names": ["POPC"],
+        }
+    )
 
     _reconcile_lipid_selection(empty_system, ["POPC", "CHOL"])
 
@@ -202,12 +225,14 @@ def test_membrane_revalidates_changed_supported_charmm_mixture(empty_system):
 
 
 def test_membrane_preserves_explicit_coherent_amber_gaff2_backend(empty_system):
-    empty_system.metadata.update({
-        "force_field": "amber14sb",
-        "lipid_ff": "gaff2",
-        "selected_lipid_names": ["POPC"],
-        "gaff_lipids": ["POPC"],
-    })
+    empty_system.metadata.update(
+        {
+            "force_field": "amber14sb",
+            "lipid_ff": "gaff2",
+            "selected_lipid_names": ["POPC"],
+            "gaff_lipids": ["POPC"],
+        }
+    )
 
     message = _reconcile_lipid_selection(empty_system, ["POPC"])
 

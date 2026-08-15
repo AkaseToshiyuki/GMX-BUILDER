@@ -32,7 +32,9 @@ def test_external_timeout_terminates_the_complete_process_group(monkeypatch, tmp
     monkeypatch.setattr(gaff_backend.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(gaff_backend.os, "name", "posix")
     monkeypatch.setattr(
-        gaff_backend.os, "killpg", lambda pid, sig: signals.append((pid, sig)),
+        gaff_backend.os,
+        "killpg",
+        lambda pid, sig: signals.append((pid, sig)),
         raising=False,
     )
 
@@ -71,12 +73,17 @@ def test_gaff_thread_limit_rejects_invalid_values(monkeypatch, value):
 
 
 def test_smiles_parameterization_retries_stochastic_coordinate_clashes(monkeypatch, tmp_path):
-    results = iter([
-        subprocess.CompletedProcess(
-            ["acpype"], 1, "", "Atoms TOO close\nCoordinates issues with your system",
-        ),
-        subprocess.CompletedProcess(["acpype"], 0, "ok", ""),
-    ])
+    results = iter(
+        [
+            subprocess.CompletedProcess(
+                ["acpype"],
+                1,
+                "",
+                "Atoms TOO close\nCoordinates issues with your system",
+            ),
+            subprocess.CompletedProcess(["acpype"], 0, "ok", ""),
+        ]
+    )
     calls = []
 
     def fake_run(args, *, cwd, env, timeout):
@@ -85,7 +92,10 @@ def test_smiles_parameterization_retries_stochastic_coordinate_clashes(monkeypat
 
     monkeypatch.setattr(gaff_backend, "_run_external", fake_run)
     result, generated_work = gaff_backend._run_smiles_acpype(
-        ["acpype", "-i", "SMILES"], work=tmp_path, env={}, timeout=30,
+        ["acpype", "-i", "SMILES"],
+        work=tmp_path,
+        env={},
+        timeout=30,
     )
 
     assert result.returncode == 0

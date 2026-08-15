@@ -41,6 +41,7 @@ class ForceField(ABC):
         output_dir.mkdir(parents=True, exist_ok=True)
         if self.data_dir and self.data_dir.is_dir():
             import shutil
+
             for item in self.data_dir.iterdir():
                 dest = output_dir / item.name
                 if item.is_dir():

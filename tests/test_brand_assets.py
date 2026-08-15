@@ -35,24 +35,22 @@ def test_both_readmes_use_the_canonical_logo_asset() -> None:
 
 
 def test_public_documentation_points_to_current_user_manual() -> None:
-    manual_stem = "GMXBUILDER_USER_MANUAL_V1.0.2"
+    manual_stem = "GMXBUILDER_USER_MANUAL_V1.0.3"
     for suffix in (".md", ".pdf", ".zh-CN.md", ".zh-CN.pdf"):
         assert (ROOT / "docs" / f"{manual_stem}{suffix}").is_file()
-    for name in (
-        "README.md", "README.zh-CN.md", "docs/README.md", "docs/README.zh-CN.md"
-    ):
+    for name in ("README.md", "README.zh-CN.md", "docs/README.md", "docs/README.zh-CN.md"):
         content = (ROOT / name).read_text()
         assert manual_stem in content
         assert "GMXBUILDER_USER_MANUAL_V1.0.0" not in content
 
     source = (ROOT / "docs" / f"{manual_stem}.md").read_text()
     chinese = (ROOT / "docs" / f"{manual_stem}.zh-CN.md").read_text()
-    assert "| Document version | V1.0.2 |" in source
-    assert "| Software | GMXBUILDER v0.9.0 or later |" in source
-    assert "| V1.0.2 | 2026-08-14 |" in source
+    assert "| Document version | V1.0.3 |" in source
+    assert "| Software | GMXBUILDER v0.9.9 or later |" in source
+    assert "| V1.0.3 | 2026-08-15 |" in source
     assert "| V1.0.0 | 2026-07-26 | Initial release |" in source
-    assert "| 文档版本 | V1.0.2 |" in chinese
-    assert "| 适用软件 | GMXBUILDER v0.9.0 或更高版本 |" in chinese
+    assert "| 文档版本 | V1.0.3 |" in chinese
+    assert "| 适用软件 | GMXBUILDER v0.9.9 或更高版本 |" in chinese
     assert "## 附录 B：文档维护要求" not in chinese
 
 
@@ -64,7 +62,7 @@ def test_public_landing_pages_are_bilingual_without_internal_roadmaps() -> None:
     assert "```mermaid" not in english and "## Architecture" not in english
     assert "```mermaid" not in chinese and "## 架构" not in chinese
     assert "access token" in english
-    assert "无需 GitHub 访问令牌" in chinese
+    assert "不要求 GitHub Token" in " ".join(chinese.split())
     for readme in (english, chinese):
         assert "artifact" not in readme.lower()
         assert "制品" not in readme
@@ -84,8 +82,8 @@ def test_each_public_user_document_has_a_language_switch() -> None:
         ("README.md", "README.zh-CN.md"),
         ("docs/README.md", "docs/README.zh-CN.md"),
         (
-            "docs/GMXBUILDER_USER_MANUAL_V1.0.2.md",
-            "docs/GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md",
+            "docs/GMXBUILDER_USER_MANUAL_V1.0.3.md",
+            "docs/GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md",
         ),
         (
             "docs/SCIENTIFIC_COMPATIBILITY.md",

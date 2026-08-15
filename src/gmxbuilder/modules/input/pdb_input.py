@@ -46,17 +46,67 @@ _PROTEIN_RESNAMES = PROTEIN_RESNAMES
 
 _WATER_RESNAMES = {"HOH", "SOL", "WAT", "TIP", "TIP3", "SPC", "SPCE", "DOD"}
 
-_ION_RESNAMES = {"NA", "CL", "K", "CA", "ZN", "MG", "CD", "BR", "I", "CS", "LI",
-                 "RB", "BA", "SR", "CU", "FE", "MN", "CO", "NI", "AU", "HG"}
+_ION_RESNAMES = {
+    "NA",
+    "CL",
+    "K",
+    "CA",
+    "ZN",
+    "MG",
+    "CD",
+    "BR",
+    "I",
+    "CS",
+    "LI",
+    "RB",
+    "BA",
+    "SR",
+    "CU",
+    "FE",
+    "MN",
+    "CO",
+    "NI",
+    "AU",
+    "HG",
+}
 
 # Crystallisation precipitants and common buffer / artifact molecules.
 # These are not protein, not biologically relevant, and would
 # artificially inflate the solute box.
 _ARTIFACT_RESNAMES = {
-    "EDO", "GOL", "ACT", "BOG", "PEG", "PG4", "PGE", "1PE", "2PE",
-    "MPD", "IPA", "TBU", "DMS", "DIO", "SO4", "PO4", "CIT", "TRS",
-    "MES", "HEP", "EPE", "BME", "DTE", "DTV", "BCT", "BNG", "LDA",
-    "LMT", "DMU", "FMT", "ACY", "BTB", "NO3",
+    "EDO",
+    "GOL",
+    "ACT",
+    "BOG",
+    "PEG",
+    "PG4",
+    "PGE",
+    "1PE",
+    "2PE",
+    "MPD",
+    "IPA",
+    "TBU",
+    "DMS",
+    "DIO",
+    "SO4",
+    "PO4",
+    "CIT",
+    "TRS",
+    "MES",
+    "HEP",
+    "EPE",
+    "BME",
+    "DTE",
+    "DTV",
+    "BCT",
+    "BNG",
+    "LDA",
+    "LMT",
+    "DMU",
+    "FMT",
+    "ACY",
+    "BTB",
+    "NO3",
 }
 
 # Residue name standardisation map — normalises common non-standard
@@ -64,12 +114,18 @@ _ARTIFACT_RESNAMES = {
 # Only used when the raw PDB has not been pre-cleaned by the server.
 _RESIDUE_RENAME_MAP = {
     # HIS protonation → HIS (detection then handles all variants)
-    "HSD": "HIS", "HSE": "HIS", "HSP": "HIS",
-    "HID": "HIS", "HIE": "HIS", "HIP": "HIS",
+    "HSD": "HIS",
+    "HSE": "HIS",
+    "HSP": "HIS",
+    "HID": "HIS",
+    "HIE": "HIS",
+    "HIP": "HIS",
     # CYS variants → CYS
-    "CYM": "CYS", "CYX": "CYS",
+    "CYM": "CYS",
+    "CYX": "CYS",
     # ASP / GLU protonation
-    "ASH": "ASP", "GLH": "GLU",
+    "ASH": "ASP",
+    "GLH": "GLU",
     # LYS neutral
     "LYN": "LYS",
     # Selenomethionine → methionine (same geometry)
@@ -132,12 +188,12 @@ class PDBInputModule(BaseModule):
         is_cif = self._is_cif_format(pdb_path)
         if is_cif:
             from gmxbuilder.io.cif import CIFParser
+
             structure = CIFParser().parse(pdb_path)
         else:
             structure = PDBParser().parse(pdb_path)
         n_raw = structure.num_atoms
-        log.append(f"Read {n_raw} atoms from {pdb_path}"
-                   f"{' (CIF→PDB)' if is_cif else ''}")
+        log.append(f"Read {n_raw} atoms from {pdb_path}{' (CIF→PDB)' if is_cif else ''}")
 
         # ---- 2. Detect and reversibly normalize modified residues ----
         # This must happen before generic residue-name standardisation and
@@ -172,8 +228,10 @@ class PDBInputModule(BaseModule):
                 n_renamed += 1
         if n_renamed:
             n_res_approx = len(set(structure.resnames))
-            log.append(f"Residue names standardised: {n_renamed} atoms "
-                       f"across ~{n_res_approx} unique residue types")
+            log.append(
+                f"Residue names standardised: {n_renamed} atoms "
+                f"across ~{n_res_approx} unique residue types"
+            )
 
         # ---- 3. Structure cleaning ----
         structure, clean_stats = self._clean_structure(structure)
@@ -185,8 +243,7 @@ class PDBInputModule(BaseModule):
             log.append(f"Removed {clean_stats['n_alt_conf']} alternate-conformation atoms")
         n_clean = structure.num_atoms
         if n_clean < n_raw:
-            log.append(f"Cleaned: {n_raw} → {n_clean} atoms "
-                       f"({n_raw - n_clean} removed)")
+            log.append(f"Cleaned: {n_raw} → {n_clean} atoms ({n_raw - n_clean} removed)")
 
         # A water-only or hydrogen-only upload cannot seed any downstream
         # pipeline stage.  Stop here instead of allowing empty-coordinate
@@ -258,8 +315,10 @@ class PDBInputModule(BaseModule):
         # cause box misalignment and viewer rendering issues.
         shift = self._center_solute(structure)
         if np.any(np.abs(shift) > 0.005):
-            log.append(f"Solute centred at origin "
-                       f"(shift: {shift[0]:.2f}, {shift[1]:.2f}, {shift[2]:.2f} nm)")
+            log.append(
+                f"Solute centred at origin "
+                f"(shift: {shift[0]:.2f}, {shift[1]:.2f}, {shift[2]:.2f} nm)"
+            )
 
         # ---- 4. Box validation ----
         # Prefer CRYST1 when it is physically reasonable; fall back to
@@ -271,7 +330,9 @@ class PDBInputModule(BaseModule):
             box = self._compute_solute_box(structure)
             structure.box_vectors = box
             dims = np.diag(box)
-            box_source = f"estimated from solute extent ({dims[0]:.1f}×{dims[1]:.1f}×{dims[2]:.1f} nm)"
+            box_source = (
+                f"estimated from solute extent ({dims[0]:.1f}×{dims[1]:.1f}×{dims[2]:.1f} nm)"
+            )
         log.append(f"Box: {dims[0]:.1f}×{dims[1]:.1f}×{dims[2]:.1f} nm ({box_source})")
 
         # ---- 5. Build System and detect components ----
@@ -323,8 +384,9 @@ class PDBInputModule(BaseModule):
         for i in range(n):
             if remove[i]:
                 continue
-            if _is_hydrogen(structure.atom_names[i],
-                            structure.elements[i] if structure.elements else ""):
+            if _is_hydrogen(
+                structure.atom_names[i], structure.elements[i] if structure.elements else ""
+            ):
                 remove[i] = True
                 n_h += 1
 
@@ -349,18 +411,24 @@ class PDBInputModule(BaseModule):
             resids=[structure.resids[i] for i in range(n) if keep[i]],
             chain_ids=[structure.chain_ids[i] for i in range(n) if keep[i]],
             segids=[structure.segids[i] for i in range(n) if keep[i]],
-            elements=([structure.elements[i] for i in range(n) if keep[i]]
-                      if structure.elements else []),
-            occupancies=([structure.occupancies[i] for i in range(n) if keep[i]]
-                         if structure.occupancies else []),
-            tempfactors=([structure.tempfactors[i] for i in range(n) if keep[i]]
-                         if structure.tempfactors else []),
+            elements=(
+                [structure.elements[i] for i in range(n) if keep[i]] if structure.elements else []
+            ),
+            occupancies=(
+                [structure.occupancies[i] for i in range(n) if keep[i]]
+                if structure.occupancies
+                else []
+            ),
+            tempfactors=(
+                [structure.tempfactors[i] for i in range(n) if keep[i]]
+                if structure.tempfactors
+                else []
+            ),
         )
         return cleaned, {"n_water": n_water, "n_hydrogen": n_h, "n_alt_conf": n_alt}
 
     @staticmethod
-    def _find_alt_conf_atoms(structure: Structure,
-                             already_removed: np.ndarray) -> set[int]:
+    def _find_alt_conf_atoms(structure: Structure, already_removed: np.ndarray) -> set[int]:
         """Return indices of alternate-conformation duplicate atoms.
 
         For each (chain_id, resid, atom_name) tuple, keep only the atom
@@ -378,9 +446,11 @@ class PDBInputModule(BaseModule):
                 structure.resids[i],
                 (structure.atom_names[i] or "").strip(),
             )
-            occ = (structure.occupancies[i]
-                   if structure.occupancies and i < len(structure.occupancies)
-                   else 1.0)
+            occ = (
+                structure.occupancies[i]
+                if structure.occupancies and i < len(structure.occupancies)
+                else 1.0
+            )
 
             if key in seen:
                 prev_idx, prev_occ = seen[key]
@@ -472,6 +542,7 @@ class PDBInputModule(BaseModule):
             classify_nucleic_residue,
             nucleic_polymer_residues,
         )
+
         nucleic_residues = nucleic_polymer_residues(structure)
 
         # -- Pass 1: exact resname match --
@@ -483,15 +554,16 @@ class PDBInputModule(BaseModule):
 
         if protein_indices:
             protein_indices_arr = np.array(sorted(protein_indices))
-            system.add_component(Component(
-                name="PROTEIN",
-                kind=ComponentKind.PROTEIN,
-                atom_indices=protein_indices_arr,
-                metadata={
-                    "n_residues": len(set(
-                        structure.resids[i] for i in protein_indices)),
-                },
-            ))
+            system.add_component(
+                Component(
+                    name="PROTEIN",
+                    kind=ComponentKind.PROTEIN,
+                    atom_indices=protein_indices_arr,
+                    metadata={
+                        "n_residues": len(set(structure.resids[i] for i in protein_indices)),
+                    },
+                )
+            )
 
         # -- Nucleic-acid polymer runs --
         # One component per contiguous chain/polymer run gives the native
@@ -534,65 +606,73 @@ class PDBInputModule(BaseModule):
         ):
             for index in indices:
                 assigned[index] = True
-            unsupported = sorted({
-                name for name in resnames
-                if classify_nucleic_residue(name) == "modified"
-                or classify_nucleic_residue(name) is None
-            })
-            system.add_component(Component(
-                name=f"NUCLEIC_{chain or run_number}",
-                kind=ComponentKind.NUCLEIC_ACID,
-                atom_indices=np.asarray(indices, dtype=int),
-                metadata={
-                    "polymer_type": polymer_type,
-                    "chain_id": chain,
-                    "n_residues": len(resnames),
-                    "residue_names": resnames,
-                    "unsupported_residues": unsupported,
-                },
-            ))
+            unsupported = sorted(
+                {
+                    name
+                    for name in resnames
+                    if classify_nucleic_residue(name) == "modified"
+                    or classify_nucleic_residue(name) is None
+                }
+            )
+            system.add_component(
+                Component(
+                    name=f"NUCLEIC_{chain or run_number}",
+                    kind=ComponentKind.NUCLEIC_ACID,
+                    atom_indices=np.asarray(indices, dtype=int),
+                    metadata={
+                        "polymer_type": polymer_type,
+                        "chain_id": chain,
+                        "n_residues": len(resnames),
+                        "residue_names": resnames,
+                        "unsupported_residues": unsupported,
+                    },
+                )
+            )
 
         # -- Solvent --
         solvent_indices = [
-            i for i in range(n)
-            if not assigned[i] and structure.resnames[i] in _WATER_RESNAMES
+            i for i in range(n) if not assigned[i] and structure.resnames[i] in _WATER_RESNAMES
         ]
         if solvent_indices:
             for idx in solvent_indices:
                 assigned[idx] = True
-            system.add_component(Component(
-                name="SOLVENT",
-                kind=ComponentKind.SOLVENT,
-                atom_indices=np.array(solvent_indices),
-            ))
+            system.add_component(
+                Component(
+                    name="SOLVENT",
+                    kind=ComponentKind.SOLVENT,
+                    atom_indices=np.array(solvent_indices),
+                )
+            )
 
         # -- Ions --
         ion_indices = [
-            i for i in range(n)
-            if not assigned[i] and structure.resnames[i] in _ION_RESNAMES
+            i for i in range(n) if not assigned[i] and structure.resnames[i] in _ION_RESNAMES
         ]
         if ion_indices:
             for idx in ion_indices:
                 assigned[idx] = True
-            system.add_component(Component(
-                name="IONS",
-                kind=ComponentKind.IONS,
-                atom_indices=np.array(ion_indices),
-            ))
+            system.add_component(
+                Component(
+                    name="IONS",
+                    kind=ComponentKind.IONS,
+                    atom_indices=np.array(ion_indices),
+                )
+            )
 
         # -- Remaining → UNKNOWN (ligands, cofactors, additives, etc.) --
         unknown_indices = [i for i in range(n) if not assigned[i]]
         if unknown_indices:
-            system.add_component(Component(
-                name="UNKNOWN",
-                kind=ComponentKind.UNKNOWN,
-                atom_indices=np.array(unknown_indices),
-            ))
+            system.add_component(
+                Component(
+                    name="UNKNOWN",
+                    kind=ComponentKind.UNKNOWN,
+                    atom_indices=np.array(unknown_indices),
+                )
+            )
 
     # ── structure validation (warnings only) ─────────────────────────────
 
-    def _validate_structure(self, structure: Structure,
-                            protein_indices: np.ndarray) -> list[str]:
+    def _validate_structure(self, structure: Structure, protein_indices: np.ndarray) -> list[str]:
         """Run sanity checks on the protein structure.
 
         Returns a list of warning strings (empty if all checks pass).
@@ -654,15 +734,11 @@ class PDBInputModule(BaseModule):
                 gap = sorted_ids[i + 1] - sorted_ids[i]
                 if 3 <= gap <= 50:
                     chain_gaps.append(
-                        f"{sorted_ids[i]}→{sorted_ids[i+1]} "
-                        f"({gap - 1} residues missing)"
+                        f"{sorted_ids[i]}→{sorted_ids[i + 1]} ({gap - 1} residues missing)"
                     )
             if chain_gaps:
                 if len(chain_gaps) <= 3:
-                    warnings.append(
-                        f"Chain {ch}: gaps detected — "
-                        + "; ".join(chain_gaps)
-                    )
+                    warnings.append(f"Chain {ch}: gaps detected — " + "; ".join(chain_gaps))
                 else:
                     warnings.append(
                         f"Chain {ch}: {len(chain_gaps)} gaps detected "
@@ -683,11 +759,10 @@ class PDBInputModule(BaseModule):
             if comp.kind == ComponentKind.PROTEIN:
                 # Count unique residues
                 structure = system.structure
-                n_res = len(set(
-                    structure.resids[i] for i in comp.atom_indices))
-                chains = sorted(set(
-                    (structure.chain_ids[i] or "").strip()
-                    for i in comp.atom_indices))
+                n_res = len(set(structure.resids[i] for i in comp.atom_indices))
+                chains = sorted(
+                    set((structure.chain_ids[i] or "").strip() for i in comp.atom_indices)
+                )
                 extra = f", {len(chains)} chain(s), {n_res} residues"
             elif comp.kind == ComponentKind.NUCLEIC_ACID:
                 polymer = str(comp.metadata.get("polymer_type", "nucleic acid"))
@@ -700,16 +775,13 @@ class PDBInputModule(BaseModule):
             elif comp.kind == ComponentKind.UNKNOWN:
                 # List resname counts for unknown molecules
                 from collections import Counter
+
                 structure = system.structure
-                rn_counts = Counter(
-                    structure.resnames[i] for i in comp.atom_indices)
+                rn_counts = Counter(structure.resnames[i] for i in comp.atom_indices)
                 if rn_counts:
-                    items = [f"{rn}×{cnt}" for rn, cnt
-                             in rn_counts.most_common(6)]
+                    items = [f"{rn}×{cnt}" for rn, cnt in rn_counts.most_common(6)]
                     if len(rn_counts) > 6:
                         items.append(f"+{len(rn_counts) - 6} more")
                     extra = ": " + ", ".join(items)
-            parts.append(
-                f"  {comp.name} ({n_atoms} atoms{extra})"
-            )
+            parts.append(f"  {comp.name} ({n_atoms} atoms{extra})")
         return "\n".join(parts)

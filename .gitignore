@@ -10,6 +10,7 @@ build/
 # Virtual environments
 venv/
 .venv/
+.gmxbuilder-installer-tools/
 env/
 
 # IDE
@@ -31,6 +32,11 @@ Thumbs.db
 
 # Output
 output/
+
+# Separately distributed force-field assets. The private research repository
+# may track these paths; public checkouts populate them during installation.
+src/gmxbuilder/data/forcefields/charmm36/
+src/gmxbuilder/data/forcefields/charmm36m/
 *.gro
 !src/gmxbuilder/data/water_boxes/tip3p_water.gro
 !src/gmxbuilder/data/water_boxes/spc_water.gro
@@ -39,6 +45,7 @@ output/
 *.top
 *.itp
 !src/gmxbuilder/data/forcefields/amber14sb.ff/*.itp
+!src/gmxbuilder/data/forcefield_overlays/**/*.itp
 !src/gmxbuilder/data/martini3/v3.0.0/*.itp
 *.mdp
 *.log

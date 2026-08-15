@@ -91,12 +91,14 @@ class System:
         merged_components = list(self.components)
         for comp in other.components:
             shifted_indices = comp.atom_indices + n
-            merged_components.append(Component(
-                name=comp.name,
-                kind=comp.kind,
-                atom_indices=shifted_indices,
-                metadata=dict(comp.metadata),
-            ))
+            merged_components.append(
+                Component(
+                    name=comp.name,
+                    kind=comp.kind,
+                    atom_indices=shifted_indices,
+                    metadata=dict(comp.metadata),
+                )
+            )
 
         merged_metadata = {**self.metadata, **other.metadata}
 
@@ -109,32 +111,99 @@ class System:
 
     def copy(self) -> System:
         import copy
+
         return copy.deepcopy(self)
 
     # Approximate per-residue charges (CHARMM convention at pH 7).
     # Shared with modules/ions/neutralize.py — single source of truth in core.
     _RESIDUE_CHARGES: ClassVar[dict[str, float]] = {
-        "ARG": 1.0, "LYS": 1.0, "HIS": 0.0, "HID": 0.0, "HIE": 0.0, "HIP": 1.0,
-        "HSD": 0.0, "HSE": 0.0, "HSP": 1.0,
-        "ASP": -1.0, "GLU": -1.0, "ASH": 0.0, "GLH": 0.0,
-        "CYM": -1.0, "LYN": 0.0,
-        "ALA": 0.0, "ASN": 0.0, "CYS": 0.0, "CYX": 0.0, "GLN": 0.0,
-        "GLY": 0.0, "ILE": 0.0, "LEU": 0.0, "MET": 0.0, "PHE": 0.0,
-        "PRO": 0.0, "SER": 0.0, "THR": 0.0, "TRP": 0.0, "TYR": 0.0, "VAL": 0.0,
-        "ACE": 0.0, "NME": 0.0, "NMA": 0.0, "NH2": 0.0,
-        "SEP": -2.0, "TPO": -2.0, "PTR": -2.0,
-        "S1P": -1.0, "T1P": -1.0, "Y1P": -1.0,
-        "MSE": 0.0, "SEC": 0.0,
-        "PYL": 0.0, "PCA": 0.0, "HYP": 0.0, "CIR": 0.0, "TYS": -1.0,
-        "CSO": 0.0, "CSD": 0.0, "CSX": 0.0, "CSN": 0.0,
-        "SAC": 0.0, "TAC": 0.0, "GCS": 0.0, "GCT": 0.0, "GPL": 0.0,
-        "ALY": 0.0, "SLY": -1.0, "CLY": 0.0, "MLZ": 1.0, "MLY": 1.0,
-        "M3L": 1.0, "KCX": -1.0,
-        "CRY": 1.0, "BLY": 0.0, "PLY": 0.0, "GRY": -1.0,
-        "KME": 1.0, "KM2": 1.0, "KM3": 1.0, "RME": 1.0, "RM2": 1.0,
-        "2MR": 1.0, "DA2": 1.0, "SNC": 0.0, "SMC": 0.0, "OCS": -1.0,
-        "OAS": 0.0, "NIY": 0.0, "SME": 0.0, "LYZ": 1.0,
-        "MYR": 0.0, "PLC": 0.0, "WOH": 0.0, "FOR": 0.0, "UNK": 0.0,
+        "ARG": 1.0,
+        "LYS": 1.0,
+        "HIS": 0.0,
+        "HID": 0.0,
+        "HIE": 0.0,
+        "HIP": 1.0,
+        "HSD": 0.0,
+        "HSE": 0.0,
+        "HSP": 1.0,
+        "ASP": -1.0,
+        "GLU": -1.0,
+        "ASH": 0.0,
+        "GLH": 0.0,
+        "CYM": -1.0,
+        "LYN": 0.0,
+        "ALA": 0.0,
+        "ASN": 0.0,
+        "CYS": 0.0,
+        "CYX": 0.0,
+        "GLN": 0.0,
+        "GLY": 0.0,
+        "ILE": 0.0,
+        "LEU": 0.0,
+        "MET": 0.0,
+        "PHE": 0.0,
+        "PRO": 0.0,
+        "SER": 0.0,
+        "THR": 0.0,
+        "TRP": 0.0,
+        "TYR": 0.0,
+        "VAL": 0.0,
+        "ACE": 0.0,
+        "NME": 0.0,
+        "NMA": 0.0,
+        "NH2": 0.0,
+        "SEP": -2.0,
+        "TPO": -2.0,
+        "PTR": -2.0,
+        "S1P": -1.0,
+        "T1P": -1.0,
+        "Y1P": -1.0,
+        "MSE": 0.0,
+        "SEC": 0.0,
+        "PYL": 0.0,
+        "PCA": 0.0,
+        "HYP": 0.0,
+        "CIR": 0.0,
+        "TYS": -1.0,
+        "CSO": 0.0,
+        "CSD": 0.0,
+        "CSX": 0.0,
+        "CSN": 0.0,
+        "SAC": 0.0,
+        "TAC": 0.0,
+        "GCS": 0.0,
+        "GCT": 0.0,
+        "GPL": 0.0,
+        "ALY": 0.0,
+        "SLY": -1.0,
+        "CLY": 0.0,
+        "MLZ": 1.0,
+        "MLY": 1.0,
+        "M3L": 1.0,
+        "KCX": -1.0,
+        "CRY": 1.0,
+        "BLY": 0.0,
+        "PLY": 0.0,
+        "GRY": -1.0,
+        "KME": 1.0,
+        "KM2": 1.0,
+        "KM3": 1.0,
+        "RME": 1.0,
+        "RM2": 1.0,
+        "2MR": 1.0,
+        "DA2": 1.0,
+        "SNC": 0.0,
+        "SMC": 0.0,
+        "OCS": -1.0,
+        "OAS": 0.0,
+        "NIY": 0.0,
+        "SME": 0.0,
+        "LYZ": 1.0,
+        "MYR": 0.0,
+        "PLC": 0.0,
+        "WOH": 0.0,
+        "FOR": 0.0,
+        "UNK": 0.0,
     }
 
     def residue_formal_charge(self, resname: str) -> float:
@@ -195,8 +264,10 @@ class System:
                         resname = key[0]
                         charge = None
                         if force_field and len(residues) > 1:
-                            end = "N" if position == 0 else (
-                                "C" if position == len(residues) - 1 else ""
+                            end = (
+                                "N"
+                                if position == 0
+                                else ("C" if position == len(residues) - 1 else "")
                             )
                             if (end == "N" and resname != "ACE") or (
                                 end == "C" and resname not in {"NME", "NH2"}
@@ -221,8 +292,7 @@ class System:
                                 except (FileNotFoundError, KeyError, ValueError):
                                     pass
                         total += (
-                            charge if charge is not None
-                            else self.residue_formal_charge(resname)
+                            charge if charge is not None else self.residue_formal_charge(resname)
                         )
             elif comp.kind == ComponentKind.MEMBRANE:
                 from gmxbuilder.modules.membrane.lipids import LipidRegistry
@@ -254,9 +324,7 @@ class System:
                     raise ValueError("Prepared nucleic-acid component lacks an exact net charge")
                 rounded = round(float(charge))
                 if abs(float(charge) - rounded) > 1e-3:
-                    raise ValueError(
-                        f"Nucleic-acid component has non-integral net charge {charge}"
-                    )
+                    raise ValueError(f"Nucleic-acid component has non-integral net charge {charge}")
                 total += float(rounded)
             elif comp.kind == ComponentKind.LIGAND:
                 molecule_charges = comp.metadata.get("molecule_charges")
@@ -336,19 +404,27 @@ class System:
         json_path = checkpoint_dir / "system.json"
         comps = []
         for c in self.components:
-            comps.append({
-                "name": c.name,
-                "kind": c.kind.value,
-                "atom_indices": c.atom_indices.tolist(),
-                "metadata": c.metadata,
-            })
+            comps.append(
+                {
+                    "name": c.name,
+                    "kind": c.kind.value,
+                    "atom_indices": c.atom_indices.tolist(),
+                    "metadata": c.metadata,
+                }
+            )
 
         topo = None
         if self.topology:
             topo = {
                 "atom_types": [
-                    {"name": t.name, "mass": t.mass, "charge": t.charge,
-                     "sigma": t.sigma, "epsilon": t.epsilon, "atom_class": t.atom_class}
+                    {
+                        "name": t.name,
+                        "mass": t.mass,
+                        "charge": t.charge,
+                        "sigma": t.sigma,
+                        "epsilon": t.epsilon,
+                        "atom_class": t.atom_class,
+                    }
                     for t in self.topology.atom_types
                 ],
                 "bonds": [
@@ -356,23 +432,48 @@ class System:
                     for b in self.topology.bonds
                 ],
                 "angles": [
-                    {"i": a.i, "j": a.j, "k": a.k, "funct": a.funct,
-                     "theta0": a.theta0, "k_theta": a.k_theta}
+                    {
+                        "i": a.i,
+                        "j": a.j,
+                        "k": a.k,
+                        "funct": a.funct,
+                        "theta0": a.theta0,
+                        "k_theta": a.k_theta,
+                    }
                     for a in self.topology.angles
                 ],
                 "dihedrals": [
-                    {"i": d.i, "j": d.j, "k": d.k, "l": d.l, "funct": d.funct,
-                     "phi": d.phi, "k_psi": d.k_psi, "multiplicity": d.multiplicity}
+                    {
+                        "i": d.i,
+                        "j": d.j,
+                        "k": d.k,
+                        "l": d.l,
+                        "funct": d.funct,
+                        "phi": d.phi,
+                        "k_psi": d.k_psi,
+                        "multiplicity": d.multiplicity,
+                    }
                     for d in self.topology.dihedrals
                 ],
                 "impropers": [
-                    {"i": d.i, "j": d.j, "k": d.k, "l": d.l, "funct": d.funct,
-                     "phi0": d.phi0, "k_psi": d.k_psi}
+                    {
+                        "i": d.i,
+                        "j": d.j,
+                        "k": d.k,
+                        "l": d.l,
+                        "funct": d.funct,
+                        "phi0": d.phi0,
+                        "k_psi": d.k_psi,
+                    }
                     for d in self.topology.impropers
                 ],
                 "molecule_blocks": [
-                    {"atom_indices": list(mb.atom_indices), "nrexcl": mb.nrexcl,
-                     "type_name": mb.type_name, "num_molecules": mb.num_molecules}
+                    {
+                        "atom_indices": list(mb.atom_indices),
+                        "nrexcl": mb.nrexcl,
+                        "type_name": mb.type_name,
+                        "num_molecules": mb.num_molecules,
+                    }
                     for mb in self.topology.molecule_blocks
                 ],
                 "force_field": self.topology.force_field,
@@ -425,14 +526,11 @@ class System:
         if not json_path.exists():
             missing.append(str(json_path))
         if missing:
-            raise FileNotFoundError(
-                f"Checkpoint files not found: {', '.join(missing)}"
-            )
+            raise FileNotFoundError(f"Checkpoint files not found: {', '.join(missing)}")
 
         # --- Validate .npz required arrays ---
         arrays = np.load(npz_path, allow_pickle=False)
-        _REQUIRED_NPZ_KEYS = {"coordinates", "box_vectors", "atom_names",
-                              "resnames", "resids"}
+        _REQUIRED_NPZ_KEYS = {"coordinates", "box_vectors", "atom_names", "resnames", "resids"}
         missing_keys = _REQUIRED_NPZ_KEYS - set(arrays.keys())
         if missing_keys:
             raise ValueError(
@@ -458,16 +556,14 @@ class System:
         schema_version = int(data.get("checkpoint_schema_version", 1))
         if schema_version < _CHECKPOINT_SCHEMA_VERSION:
             selected = data.get("metadata", {}).get("selected_lipid_names", [])
-            observed = {
-                str(name).strip().upper()
-                for name in arrays["resnames"].tolist()
-            }
-            truncated = sorted({
-                str(name).strip().upper()
-                for name in selected
-                if len(str(name).strip()) > 4
-                and str(name).strip()[:4].upper() in observed
-            })
+            observed = {str(name).strip().upper() for name in arrays["resnames"].tolist()}
+            truncated = sorted(
+                {
+                    str(name).strip().upper()
+                    for name in selected
+                    if len(str(name).strip()) > 4 and str(name).strip()[:4].upper() in observed
+                }
+            )
             if truncated:
                 raise ValueError(
                     "legacy checkpoint contains detectably truncated lipid "
@@ -507,54 +603,96 @@ class System:
         # Components
         components = []
         for cd in data.get("components", []):
-            components.append(Component(
-                name=cd["name"],
-                kind=ComponentKind(cd["kind"]),
-                atom_indices=np.array(cd["atom_indices"], dtype=np.int64),
-                metadata=cd.get("metadata", {}),
-            ))
+            components.append(
+                Component(
+                    name=cd["name"],
+                    kind=ComponentKind(cd["kind"]),
+                    atom_indices=np.array(cd["atom_indices"], dtype=np.int64),
+                    metadata=cd.get("metadata", {}),
+                )
+            )
 
         # Topology
         topology = None
         topo_data = data.get("topology")
         if topo_data:
             from gmxbuilder.core.topology import (
-                Topology, AtomType, Bond, Angle, Dihedral, Improper, MoleculeBlock,
+                Topology,
+                AtomType,
+                Bond,
+                Angle,
+                Dihedral,
+                Improper,
+                MoleculeBlock,
             )
+
             topology = Topology(force_field=topo_data.get("force_field", ""))
             for td in topo_data.get("atom_types", []):
-                topology.atom_types.append(AtomType(
-                    name=td["name"], mass=td["mass"], charge=td["charge"],
-                    sigma=td["sigma"], epsilon=td["epsilon"],
-                    atom_class=td.get("atom_class", ""),
-                ))
+                topology.atom_types.append(
+                    AtomType(
+                        name=td["name"],
+                        mass=td["mass"],
+                        charge=td["charge"],
+                        sigma=td["sigma"],
+                        epsilon=td["epsilon"],
+                        atom_class=td.get("atom_class", ""),
+                    )
+                )
             for bd in topo_data.get("bonds", []):
-                topology.bonds.append(Bond(
-                    i=bd["i"], j=bd["j"], funct=bd.get("funct", 1),
-                    r0=bd.get("r0"), k_b=bd.get("k_b"),
-                ))
+                topology.bonds.append(
+                    Bond(
+                        i=bd["i"],
+                        j=bd["j"],
+                        funct=bd.get("funct", 1),
+                        r0=bd.get("r0"),
+                        k_b=bd.get("k_b"),
+                    )
+                )
             for ad in topo_data.get("angles", []):
-                topology.angles.append(Angle(
-                    i=ad["i"], j=ad["j"], k=ad["k"], funct=ad.get("funct", 1),
-                    theta0=ad.get("theta0"), k_theta=ad.get("k_theta"),
-                ))
+                topology.angles.append(
+                    Angle(
+                        i=ad["i"],
+                        j=ad["j"],
+                        k=ad["k"],
+                        funct=ad.get("funct", 1),
+                        theta0=ad.get("theta0"),
+                        k_theta=ad.get("k_theta"),
+                    )
+                )
             for dd in topo_data.get("dihedrals", []):
-                topology.dihedrals.append(Dihedral(
-                    i=dd["i"], j=dd["j"], k=dd["k"], l=dd["l"],
-                    funct=dd.get("funct", 9), phi=dd.get("phi"),
-                    k_psi=dd.get("k_psi"), multiplicity=dd.get("multiplicity"),
-                ))
+                topology.dihedrals.append(
+                    Dihedral(
+                        i=dd["i"],
+                        j=dd["j"],
+                        k=dd["k"],
+                        l=dd["l"],
+                        funct=dd.get("funct", 9),
+                        phi=dd.get("phi"),
+                        k_psi=dd.get("k_psi"),
+                        multiplicity=dd.get("multiplicity"),
+                    )
+                )
             for id_ in topo_data.get("impropers", []):
-                topology.impropers.append(Improper(
-                    i=id_["i"], j=id_["j"], k=id_["k"], l=id_["l"],
-                    funct=id_.get("funct", 2), phi0=id_.get("phi0"),
-                    k_psi=id_.get("k_psi"),
-                ))
+                topology.impropers.append(
+                    Improper(
+                        i=id_["i"],
+                        j=id_["j"],
+                        k=id_["k"],
+                        l=id_["l"],
+                        funct=id_.get("funct", 2),
+                        phi0=id_.get("phi0"),
+                        k_psi=id_.get("k_psi"),
+                    )
+                )
             for mb in topo_data.get("molecule_blocks", []):
-                topology.molecule_blocks.append(MoleculeBlock(
-                    atom_indices=list(mb["atom_indices"]), nrexcl=mb.get("nrexcl", 3),
-                    type_name=mb["type_name"], num_molecules=mb.get("num_molecules", 1),
-                ))
+                topology.molecule_blocks.append(
+                    MoleculeBlock(
+                        atom_indices=list(mb["atom_indices"]),
+                        nrexcl=mb.get("nrexcl", 3),
+                        type_name=mb["type_name"],
+                        num_molecules=mb.get("num_molecules", 1),
+                    )
+                )
 
         return cls(
             structure=struct,
@@ -566,6 +704,7 @@ class System:
     def write_viewer_pdb(self, path: Path) -> None:
         """Write a viewer-friendly PDB of the current system."""
         from gmxbuilder.io.pdb import PDBWriter
+
         PDBWriter.write(
             self.structure,
             path,

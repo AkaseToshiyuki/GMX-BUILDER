@@ -8,8 +8,16 @@ from gmxbuilder.core.system import System
 _RESIDUE_CHARGES = System._RESIDUE_CHARGES
 
 _ION_CHARGES: dict[str, float] = {
-    "NA": 1.0, "K": 1.0, "CS": 1.0, "LI": 1.0, "CA": 2.0, "ZN": 2.0, "MG": 2.0,
-    "CL": -1.0, "BR": -1.0, "I": -1.0,
+    "NA": 1.0,
+    "K": 1.0,
+    "CS": 1.0,
+    "LI": 1.0,
+    "CA": 2.0,
+    "ZN": 2.0,
+    "MG": 2.0,
+    "CL": -1.0,
+    "BR": -1.0,
+    "I": -1.0,
 }
 
 

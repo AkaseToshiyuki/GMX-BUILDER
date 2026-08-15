@@ -17,10 +17,12 @@ from gmxbuilder.web.task_types import get_task_type_detail
 
 def test_frontend_residue_indices_preserve_coordinate_encounter_order():
     structure = Structure(
-        coordinates=np.zeros((4, 3)), box_vectors=np.eye(3),
+        coordinates=np.zeros((4, 3)),
+        box_vectors=np.eye(3),
         atom_names=["N", "CA", "N", "CA"],
         resnames=["TYR", "TYR", "ALA", "ALA"],
-        resids=[20, 20, 10, 10], chain_ids=["A"] * 4,
+        resids=[20, 20, 10, 10],
+        chain_ids=["A"] * 4,
         elements=["N", "C", "N", "C"],
     )
 
@@ -39,21 +41,35 @@ def test_task_resume_uses_standardized_input_checkpoint(tmp_path, monkeypatch):
         "END\n"
     ).encode()
     uploaded = task_manager.save_uploaded_pdb(task_id, "modified.pdb", raw)
-    task_manager.update_state(task_id, {
-        "uploaded_structure_name": uploaded.name,
-        "task_type_id": "membrane-bilayer",
-        "task_type": get_task_type_detail("membrane-bilayer"),
-        "pdb_info": {"filename": "modified.pdb"},
-    })
+    task_manager.update_state(
+        task_id,
+        {
+            "uploaded_structure_name": uploaded.name,
+            "task_type_id": "membrane-bilayer",
+            "task_type": get_task_type_detail("membrane-bilayer"),
+            "pdb_info": {"filename": "modified.pdb"},
+        },
+    )
     structure = Structure(
         coordinates=np.array([[0.0, 0.0, 0.0], [0.1458, 0.0, 0.0]]),
         box_vectors=np.eye(3) * 4.0,
-        atom_names=["N", "CA"], resnames=["SER", "SER"],
-        resids=[10, 10], chain_ids=["A", "A"], elements=["N", "C"],
+        atom_names=["N", "CA"],
+        resnames=["SER", "SER"],
+        resids=[10, 10],
+        chain_ids=["A", "A"],
+        elements=["N", "C"],
     )
-    system = System(structure, components=[Component(
-        "PROTEIN", ComponentKind.PROTEIN, np.array([0, 1]), {},
-    )])
+    system = System(
+        structure,
+        components=[
+            Component(
+                "PROTEIN",
+                ComponentKind.PROTEIN,
+                np.array([0, 1]),
+                {},
+            )
+        ],
+    )
     checkpoint = tmp_path / task_id / "steps" / "input"
     system.save_checkpoint(checkpoint)
     system.write_viewer_pdb(checkpoint / "viewer.pdb")
@@ -113,11 +129,14 @@ def test_build_accepts_stage_owned_default_simulation_payload(tmp_path, monkeypa
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="default.pdb")
     task_id = task["task_id"]
-    task_manager.update_state(task_id, {
-        "task_type_id": "membrane-bilayer",
-        "task_type": get_task_type_detail("membrane-bilayer"),
-        "step_forcefield_config": {"name": "charmm36m"},
-    })
+    task_manager.update_state(
+        task_id,
+        {
+            "task_type_id": "membrane-bilayer",
+            "task_type": get_task_type_detail("membrane-bilayer"),
+            "step_forcefield_config": {"name": "charmm36m"},
+        },
+    )
     captured_context = {}
     normalize = MDPWriter.normalize_simulation_config
 
@@ -130,9 +149,15 @@ def test_build_accepts_stage_owned_default_simulation_payload(tmp_path, monkeypa
     )
     stage = {
         "enabled": True,
-        "bb": 0, "sc": 0, "lipid": 0, "dih": 0,
-        "dt": 2.0, "dt_unit": "fs", "nsteps": 1000,
-        "ensemble": "npt", "comm_grps": "System",
+        "bb": 0,
+        "sc": 0,
+        "lipid": 0,
+        "dih": 0,
+        "dt": 2.0,
+        "dt_unit": "fs",
+        "nsteps": 1000,
+        "ensemble": "npt",
+        "comm_grps": "System",
     }
     payload = {
         "task_id": task_id,
@@ -142,16 +167,25 @@ def test_build_accepts_stage_owned_default_simulation_payload(tmp_path, monkeypa
             "simparams": {
                 "schema_version": 2,
                 "minimization": {
-                    "integrator": "steep", "nsteps": 5000,
-                    "emtol": 1000.0, "emstep": 0.01, "nstlist": 10,
-                    "constraints": "h-bonds", "bb": 0, "sc": 0,
-                    "lipid": 0, "dih": 0,
+                    "integrator": "steep",
+                    "nsteps": 5000,
+                    "emtol": 1000.0,
+                    "emstep": 0.01,
+                    "nstlist": 10,
+                    "constraints": "h-bonds",
+                    "bb": 0,
+                    "sc": 0,
+                    "lipid": 0,
+                    "dih": 0,
                 },
                 "eq_stages": [stage],
                 "prod_iters": [stage],
                 "hardware": {
-                    "cpu_threads": 1, "mpi_ranks": 1,
-                    "use_gpu": False, "gpu_count": 0, "gpu_ids": "",
+                    "cpu_threads": 1,
+                    "mpi_ranks": 1,
+                    "use_gpu": False,
+                    "gpu_count": 0,
+                    "gpu_ids": "",
                 },
             },
         },
@@ -220,7 +254,8 @@ def test_protonate_endpoint_recalculates_discrete_states_for_changed_ph():
 
 
 def test_protonate_endpoint_reports_failed_environment_sensitive_fallback(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="input.pdb")
@@ -315,17 +350,29 @@ def test_ligand_charge_suggestion_endpoint_uses_target_ph(tmp_path, monkeypatch)
     structure = Structure(
         coordinates=np.array([[0.0, 0.0, 0.0], [0.145, 0.0, 0.0]]),
         box_vectors=np.eye(3) * 4.0,
-        atom_names=["C01", "N02"], resnames=["LIG", "LIG"],
-        resids=[1, 1], chain_ids=["L", "L"], elements=["C", "N"],
+        atom_names=["C01", "N02"],
+        resnames=["LIG", "LIG"],
+        resids=[1, 1],
+        chain_ids=["L", "L"],
+        elements=["C", "N"],
     )
-    system = System(structure, components=[Component(
-        "UNKNOWN", ComponentKind.UNKNOWN, np.array([0, 1]), {},
-    )])
+    system = System(
+        structure,
+        components=[
+            Component(
+                "UNKNOWN",
+                ComponentKind.UNKNOWN,
+                np.array([0, 1]),
+                {},
+            )
+        ],
+    )
     system.save_checkpoint(tmp_path / task_id / "steps" / "input")
 
     with TestClient(app) as client:
         response = client.post(
-            f"/api/ligand-charge-suggestions/{task_id}", json={"pH": 7.0},
+            f"/api/ligand-charge-suggestions/{task_id}",
+            json={"pH": 7.0},
         )
 
     assert response.status_code == 200, response.text
@@ -351,12 +398,14 @@ def test_orientation_preview_matches_real_step_module(tmp_path, monkeypatch):
     task = task_manager.create_task(filename="protein.pdb")
     task_id = task["task_id"]
     structure = Structure(
-        coordinates=np.array([
-            [-0.3, 0.0, -1.0],
-            [0.2, 0.1, -0.4],
-            [-0.1, -0.2, 0.3],
-            [0.3, 0.0, 1.1],
-        ]),
+        coordinates=np.array(
+            [
+                [-0.3, 0.0, -1.0],
+                [0.2, 0.1, -0.4],
+                [-0.1, -0.2, 0.3],
+                [0.3, 0.0, 1.1],
+            ]
+        ),
         box_vectors=np.eye(3) * 8.0,
         atom_names=["CA"] * 4,
         resnames=["LEU", "ILE", "VAL", "PHE"],

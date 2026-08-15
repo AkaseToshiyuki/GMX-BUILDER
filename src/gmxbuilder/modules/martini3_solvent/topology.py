@@ -22,4 +22,6 @@ class CGTopologyModule(BaseModule):
         output = system.copy()
         output.metadata["topology_assigned"] = True
         output.metadata["topology_backend"] = "martini3-coby"
-        return ModuleResult(True, output, ["Validated exact COBY topology; coordinates were not changed"])
+        return ModuleResult(
+            True, output, ["Validated exact COBY topology; coordinates were not changed"]
+        )

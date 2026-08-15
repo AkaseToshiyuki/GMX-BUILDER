@@ -48,8 +48,13 @@ def test_checkpoint_preserves_optional_per_atom_fields(tmp_path):
         legacy_arrays = {
             key: arrays[key]
             for key in (
-                "coordinates", "box_vectors", "atom_names", "resnames",
-                "resids", "chain_ids", "elements",
+                "coordinates",
+                "box_vectors",
+                "atom_names",
+                "resnames",
+                "resids",
+                "chain_ids",
+                "elements",
             )
         }
     np.savez_compressed(npz_path, **legacy_arrays)
@@ -110,9 +115,7 @@ def test_legacy_checkpoint_rejects_detectably_truncated_lipid_names(tmp_path):
     legacy["resnames"] = np.asarray(["20AH"], dtype="U4")
     np.savez_compressed(npz_path, **legacy)
 
-    with np.testing.assert_raises_regex(
-        ValueError, "legacy checkpoint.*20AHC.*re-run"
-    ):
+    with np.testing.assert_raises_regex(ValueError, "legacy checkpoint.*20AHC.*re-run"):
         System.load_checkpoint(checkpoint)
 
 

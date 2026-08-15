@@ -43,18 +43,19 @@ def test_amber_candidates_include_exact_and_gaff_backends():
 
 def test_exact_lipid21_membrane_can_explicitly_switch_to_gaff2(monkeypatch):
     monkeypatch.setattr(compatibility, "gaff_available", lambda: True)
-    system = System(Structure(
-        coordinates=np.empty((0, 3)),
-        box_vectors=np.eye(3),
-    ))
+    system = System(
+        Structure(
+            coordinates=np.empty((0, 3)),
+            box_vectors=np.eye(3),
+        )
+    )
 
     report = compatibility.compatibility_report(
-        system, "amber14sb", ["POPC"],
+        system,
+        "amber14sb",
+        ["POPC"],
     )
-    enabled = {
-        option["value"] for option in report["lipid_options"]
-        if option["enabled"]
-    }
+    enabled = {option["value"] for option in report["lipid_options"] if option["enabled"]}
 
     assert enabled == {"lipid21", "gaff2"}
 

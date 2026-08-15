@@ -39,14 +39,14 @@ from reportlab.platypus.tableofcontents import TableOfContents
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.2.md"
-DEFAULT_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.2.pdf"
-ZH_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md"
-ZH_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.pdf"
+DEFAULT_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.md"
+DEFAULT_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.pdf"
+ZH_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md"
+ZH_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.pdf"
 FONT_PATH = Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf")
 LATIN_FONT_PATH = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 TITLE = "GMXBUILDER User Manual"
-DOC_VERSION = "V1.0.2"
+DOC_VERSION = "V1.0.3"
 AUTHOR = "Haochen Yang"
 DATE = "2026-08-14"
 SOFTWARE = "GMXBUILDER v0.9.0 or later"
@@ -82,9 +82,7 @@ def inline_markup(text: str) -> str:
 
     def stash_code(match: re.Match[str]) -> str:
         placeholders.append(
-            '<font name="GMXCJK" color="#0f4c81">'
-            + html.escape(match.group(1))
-            + "</font>"
+            '<font name="GMXCJK" color="#0f4c81">' + html.escape(match.group(1)) + "</font>"
         )
         return f"\x00{len(placeholders) - 1}\x00"
 
@@ -162,9 +160,7 @@ class ManualDocTemplate(BaseDocTemplate):
             leading=9,
             textColor=colors.HexColor("#64748b"),
         )
-        left_footer = Paragraph(
-            inline_markup(f"{TITLE} · {DOC_VERSION}"), footer_style
-        )
+        left_footer = Paragraph(inline_markup(f"{TITLE} · {DOC_VERSION}"), footer_style)
         _, footer_height = left_footer.wrap(90 * mm, 10 * mm)
         left_footer.drawOn(canvas, doc.leftMargin, 10.5 * mm)
         page_label = f"第 {doc.page - 1} 页" if LANGUAGE == "zh-CN" else f"Page {doc.page - 1}"
@@ -173,9 +169,7 @@ class ManualDocTemplate(BaseDocTemplate):
             ParagraphStyle("FooterRight", parent=footer_style, alignment=2),
         )
         right_footer.wrapOn(canvas, 35 * mm, footer_height)
-        right_footer.drawOn(
-            canvas, A4[0] - doc.rightMargin - 35 * mm, 10.5 * mm
-        )
+        right_footer.drawOn(canvas, A4[0] - doc.rightMargin - 35 * mm, 10.5 * mm)
         canvas.setStrokeColor(colors.HexColor("#cbd5e1"))
         canvas.line(
             doc.leftMargin,
@@ -297,8 +291,7 @@ def make_styles():
 
 def make_table(rows: list[list[str]], styles, page_width: float) -> Table:
     parsed = [
-        [Paragraph(inline_markup(cell.strip()), styles["small"]) for cell in row]
-        for row in rows
+        [Paragraph(inline_markup(cell.strip()), styles["small"]) for cell in row] for row in rows
     ]
     columns = max(len(row) for row in parsed)
     for row in parsed:
@@ -323,10 +316,15 @@ def make_table(rows: list[list[str]], styles, page_width: float) -> Table:
                 ("FONTNAME", (0, 0), (-1, -1), "GMXCJK"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#94a3b8")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
-                    colors.white,
-                    colors.HexColor("#f8fafc"),
-                ]),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [
+                        colors.white,
+                        colors.HexColor("#f8fafc"),
+                    ],
+                ),
                 ("LEFTPADDING", (0, 0), (-1, -1), 4),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                 ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -350,7 +348,9 @@ def parse_markdown(source: str, styles, page_width: float):
     def flush_paragraph():
         if paragraph:
             story.append(
-                Paragraph(inline_markup(" ".join(part.strip() for part in paragraph)), styles["body"])
+                Paragraph(
+                    inline_markup(" ".join(part.strip() for part in paragraph)), styles["body"]
+                )
             )
             paragraph.clear()
 
@@ -380,8 +380,7 @@ def parse_markdown(source: str, styles, page_width: float):
     def flush_table():
         if table_rows:
             if len(table_rows) >= 2 and all(
-                re.fullmatch(r":?-{3,}:?", cell.strip())
-                for cell in table_rows[1]
+                re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in table_rows[1]
             ):
                 table_rows.pop(1)
             story.append(make_table(table_rows, styles, page_width))
@@ -477,20 +476,24 @@ def build_pdf(source: Path, output: Path) -> None:
     LANGUAGE = "zh-CN" if "## 变更日志" in text else "en"
     labels = (
         {
-            "version": "文档版本", "software": "适用软件", "author": "编写人",
-            "date": "发布日期", "status": "文档状态",
+            "version": "文档版本",
+            "software": "适用软件",
+            "author": "编写人",
+            "date": "发布日期",
+            "status": "文档状态",
         }
         if LANGUAGE == "zh-CN"
         else {
-            "version": "Document version", "software": "Software", "author": "Author",
-            "date": "Release date", "status": "Status",
+            "version": "Document version",
+            "software": "Software",
+            "author": "Author",
+            "date": "Release date",
+            "status": "Status",
         }
     )
 
     def metadata_value(label: str) -> str:
-        match = re.search(
-            rf"(?m)^\|\s*{re.escape(label)}\s*\|\s*([^|]+?)\s*\|$", text
-        )
+        match = re.search(rf"(?m)^\|\s*{re.escape(label)}\s*\|\s*([^|]+?)\s*\|$", text)
         if not match:
             raise ValueError(f"Manual metadata is missing: {label}")
         return match.group(1).strip()
@@ -527,11 +530,26 @@ def build_pdf(source: Path, output: Path) -> None:
         Spacer(1, 30 * mm),
         Table(
             [
-                [Paragraph(inline_markup(labels["version"]), styles["body"]), Paragraph(inline_markup(DOC_VERSION), styles["body"])],
-                [Paragraph(inline_markup(labels["software"]), styles["body"]), Paragraph(inline_markup(SOFTWARE), styles["body"])],
-                [Paragraph(inline_markup(labels["author"]), styles["body"]), Paragraph(inline_markup(AUTHOR), styles["body"])],
-                [Paragraph(inline_markup(labels["date"]), styles["body"]), Paragraph(inline_markup(DATE), styles["body"])],
-                [Paragraph(inline_markup(labels["status"]), styles["body"]), Paragraph(inline_markup(status_value), styles["body"])],
+                [
+                    Paragraph(inline_markup(labels["version"]), styles["body"]),
+                    Paragraph(inline_markup(DOC_VERSION), styles["body"]),
+                ],
+                [
+                    Paragraph(inline_markup(labels["software"]), styles["body"]),
+                    Paragraph(inline_markup(SOFTWARE), styles["body"]),
+                ],
+                [
+                    Paragraph(inline_markup(labels["author"]), styles["body"]),
+                    Paragraph(inline_markup(AUTHOR), styles["body"]),
+                ],
+                [
+                    Paragraph(inline_markup(labels["date"]), styles["body"]),
+                    Paragraph(inline_markup(DATE), styles["body"]),
+                ],
+                [
+                    Paragraph(inline_markup(labels["status"]), styles["body"]),
+                    Paragraph(inline_markup(status_value), styles["body"]),
+                ],
             ],
             colWidths=[38 * mm, 80 * mm],
             hAlign="CENTER",
@@ -618,9 +636,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument(
-        "--all", action="store_true", help="build both English and Chinese manuals"
-    )
+    parser.add_argument("--all", action="store_true", help="build both English and Chinese manuals")
     args = parser.parse_args()
     targets = (
         [(DEFAULT_SOURCE, DEFAULT_OUTPUT), (ZH_SOURCE, ZH_OUTPUT)]

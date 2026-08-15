@@ -18,22 +18,47 @@ from gmxbuilder.geometry.transforms import (
     rotation_matrix_from_axis_angle,
     rotation_matrix_from_vectors,
 )
-from gmxbuilder.io.pdb import PDBWriter
-from gmxbuilder.modules.coarse_grained.common import task_root, task_step_dir
+from gmxbuilder.modules.coarse_grained.common import (
+    task_root,
+    task_step_dir,
+    write_cg_viewer_pdb,
+)
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
 # Wimley-White whole-residue water-to-interface transfer free energies.
 # The CG pose is scored per Martini backbone bead, retaining residue identity.
 _TRANSFER = {
-    "ALA": 0.17, "ARG": 0.81, "ASN": 0.42, "ASP": 1.23,
-    "CYS": -0.24, "GLN": 0.58, "GLU": 0.11, "GLY": 0.01,
-    "HIS": 0.96, "ILE": -0.31, "LEU": -0.56, "LYS": 0.99,
-    "MET": -0.22, "PHE": -1.13, "PRO": 0.45, "SER": 0.13,
-    "THR": 0.14, "TRP": -1.85, "TYR": -0.94, "VAL": -0.07,
-    "ASH": 1.23, "GLH": 0.11, "CYX": -0.24, "HID": 0.96,
-    "HIE": 0.96, "HIP": 0.96, "HSD": 0.96, "HSE": 0.96,
-    "HSP": 0.96, "LYN": 0.99,
+    "ALA": 0.17,
+    "ARG": 0.81,
+    "ASN": 0.42,
+    "ASP": 1.23,
+    "CYS": -0.24,
+    "GLN": 0.58,
+    "GLU": 0.11,
+    "GLY": 0.01,
+    "HIS": 0.96,
+    "ILE": -0.31,
+    "LEU": -0.56,
+    "LYS": 0.99,
+    "MET": -0.22,
+    "PHE": -1.13,
+    "PRO": 0.45,
+    "SER": 0.13,
+    "THR": 0.14,
+    "TRP": -1.85,
+    "TYR": -0.94,
+    "VAL": -0.07,
+    "ASH": 1.23,
+    "GLH": 0.11,
+    "CYX": -0.24,
+    "HID": 0.96,
+    "HIE": 0.96,
+    "HIP": 0.96,
+    "HSD": 0.96,
+    "HSE": 0.96,
+    "HSP": 0.96,
+    "LYN": 0.99,
 }
 _HYDROPHOBIC = {"ALA", "CYS", "ILE", "LEU", "MET", "PHE", "TRP", "TYR", "VAL"}
 
@@ -74,8 +99,9 @@ def _backbone_rows(structure) -> tuple[np.ndarray, np.ndarray, list[tuple[str, i
     return np.asarray(coordinates), np.asarray(energies), keys
 
 
-def _profile_score(coords: np.ndarray, energies: np.ndarray, z_shift: float,
-                   half_thickness: float) -> float:
+def _profile_score(
+    coords: np.ndarray, energies: np.ndarray, z_shift: float, half_thickness: float
+) -> float:
     distance = np.abs(coords[:, 2] + z_shift) - half_thickness
     weights = 1.0 / (1.0 + np.exp(np.clip(distance / 0.30, -100.0, 100.0)))
     score = float(np.sum(energies * weights))
@@ -108,7 +134,7 @@ def _candidate_normals(
             if len(indices) < width:
                 continue
             for start in range(0, len(indices) - width + 1, 2):
-                selection = indices[start:start + width]
+                selection = indices[start : start + width]
                 names = [keys[index][2] for index in selection]
                 hydrophobic_fraction = sum(name in _HYDROPHOBIC for name in names) / width
                 if hydrophobic_fraction < 0.48:
@@ -177,8 +203,7 @@ def _best_automatic_pose(structure, half_thickness: float) -> tuple[np.ndarray, 
     polar = energies > 0.3
     tm_z = transformed[tm_indices, 2] if tm_indices.size else np.asarray([], dtype=float)
     tm_core_fraction = (
-        float(np.mean(np.abs(tm_z) <= half_thickness + 0.35))
-        if tm_indices.size else None
+        float(np.mean(np.abs(tm_z) <= half_thickness + 0.35)) if tm_indices.size else None
     )
     if tm_indices.size and (tm_core_fraction is None or tm_core_fraction < 0.65):
         raise ModuleConfigError(
@@ -206,8 +231,14 @@ class CGOrientationModule(BaseModule):
     description = "Position a mapped Martini protein in a planar bilayer"
 
     _allowed = {
-        "method", "half_thickness", "rotate_x", "rotate_y", "rotate_z",
-        "z_offset", "_task_dir", "_step_dir", "seed",
+        "method",
+        "half_thickness",
+        "z_offset",
+        "tilt",
+        "phi",
+        "_task_dir",
+        "_step_dir",
+        "seed",
     }
 
     def validate_config(self, config: dict) -> bool:
@@ -217,15 +248,12 @@ class CGOrientationModule(BaseModule):
             raise ModuleConfigError("CG orientation method must be ppm or manual")
         _finite(config.get("half_thickness", 1.4), "Hydrophobic half-thickness", 0.8, 2.5)
         if method == "manual":
-            for axis in "xyz":
-                _finite(
-                    config.get(f"rotate_{axis}", 0.0),
-                    f"Rotation {axis.upper()}", -180.0, 180.0,
-                )
-            _finite(config.get("z_offset", 0.0), "Protein Z offset", -8.0, 8.0)
-        elif any(key in config for key in ("rotate_x", "rotate_y", "rotate_z", "z_offset")):
+            _finite(config.get("z_offset", 0.0), "Protein Z offset adjustment", -10.0, 10.0)
+            _finite(config.get("tilt", 0.0), "Protein tilt adjustment", 0.0, 45.0)
+            _finite(config.get("phi", 0.0), "Protein tilt direction", 0.0, 360.0)
+        elif any(key in config for key in ("z_offset", "tilt", "phi")):
             raise ModuleConfigError(
-                "Manual rotation and Z offset are not accepted by automatic CG orientation"
+                "Manual Z offset, tilt, and direction are not accepted by automatic CG orientation"
             )
         return True
 
@@ -243,12 +271,8 @@ class CGOrientationModule(BaseModule):
 
         method = str(config.get("method", "ppm")).lower()
         half_thickness = float(config.get("half_thickness", 1.4))
-        center = output.structure.center_of_geometry()
-        output.structure.translate(-center)
         if method == "ppm":
-            rotation, translation, metrics = _best_automatic_pose(output.structure, half_thickness)
-            output.structure.rotate(rotation, center=np.zeros(3))
-            output.structure.translate(translation)
+            metrics = apply_automatic_pose(output, half_thickness)
             logs = [
                 "Automatic PPM-like Martini membrane positioning completed",
                 f"Hydrophobic half-thickness: {half_thickness:.2f} nm",
@@ -268,28 +292,58 @@ class CGOrientationModule(BaseModule):
                 ),
             ]
         else:
-            angles = [math.radians(float(config.get(f"rotate_{axis}", 0.0))) for axis in "xyz"]
-            rotation = np.eye(3)
-            for axis, angle in zip(np.eye(3), angles):
-                rotation = rotation_matrix_from_axis_angle(axis, angle) @ rotation
-            z_offset = float(config.get("z_offset", 0.0))
-            output.structure.rotate(rotation, center=np.zeros(3))
-            output.structure.translate(np.array([0.0, 0.0, z_offset]))
-            metrics = {
-                "method": "manual", "half_thickness_nm": half_thickness,
-                "z_offset_nm": z_offset,
-                "rotations_degrees": [float(config.get(f"rotate_{axis}", 0.0)) for axis in "xyz"],
-            }
+            base_metrics = apply_automatic_pose(output, half_thickness)
+            metrics = apply_manual_adjustment(output, config, base_metrics)
             logs = [
                 "Applied manual Martini membrane positioning",
-                f"Protein Z offset: {z_offset:.2f} nm",
+                f"Protein Z adjustment: {metrics['z_adjustment_nm']:.2f} nm",
+                f"Protein tilt adjustment: {metrics['tilt_degrees']:.1f} degrees",
                 "Manual pose requires visual review against both membrane interfaces",
             ]
 
         output.metadata["cg_orientation"] = metrics
         output.metadata["cg_orientation_method"] = method
         oriented_path = task_step_dir(config) / "oriented_protein.pdb"
-        PDBWriter.write(output.structure, oriented_path, title="Oriented Martini 3 protein")
+        write_cg_viewer_pdb(output, oriented_path, task_dir=task_root(config))
         relative = oriented_path.resolve().relative_to(task_root(config))
         output.metadata["cg_protein_pdb"] = str(relative)
         return ModuleResult(True, output, logs)
+
+
+def apply_automatic_pose(system, half_thickness: float) -> dict:
+    """Apply the deterministic PPM-like base pose to a CG system in place."""
+    center = system.structure.center_of_geometry()
+    system.structure.translate(-center)
+    rotation, translation, metrics = _best_automatic_pose(system.structure, half_thickness)
+    system.structure.rotate(rotation, center=np.zeros(3))
+    system.structure.translate(translation)
+    return dict(metrics)
+
+
+def apply_manual_adjustment(system, config: dict, base_metrics: dict) -> dict:
+    """Apply responsive manual controls relative to the deterministic base pose.
+
+    The automatic pose is the stable reference shared by preview and Check.
+    Manual controls then adjust insertion depth and tilt without exposing Euler
+    rotations whose order is unclear to users.
+    """
+    z_offset = float(config.get("z_offset", 0.0))
+    tilt = float(config.get("tilt", 0.0))
+    phi = float(config.get("phi", 0.0))
+    if tilt > 1e-12:
+        phi_radians = math.radians(phi)
+        axis = np.array([-math.sin(phi_radians), math.cos(phi_radians), 0.0])
+        rotation = rotation_matrix_from_axis_angle(axis, math.radians(tilt))
+        system.structure.rotate(rotation)
+    system.structure.translate(np.array([0.0, 0.0, z_offset]))
+    metrics = dict(base_metrics)
+    metrics.update(
+        {
+            "method": "manual",
+            "z_adjustment_nm": z_offset,
+            "z_offset_nm": float(base_metrics.get("z_offset_nm", 0.0)) + z_offset,
+            "tilt_degrees": tilt,
+            "phi_degrees": phi,
+        }
+    )
+    return metrics

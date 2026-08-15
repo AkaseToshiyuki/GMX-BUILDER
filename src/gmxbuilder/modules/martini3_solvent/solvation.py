@@ -16,10 +16,17 @@ class CGSolvationModule(BaseModule):
     description = "Add regular Martini water without target bulk salt"
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {
-            "include_solvent", "salt_molarity", "padding_nm", "seed",
-            "_task_dir", "_step_dir",
-        })
+        self.validate_config_keys(
+            config,
+            {
+                "include_solvent",
+                "salt_molarity",
+                "padding_nm",
+                "seed",
+                "_task_dir",
+                "_step_dir",
+            },
+        )
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
@@ -42,9 +49,7 @@ class CGSolvationModule(BaseModule):
             interface_thickness = self._bilayer_interface_thickness(output)
             environment["box_z"] = max(
                 interface_thickness + 2.0 * padding,
-                float(protein_extent[2])
-                + 2.0 * abs(float(environment.get("z_offset", 0.0)))
-                + 1.0,
+                float(protein_extent[2]) + 2.0 * abs(float(environment.get("z_offset", 0.0))) + 1.0,
             )
             environment["headgroup_interface_thickness_nm"] = interface_thickness
         else:
@@ -63,16 +68,20 @@ class CGSolvationModule(BaseModule):
         topology_text = top.read_text(encoding="utf-8")
         built = system_from_gro(gro, topology_text, metadata=output.metadata)
         built.metadata["cg_master_topology"] = topology_text
-        return ModuleResult(True, built, [
-            "Added regular Martini water (W)",
-            (
-                f"Applied {padding:.2f} nm padding from each bilayer interface"
-                if environment.get("environment") == "bilayer"
-                else f"Applied {padding:.2f} nm padding on all protein sides"
-            ),
-            "This preview includes only counterions required for charge neutrality",
-            f"Solvated CG beads: {built.num_atoms}",
-        ])
+        return ModuleResult(
+            True,
+            built,
+            [
+                "Added regular Martini water (W)",
+                (
+                    f"Applied {padding:.2f} nm padding from each bilayer interface"
+                    if environment.get("environment") == "bilayer"
+                    else f"Applied {padding:.2f} nm padding on all protein sides"
+                ),
+                "This preview includes only counterions required for charge neutrality",
+                f"Solvated CG beads: {built.num_atoms}",
+            ],
+        )
 
     @staticmethod
     def _bilayer_interface_thickness(system) -> float:

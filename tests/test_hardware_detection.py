@@ -65,9 +65,7 @@ def test_defaults_to_half_cpu_threads_and_gpu_zero(monkeypatch, tmp_path):
     executable = _fake_gmx(tmp_path)
     monkeypatch.setattr(hardware, "available_cpu_ids", lambda: tuple(range(8)))
     monkeypatch.setattr(hardware, "_candidate_gromacs_paths", lambda: [executable])
-    monkeypatch.setattr(
-        hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA")
-    )
+    monkeypatch.setattr(hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA"))
     monkeypatch.setattr(hardware, "_cuda_device_count", lambda: (True, 3, None))
     monkeypatch.setattr(hardware, "probe_gromacs_gpu", lambda *_args: (True, None))
 
@@ -89,14 +87,15 @@ def test_operator_can_limit_cpu_and_expose_multiple_gpus(monkeypatch, tmp_path):
     executable = _fake_gmx(tmp_path)
     monkeypatch.setattr(hardware, "available_cpu_ids", lambda: tuple(range(12)))
     monkeypatch.setattr(hardware, "_candidate_gromacs_paths", lambda: [executable])
-    monkeypatch.setattr(
-        hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA")
-    )
+    monkeypatch.setattr(hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA"))
     monkeypatch.setattr(hardware, "_cuda_device_count", lambda: (True, 3, None))
     monkeypatch.setattr(hardware, "probe_gromacs_gpu", lambda *_args: (True, None))
 
     result = hardware.configure_runtime_resources(
-        cpu_cores=6, gpu_count=2, task_threads=3, apply_affinity=False,
+        cpu_cores=6,
+        gpu_count=2,
+        task_threads=3,
+        apply_affinity=False,
     )
 
     assert result.configured_cpu_cores == 6
@@ -127,9 +126,7 @@ def test_invalid_operator_limits_are_rejected(monkeypatch, tmp_path):
     executable = _fake_gmx(tmp_path)
     monkeypatch.setattr(hardware, "available_cpu_ids", lambda: tuple(range(4)))
     monkeypatch.setattr(hardware, "_candidate_gromacs_paths", lambda: [executable])
-    monkeypatch.setattr(
-        hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA")
-    )
+    monkeypatch.setattr(hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA"))
     monkeypatch.setattr(hardware, "_cuda_device_count", lambda: (True, 1, None))
 
     with pytest.raises(ValueError, match="only 4 threads"):
@@ -137,9 +134,7 @@ def test_invalid_operator_limits_are_rejected(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="only 1 CUDA"):
         hardware.configure_runtime_resources(gpu_count=2, apply_affinity=False)
     with pytest.raises(ValueError, match="must divide"):
-        hardware.configure_runtime_resources(
-            cpu_cores=4, task_threads=3, apply_affinity=False
-        )
+        hardware.configure_runtime_resources(cpu_cores=4, task_threads=3, apply_affinity=False)
 
 
 def test_every_manually_exposed_gpu_is_probed(monkeypatch, tmp_path):
@@ -147,9 +142,7 @@ def test_every_manually_exposed_gpu_is_probed(monkeypatch, tmp_path):
     executable = _fake_gmx(tmp_path)
     monkeypatch.setattr(hardware, "available_cpu_ids", lambda: tuple(range(8)))
     monkeypatch.setattr(hardware, "_candidate_gromacs_paths", lambda: [executable])
-    monkeypatch.setattr(
-        hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA")
-    )
+    monkeypatch.setattr(hardware, "_gromacs_build_info", lambda _path: ("2025.4", "CUDA"))
     monkeypatch.setattr(hardware, "_cuda_device_count", lambda: (True, 2, None))
     probes = []
 
@@ -160,7 +153,8 @@ def test_every_manually_exposed_gpu_is_probed(monkeypatch, tmp_path):
     monkeypatch.setattr(hardware, "probe_gromacs_gpu", probe)
     with pytest.raises(ValueError, match="GPU 1 failed"):
         hardware.configure_runtime_resources(
-            gpu_count=2, apply_affinity=False,
+            gpu_count=2,
+            apply_affinity=False,
         )
     assert probes == [0, 1]
 
@@ -170,13 +164,12 @@ def test_public_hardware_status_does_not_expose_host_path(monkeypatch, tmp_path)
     executable = _fake_gmx(tmp_path)
     monkeypatch.setattr(hardware, "available_cpu_ids", lambda: tuple(range(4)))
     monkeypatch.setattr(hardware, "_candidate_gromacs_paths", lambda: [executable])
-    monkeypatch.setattr(
-        hardware, "_gromacs_build_info", lambda _path: ("2025.4", "disabled")
-    )
+    monkeypatch.setattr(hardware, "_gromacs_build_info", lambda _path: ("2025.4", "disabled"))
     monkeypatch.setattr(hardware, "_cuda_device_count", lambda: (False, 0, "detail"))
 
     public = hardware.configure_runtime_resources(
-        gpu_count=0, apply_affinity=False,
+        gpu_count=0,
+        apply_affinity=False,
     ).as_public_dict()
 
     assert "gmx_path" not in public
@@ -185,46 +178,56 @@ def test_public_hardware_status_does_not_expose_host_path(monkeypatch, tmp_path)
 
 
 def test_simulation_hardware_requires_exact_cpu_rank_partition():
-    configured = hardware.normalize_simulation_hardware({
-        "mode": "external-mpi",
-        "cpu_threads": 24,
-        "mpi_ranks": 4,
-        "use_gpu": True,
-        "gpu_count": 2,
-        "gpu_ids": "0,1",
-        "gmx_command": "/opt/gromacs/bin/gmx_mpi",
-        "mpi_launcher": "srun",
-        "pin": "on",
-    })
+    configured = hardware.normalize_simulation_hardware(
+        {
+            "mode": "external-mpi",
+            "cpu_threads": 24,
+            "mpi_ranks": 4,
+            "use_gpu": True,
+            "gpu_count": 2,
+            "gpu_ids": "0,1",
+            "gmx_command": "/opt/gromacs/bin/gmx_mpi",
+            "mpi_launcher": "srun",
+            "pin": "on",
+        }
+    )
 
     assert configured["omp_threads"] == 6
     assert configured["gpu_count"] == 2
     assert configured["gpu_ids"] == [0, 1]
     with pytest.raises(ValueError, match="must divide"):
-        hardware.normalize_simulation_hardware({
-            "cpu_threads": 10,
-            "mpi_ranks": 3,
-        })
+        hardware.normalize_simulation_hardware(
+            {
+                "cpu_threads": 10,
+                "mpi_ranks": 3,
+            }
+        )
     with pytest.raises(ValueError, match="shell syntax"):
-        hardware.normalize_simulation_hardware({
-            "gmx_command": "gmx; rm -rf /",
-        })
+        hardware.normalize_simulation_hardware(
+            {
+                "gmx_command": "gmx; rm -rf /",
+            }
+        )
 
 
 def test_simulation_hardware_rejects_inconsistent_multi_gpu_selection():
     with pytest.raises(ValueError, match="gpu_count must equal"):
-        hardware.normalize_simulation_hardware({
-            "cpu_threads": 8,
-            "mpi_ranks": 2,
-            "use_gpu": True,
-            "gpu_count": 1,
-            "gpu_ids": "0,1",
-        })
+        hardware.normalize_simulation_hardware(
+            {
+                "cpu_threads": 8,
+                "mpi_ranks": 2,
+                "use_gpu": True,
+                "gpu_count": 1,
+                "gpu_ids": "0,1",
+            }
+        )
     with pytest.raises(ValueError, match="at least the selected GPU count"):
-        hardware.normalize_simulation_hardware({
-            "cpu_threads": 8,
-            "mpi_ranks": 1,
-            "use_gpu": True,
-            "gpu_count": 2,
-            "gpu_ids": "0,1",
-        })
+        hardware.normalize_simulation_hardware(
+            {
+                "cpu_threads": 8,
+                "mpi_ranks": 1,
+                "use_gpu": True,
+                "gpu_count": 2,
+                "gpu_ids": "0,1",
+            }
+        )

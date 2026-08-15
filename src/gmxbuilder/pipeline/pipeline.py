@@ -111,6 +111,7 @@ class Pipeline:
                 from gmxbuilder.modules.forcefield.lipid_policy import (
                     membrane_lipid_names,
                 )
+
                 lipid_names = membrane_lipid_names(config.modules.get("membrane", {}))
                 if lipid_names:
                     mod_config = {**mod_config, "lipid_names": list(lipid_names)}
@@ -130,6 +131,7 @@ class Pipeline:
 
             if result.warnings:
                 import warnings
+
                 for w in result.warnings:
                     warnings.warn(f"[{mod_name}] {w}")
 

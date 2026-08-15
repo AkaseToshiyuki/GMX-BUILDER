@@ -25,13 +25,17 @@ def _system(coordinates: np.ndarray) -> System:
 
 
 def test_membrane_quality_rejects_protein_outside_bilayer_envelope():
-    system = _system(np.array([
-        [0.0, 0.0, 8.0],
-        [-1.0, -1.0, 2.0],
-        [1.0, -1.0, 2.0],
-        [-1.0, 1.0, -2.0],
-        [1.0, 1.0, -2.0],
-    ]))
+    system = _system(
+        np.array(
+            [
+                [0.0, 0.0, 8.0],
+                [-1.0, -1.0, 2.0],
+                [1.0, -1.0, 2.0],
+                [-1.0, 1.0, -2.0],
+                [1.0, 1.0, -2.0],
+            ]
+        )
+    )
 
     with pytest.raises(ModuleConfigError, match="Z envelopes do not intersect"):
         _validate_membrane_quality(
@@ -46,13 +50,17 @@ def test_membrane_quality_rejects_protein_outside_bilayer_envelope():
 
 
 def test_membrane_quality_accepts_intersecting_protein_envelope():
-    system = _system(np.array([
-        [0.0, 0.0, 0.0],
-        [-1.0, -1.0, 2.0],
-        [1.0, -1.0, 2.0],
-        [-1.0, 1.0, -2.0],
-        [1.0, 1.0, -2.0],
-    ]))
+    system = _system(
+        np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [-1.0, -1.0, 2.0],
+                [1.0, -1.0, 2.0],
+                [-1.0, 1.0, -2.0],
+                [1.0, 1.0, -2.0],
+            ]
+        )
+    )
 
     _validate_membrane_quality(
         system,

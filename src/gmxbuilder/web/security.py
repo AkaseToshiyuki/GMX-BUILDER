@@ -39,10 +39,7 @@ class SecurityConfig:
 
     @property
     def authentication_enabled(self) -> bool:
-        return bool(
-            (self.auth_user and self.auth_password)
-            or self.access_token
-        )
+        return bool((self.auth_user and self.auth_password) or self.access_token)
 
     @property
     def require_https(self) -> bool:
@@ -53,9 +50,7 @@ class SecurityConfig:
         mode = os.environ.get("GMXBUILDER_DEPLOYMENT_MODE", "local").strip().lower()
         errors: list[str] = []
         if mode not in _VALID_MODES:
-            errors.append(
-                "GMXBUILDER_DEPLOYMENT_MODE must be local, trusted-lan, or public"
-            )
+            errors.append("GMXBUILDER_DEPLOYMENT_MODE must be local, trusted-lan, or public")
 
         allowed_origins = _split_environment(
             "GMXBUILDER_CORS_ORIGINS",
@@ -72,9 +67,7 @@ class SecurityConfig:
         auth_password = os.environ.get("GMXBUILDER_AUTH_PASSWORD", "")
         access_token = os.environ.get("GMXBUILDER_ACCESS_TOKEN", "")
         if bool(auth_user) != bool(auth_password):
-            errors.append(
-                "GMXBUILDER_AUTH_USER and GMXBUILDER_AUTH_PASSWORD must be set together"
-            )
+            errors.append("GMXBUILDER_AUTH_USER and GMXBUILDER_AUTH_PASSWORD must be set together")
 
         if mode == "public":
             if not ((auth_user and len(auth_password) >= 16) or len(access_token) >= 32):
@@ -89,9 +82,7 @@ class SecurityConfig:
             if not allowed_origins or any(
                 not origin.lower().startswith("https://") for origin in allowed_origins
             ):
-                errors.append(
-                    "public mode requires explicit https:// GMXBUILDER_CORS_ORIGINS"
-                )
+                errors.append("public mode requires explicit https:// GMXBUILDER_CORS_ORIGINS")
 
         return cls(
             mode=mode,

@@ -167,7 +167,7 @@ Ligands, PTMs, glycans, nucleic acids, arbitrary custom CG molecules,
 mixed-resolution models, complex curved surfaces, Gō/OLIVES, and backmapping
 are unavailable and are rejected during input review. Query
 `GET /api/coarse-grained/capabilities` for the authoritative installed list and
-see the [User Manual](GMXBUILDER_USER_MANUAL_V1.0.2.md) for operation.
+see the [User Manual](GMXBUILDER_USER_MANUAL_V1.0.3.md) for operation.
 
 ## 8. Build quality and responsibility
 

@@ -9,23 +9,38 @@ not replace upstream licenses, citation requirements or usage conditions.
 
 ## Force-field data
 
-The directories below contain force-field data or converted ports:
+The public source distribution includes the GROMACS-provided Amber and OPLS
+data listed below together with their provenance files. It does not redistribute
+CHARMM36/CHARMM36m. Before Python dependency installation, the local installer
+downloads those two pinned GROMACS ports directly from the official MacKerell
+Lab endpoint, verifies SHA-256, applies the documented GMXBUILDER overlays, and
+installs them locally.
+
+Every non-redistributed runtime asset is enumerated in
+`scripts/external_assets.json` with its official source page, direct HTTPS
+download URL, archive root, required files and pinned SHA-256 digest. The
+unattended `install-local.sh` invokes that manifest before installing Python
+dependencies; no manual browser download or file placement is required.
 
 - `src/gmxbuilder/data/forcefields/amber14sb.ff`
 - `src/gmxbuilder/data/forcefields/amber99sb.ff`
-- `src/gmxbuilder/data/forcefields/charmm36m`
-- `src/gmxbuilder/data/forcefields/charmm36`
+- `src/gmxbuilder/data/forcefields/charmm36m` (installed locally)
+- `src/gmxbuilder/data/forcefields/charmm36` (installed locally)
 - `src/gmxbuilder/data/forcefields/oplsaa.ff`
 
 Provenance and scientific references embedded in `forcefield.itp`,
 `forcefield.doc` and related source headers must be preserved. Before any
-distribution outside a private research repository, the repository owner must
-verify the upstream redistribution terms for every bundled force-field file.
-This notice does not grant redistribution rights.
+redistribution, distributors must verify the upstream terms for every bundled
+force-field file. This notice does not grant redistribution rights. Public
+deployment must use `scripts/install_external_assets.py`; changing a pinned
+source or checksum is a reviewed scientific change, not an automatic upgrade.
 
 ## Prebuilt lipid assets
 
-`src/gmxbuilder/data/prebuilt_assets/` contains generated simulation outputs:
+`src/gmxbuilder/data/prebuilt_assets/` contains generated simulation outputs.
+The installer can hydrate its Git LFS payload directly from the manifest-pinned
+public HTTPS media URL, so end users do not need Git LFS or an access token.
+The payload contains:
 
 - explicit-solvent, semi-isotropic NPT lipid conformations;
 - GROMACS topology/cache files generated through GAFF2 and AM1-BCC tooling.
@@ -60,6 +75,29 @@ packages rather than vendoring their source:
 Their respective licenses and citation requirements remain upstream. Generated
 packages include `CITATIONS.json` with the model and tool references. The
 project MIT license does not replace Martini model citation requirements.
+
+## Installed Python dependencies
+
+The installer resolves exact artifacts from `uv.lock`; dependency source code
+is not copied into this repository. Major scientific dependencies declare the
+following licenses in their installed package metadata. Their complete license
+texts and any bundled-component notices remain in the installed distributions.
+
+| Dependency | Declared license |
+|---|---|
+| NumPy / SciPy | BSD-3-Clause family, with NumPy bundled-component notices |
+| RDKit | BSD-3-Clause |
+| OpenMM | BSD-like |
+| PDBFixer | MIT |
+| Vermouth / Martinize2 | Apache-2.0 |
+| COBY | Apache-2.0 |
+| MDTraj | LGPL-2.1-or-later |
+| Matplotlib | PSF-compatible Matplotlib license |
+
+The remaining web and packaging dependencies are also installed from pinned
+artifacts and retain their own upstream metadata. Repackaging the complete
+virtual environment requires preserving every dependency notice; this project
+does not grant replacement terms.
 
 ## User-supplied parameter files
 

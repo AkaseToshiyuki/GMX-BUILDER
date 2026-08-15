@@ -51,15 +51,23 @@ class CIFParser:
         model_col = col.get("pdbx_PDB_model_num")
         if model_col is not None and all_rows:
             first_model = self._str(
-                atom_data, all_rows[0] * len(atom_fields), col,
-                "pdbx_PDB_model_num", "1",
+                atom_data,
+                all_rows[0] * len(atom_fields),
+                col,
+                "pdbx_PDB_model_num",
+                "1",
             )
             rows = [
-                row for row in all_rows
+                row
+                for row in all_rows
                 if self._str(
-                    atom_data, row * len(atom_fields), col,
-                    "pdbx_PDB_model_num", first_model,
-                ) == first_model
+                    atom_data,
+                    row * len(atom_fields),
+                    col,
+                    "pdbx_PDB_model_num",
+                    first_model,
+                )
+                == first_model
             ]
         else:
             rows = all_rows
@@ -67,9 +75,7 @@ class CIFParser:
         selected: dict[tuple[str, str, str, str], tuple[int, tuple[float, int]]] = {}
         for row_idx in rows:
             base = row_idx * len(atom_fields)
-            insertion = self._str(
-                atom_data, base, col, "pdbx_PDB_ins_code", ""
-            ).strip()
+            insertion = self._str(atom_data, base, col, "pdbx_PDB_ins_code", "").strip()
             if insertion not in {"", ".", "?"}:
                 chain = self._preferred_str(
                     atom_data, base, col, ("auth_asym_id", "label_asym_id"), "?"
@@ -88,12 +94,8 @@ class CIFParser:
             resname = self._preferred_str(
                 atom_data, base, col, ("auth_comp_id", "label_comp_id"), "UNK"
             )
-            chain = self._preferred_str(
-                atom_data, base, col, ("auth_asym_id", "label_asym_id"), ""
-            )
-            resid = self._preferred_str(
-                atom_data, base, col, ("auth_seq_id", "label_seq_id"), ""
-            )
+            chain = self._preferred_str(atom_data, base, col, ("auth_asym_id", "label_asym_id"), "")
+            resid = self._preferred_str(atom_data, base, col, ("auth_seq_id", "label_seq_id"), "")
             altloc = self._str(atom_data, base, col, "label_alt_id", "").strip()
             if altloc in {".", "?"}:
                 altloc = ""
@@ -129,15 +131,15 @@ class CIFParser:
                 raise ParseError(f"Non-finite coordinates in _atom_site row {row_idx + 1}")
             coords[output_idx] = [x, y, z]
 
-            atom_names.append(self._preferred_str(
-                atom_data, base, col, ("auth_atom_id", "label_atom_id"), ""
-            ))
-            resnames.append(self._preferred_str(
-                atom_data, base, col, ("auth_comp_id", "label_comp_id"), "UNK"
-            ))
-            chain_ids.append(self._preferred_str(
-                atom_data, base, col, ("auth_asym_id", "label_asym_id"), ""
-            ))
+            atom_names.append(
+                self._preferred_str(atom_data, base, col, ("auth_atom_id", "label_atom_id"), "")
+            )
+            resnames.append(
+                self._preferred_str(atom_data, base, col, ("auth_comp_id", "label_comp_id"), "UNK")
+            )
+            chain_ids.append(
+                self._preferred_str(atom_data, base, col, ("auth_asym_id", "label_asym_id"), "")
+            )
             occupancies.append(self._float(atom_data, base, col, "occupancy", 1.0))
             tempfactors.append(self._float(atom_data, base, col, "B_iso_or_equiv", 0.0))
 
@@ -165,10 +167,7 @@ class CIFParser:
 
         # Estimate from coordinates when cell parameters are absent or
         # physically unreasonable (e.g. placeholder 1.0 Å cell).
-        dims = (
-            np.sqrt((box_vectors ** 2).sum(axis=1))
-            if box_vectors is not None else np.zeros(3)
-        )
+        dims = np.sqrt((box_vectors**2).sum(axis=1)) if box_vectors is not None else np.zeros(3)
         if box_vectors is None or np.any(dims < 1.0) or np.any(dims > 1000.0):
             cmin = coords.min(axis=0)
             cmax = coords.max(axis=0)
@@ -292,6 +291,7 @@ class CIFParser:
     @staticmethod
     def _parse_cell(raw: str) -> np.ndarray | None:
         """Parse _cell.length_* and _cell.angle_* into a (3,3) box matrix (nm)."""
+
         def _get(tag: str) -> float | None:
             m = re.search(rf"^{re.escape(tag)}\s+(\S+)", raw, re.MULTILINE)
             if m:
@@ -326,11 +326,17 @@ class CIFParser:
 
         v1 = np.array([a_nm, 0.0, 0.0])
         v2 = np.array([b_nm * cos_ga, b_nm * sin_ga, 0.0])
-        v3 = np.array([
-            c_nm * cos_be,
-            c_nm * (cos_al - cos_be * cos_ga) / max(sin_ga, 1e-8),
-            c_nm * np.sqrt(max(1.0 - cos_al**2 - cos_be**2 - cos_ga**2 + 2 * cos_al * cos_be * cos_ga, 0)) / max(sin_ga, 1e-8),
-        ])
+        v3 = np.array(
+            [
+                c_nm * cos_be,
+                c_nm * (cos_al - cos_be * cos_ga) / max(sin_ga, 1e-8),
+                c_nm
+                * np.sqrt(
+                    max(1.0 - cos_al**2 - cos_be**2 - cos_ga**2 + 2 * cos_al * cos_be * cos_ga, 0)
+                )
+                / max(sin_ga, 1e-8),
+            ]
+        )
 
         return np.array([v1, v2, v3])
 
@@ -385,9 +391,7 @@ class CIFParser:
             return default
 
     @staticmethod
-    def _required_float(
-        data: list[str], base: int, col: dict[str, int], key: str
-    ) -> float:
+    def _required_float(data: list[str], base: int, col: dict[str, int], key: str) -> float:
         value = CIFParser._str(data, base, col, key, "")
         if not value:
             raise ParseError(f"Missing _atom_site.{key} value")

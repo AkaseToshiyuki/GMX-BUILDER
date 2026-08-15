@@ -70,9 +70,7 @@ def test_queue_status_has_task_id_and_start_estimate(monkeypatch):
     monkeypatch.setattr(server, "_build_queue", [(task_id, {})])
     monkeypatch.setattr(server, "_queue_enqueued_at", {task_id: time.time()})
     monkeypatch.setattr(server, "_building_tasks", {"b" * 32})
-    monkeypatch.setattr(
-        server, "_build_started_at", {"b" * 32: time.time() - 5.0}
-    )
+    monkeypatch.setattr(server, "_build_started_at", {"b" * 32: time.time() - 5.0})
     server._build_duration_history.clear()
     server._build_duration_history.append(20.0)
 
@@ -85,9 +83,7 @@ def test_queue_status_has_task_id_and_start_estimate(monkeypatch):
     assert status["estimated_start_at"].endswith("+00:00")
 
 
-def test_queue_estimate_accounts_for_positions_beyond_currently_free_slots(
-    monkeypatch
-):
+def test_queue_estimate_accounts_for_positions_beyond_currently_free_slots(monkeypatch):
     now = time.time()
     monkeypatch.setattr(server, "_MAX_CONCURRENT_BUILDS", 4)
     monkeypatch.setattr(server, "_building_tasks", {"active"})
@@ -104,14 +100,15 @@ def test_resume_selects_first_incomplete_visible_step(tmp_path, monkeypatch):
     task = manager.create_task("pure")
     task_id = task["task_id"]
     detail = get_task_type_detail("pure-membrane")
-    manager.update_state(task_id, {
-        "task_type": detail,
-        "task_type_id": "pure-membrane",
-        "current_step": "forcefield",
-    })
-    _empty_system().save_checkpoint(
-        manager.get_task_dir(task_id) / "steps" / "forcefield"
+    manager.update_state(
+        task_id,
+        {
+            "task_type": detail,
+            "task_type_id": "pure-membrane",
+            "current_step": "forcefield",
+        },
     )
+    _empty_system().save_checkpoint(manager.get_task_dir(task_id) / "steps" / "forcefield")
     monkeypatch.setattr(server, "task_manager", manager)
     server._step_runners.pop(task_id, None)
 
@@ -123,20 +120,19 @@ def test_resume_selects_first_incomplete_visible_step(tmp_path, monkeypatch):
     assert task_id not in resumed["resume_url"]
 
 
-def test_queue_admission_persists_request_and_returns_restorable_task_id(
-    tmp_path, monkeypatch
-):
+def test_queue_admission_persists_request_and_returns_restorable_task_id(tmp_path, monkeypatch):
     manager = TaskManager(tmp_path / "tasks")
     task = manager.create_task("pure")
     task_id = task["task_id"]
     detail = get_task_type_detail("pure-membrane")
-    manager.update_state(task_id, {
-        "task_type": detail,
-        "task_type_id": "pure-membrane",
-    })
-    _empty_system().save_checkpoint(
-        manager.get_task_dir(task_id) / "steps" / "membrane"
+    manager.update_state(
+        task_id,
+        {
+            "task_type": detail,
+            "task_type_id": "pure-membrane",
+        },
     )
+    _empty_system().save_checkpoint(manager.get_task_dir(task_id) / "steps" / "membrane")
     monkeypatch.setattr(server, "task_manager", manager)
     monkeypatch.setattr(server, "_build_semaphore", _NoSlotSemaphore())
     monkeypatch.setattr(server, "_build_queue", [])
@@ -171,7 +167,11 @@ def test_queue_admission_persists_request_and_returns_restorable_task_id(
     assert saved_request["source_step"] == "membrane"
     assert saved_request["modules"]["simparams"]["schema_version"] == 2
     assert set(saved_request["modules"]["simparams"]) == {
-        "schema_version", "minimization", "eq_stages", "prod_iters", "hardware"
+        "schema_version",
+        "minimization",
+        "eq_stages",
+        "prod_iters",
+        "hardware",
     }
     assert manager.get_state(task_id)["build_status"]["status"] == "queued"
 
@@ -181,13 +181,14 @@ def test_full_queue_does_not_persist_an_unaccepted_build(tmp_path, monkeypatch):
     task = manager.create_task("pure")
     task_id = task["task_id"]
     detail = get_task_type_detail("pure-membrane")
-    manager.update_state(task_id, {
-        "task_type": detail,
-        "task_type_id": "pure-membrane",
-    })
-    _empty_system().save_checkpoint(
-        manager.get_task_dir(task_id) / "steps" / "membrane"
+    manager.update_state(
+        task_id,
+        {
+            "task_type": detail,
+            "task_type_id": "pure-membrane",
+        },
     )
+    _empty_system().save_checkpoint(manager.get_task_dir(task_id) / "steps" / "membrane")
     monkeypatch.setattr(server, "task_manager", manager)
     monkeypatch.setattr(server, "_build_semaphore", _NoSlotSemaphore())
     monkeypatch.setattr(server, "_build_queue", [])

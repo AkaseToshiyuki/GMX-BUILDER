@@ -14,8 +14,10 @@ from gmxbuilder.modules.input.protein_repair import (
 
 def _structure(atom_names, resname="ARG"):
     coordinates = np.asarray(
-        [[0.12 * index, 0.03 * (index % 2), 0.02 * (index % 3)]
-         for index in range(len(atom_names))],
+        [
+            [0.12 * index, 0.03 * (index % 2), 0.02 * (index % 3)]
+            for index in range(len(atom_names))
+        ],
         dtype=np.float64,
     )
     return Structure(
@@ -95,8 +97,7 @@ def test_pdbfixer_repairs_arg_without_moving_existing_atoms():
     assert records[0].resname == "ARG"
     assert set(records[0].added_atoms) == {"CG", "CD", "NE", "CZ", "NH1", "NH2"}
     repaired_lookup = {
-        name: repaired.coordinates[index]
-        for index, name in enumerate(repaired.atom_names)
+        name: repaired.coordinates[index] for index, name in enumerate(repaired.atom_names)
     }
     for index, name in enumerate(original.atom_names):
         assert np.array_equal(repaired_lookup[name], original.coordinates[index])

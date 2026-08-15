@@ -24,31 +24,29 @@ def test_pdb_atom_names_follow_element_sensitive_alignment():
 def test_propka_input_normalizes_legacy_left_aligned_atom_names(tmp_path, monkeypatch):
     pdb = tmp_path / "legacy.pdb"
     pdb.write_text(
-        "ATOM      1 OD1  ASP A   1       0.000   0.000   0.000  1.00  0.00           O\n"
-        "END\n"
+        "ATOM      1 OD1  ASP A   1       0.000   0.000   0.000  1.00  0.00           O\nEND\n"
     )
 
     def fake_run(command, *, cwd, **_kwargs):
         normalized = Path(command[-1]).read_text()
         assert normalized.splitlines()[0][12:16] == " OD1"
-        Path(cwd, "legacy.pka").write_text(
-            "SUMMARY OF THIS PREDICTION\n"
-            "ASP 1 A 4.20 3.80\n"
-        )
+        Path(cwd, "legacy.pka").write_text("SUMMARY OF THIS PREDICTION\nASP 1 A 4.20 3.80\n")
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr("subprocess.run", fake_run)
 
     predictions = predict_pka_from_pdb(pdb)
 
-    assert predictions == [{
-        "residue_name": "ASP",
-        "chain": "A",
-        "resid": 1,
-        "model_pKa": 3.8,
-        "predicted_pKa": 4.2,
-        "shift": 0.4,
-    }]
+    assert predictions == [
+        {
+            "residue_name": "ASP",
+            "chain": "A",
+            "resid": 1,
+            "model_pKa": 3.8,
+            "predicted_pKa": 4.2,
+            "shift": 0.4,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -83,7 +81,9 @@ def test_all_assignments_preserve_sequence_indices():
 
     assert [assignment["index"] for assignment in assignments] == [0, 1, 2]
     assert [assignment["assigned_name"] for assignment in assignments] == [
-        "ALA", "ASP", "LYS",
+        "ALA",
+        "ASP",
+        "LYS",
     ]
 
 
@@ -92,7 +92,7 @@ def test_charge_adjustment_uses_ph7_reference_state():
 
     assert result["reference_pH"] == 7.0
     assert result["original_charge"] == 0  # ASP(-1) + LYS(+1) + TYR(0)
-    assert result["new_charge"] == -2      # ASP(-1) + LYN(0) + TYM(-1)
+    assert result["new_charge"] == -2  # ASP(-1) + LYN(0) + TYM(-1)
     assert result["delta"] == -2
 
 
@@ -101,9 +101,7 @@ def test_propka_nonzero_exit_rejects_partial_output(tmp_path, monkeypatch):
     pdb.write_text("END\n")
 
     def fake_run(command, *, cwd, **_kwargs):
-        Path(cwd, "protein.pka").write_text(
-            "SUMMARY OF THIS PREDICTION\nASP 1 A 4.20 3.80\n"
-        )
+        Path(cwd, "protein.pka").write_text("SUMMARY OF THIS PREDICTION\nASP 1 A 4.20 3.80\n")
         return SimpleNamespace(returncode=2, stdout="", stderr="failed")
 
     monkeypatch.setattr("subprocess.run", fake_run)

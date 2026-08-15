@@ -13,16 +13,40 @@ from gmxbuilder.core.exceptions import ModuleConfigError
 def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
     raw = dict(raw or {})
     allowed = {
-        "temperature", "pressure", "production_ns", "output_interval_ps",
-        "minimization_steps", "minimization_tolerance", "minimization_step_nm",
-        "eq1_duration_ns", "eq1_timestep_fs", "eq1_temperature", "eq1_tau_t",
-        "eq2_duration_ns", "eq2_timestep_fs", "eq2_temperature", "eq2_tau_t",
-        "eq2_pressure", "eq2_tau_p", "production_timestep_fs",
-        "production_temperature", "production_tau_t", "production_pressure",
-        "production_tau_p", "energy_interval_ps", "log_interval_ps",
-        "comm_mode", "comm_interval", "has_membrane",
-        "equilibration_1", "equilibration_2", "use_gpu", "gpu_ids",
-        "threads", "mpi_ranks", "system_name",
+        "temperature",
+        "pressure",
+        "production_ns",
+        "output_interval_ps",
+        "minimization_steps",
+        "minimization_tolerance",
+        "minimization_step_nm",
+        "eq1_duration_ns",
+        "eq1_timestep_fs",
+        "eq1_temperature",
+        "eq1_tau_t",
+        "eq2_duration_ns",
+        "eq2_timestep_fs",
+        "eq2_temperature",
+        "eq2_tau_t",
+        "eq2_pressure",
+        "eq2_tau_p",
+        "production_timestep_fs",
+        "production_temperature",
+        "production_tau_t",
+        "production_pressure",
+        "production_tau_p",
+        "energy_interval_ps",
+        "log_interval_ps",
+        "comm_mode",
+        "comm_interval",
+        "has_membrane",
+        "equilibration_1",
+        "equilibration_2",
+        "use_gpu",
+        "gpu_ids",
+        "threads",
+        "mpi_ranks",
+        "system_name",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -88,12 +112,14 @@ def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
         "eq2_temperature": number("eq2_temperature", legacy_temperature, 250.0, 370.0),
         "eq2_tau_t": number("eq2_tau_t", 1.0, 0.1, 20.0),
         "eq2_pressure": number("eq2_pressure", legacy_pressure, 0.1, 100.0),
-        "eq2_tau_p": number("eq2_tau_p", 4.0, 0.1, 50.0),
+        "eq2_tau_p": number("eq2_tau_p", 5.0, 0.1, 50.0),
         "production_timestep_fs": number("production_timestep_fs", 20.0, 1.0, 20.0),
-        "production_temperature": number("production_temperature", legacy_temperature, 250.0, 370.0),
+        "production_temperature": number(
+            "production_temperature", legacy_temperature, 250.0, 370.0
+        ),
         "production_tau_t": number("production_tau_t", 1.0, 0.1, 20.0),
         "production_pressure": number("production_pressure", legacy_pressure, 0.1, 100.0),
-        "production_tau_p": number("production_tau_p", 4.0, 0.1, 50.0),
+        "production_tau_p": number("production_tau_p", 5.0, 0.1, 50.0),
         "production_ns": production_ns,
         "output_interval_ps": output_ps,
         "energy_interval_ps": energy_ps,
@@ -107,7 +133,10 @@ def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
         "threads": threads,
         "mpi_ranks": mpi_ranks,
         "has_membrane": bool(has_membrane),
-        "system_name": re.sub(r"[^A-Za-z0-9_.-]+", "_", str(raw.get("system_name", "martini3_system")))[:64] or "martini3_system",
+        "system_name": re.sub(
+            r"[^A-Za-z0-9_.-]+", "_", str(raw.get("system_name", "martini3_system"))
+        )[:64]
+        or "martini3_system",
     }
 
 
@@ -116,13 +145,26 @@ def _common(config: dict, dt_ps: float) -> list[str]:
     energy_stride = max(1, int(round(config["energy_interval_ps"] / dt_ps)))
     log_stride = max(1, int(round(config["log_interval_ps"] / dt_ps)))
     return [
-        "cutoff-scheme = Verlet", "nstlist = 20", "verlet-buffer-tolerance = -1",
-        "rlist = 1.35", "coulombtype = Reaction-Field", "rcoulomb = 1.1",
-        "epsilon-r = 15", "epsilon-rf = 0", "vdwtype = Cut-off",
-        "vdw-modifier = Potential-shift-verlet", "rvdw = 1.1", "DispCorr = no",
-        "constraints = none", "pbc = xyz", f"nstenergy = {energy_stride}", f"nstlog = {log_stride}",
-        "nstxout-compressed = " + str(stride), "compressed-x-precision = 100",
-        f"comm-mode = {config['comm_mode']}", f"nstcomm = {config['comm_interval']}",
+        "cutoff-scheme = Verlet",
+        "nstlist = 20",
+        "verlet-buffer-tolerance = -1",
+        "rlist = 1.35",
+        "coulombtype = Reaction-Field",
+        "rcoulomb = 1.1",
+        "epsilon-r = 15",
+        "epsilon-rf = 0",
+        "vdwtype = Cut-off",
+        "vdw-modifier = Potential-shift-verlet",
+        "rvdw = 1.1",
+        "DispCorr = no",
+        "constraints = none",
+        "pbc = xyz",
+        f"nstenergy = {energy_stride}",
+        f"nstlog = {log_stride}",
+        "nstxout-compressed = " + str(stride),
+        "compressed-x-precision = 100",
+        f"comm-mode = {config['comm_mode']}",
+        f"nstcomm = {config['comm_interval']}",
         "comm-grps = System",
     ]
 
@@ -133,35 +175,70 @@ def write_mdp_files(directory: Path, config: dict) -> list[tuple[str, str]]:
     compress = "3e-4 3e-4" if config["has_membrane"] else "3e-4"
     stages: list[tuple[str, str]] = []
     mini = [
-        "integrator = steep", f"nsteps = {config['minimization_steps']}",
-        f"emtol = {config['minimization_tolerance']:g}", f"emstep = {config['minimization_step_nm']:g}",
-        "nstlist = 20", "cutoff-scheme = Verlet", "verlet-buffer-tolerance = -1", "rlist = 1.35",
-        "coulombtype = Reaction-Field", "rcoulomb = 1.1", "epsilon-r = 15", "epsilon-rf = 0",
-        "vdwtype = Cut-off", "vdw-modifier = Potential-shift-verlet", "rvdw = 1.1", "DispCorr = no",
-        "constraints = none", "lincs-iter = 4", "lincs-order = 8",
+        "integrator = steep",
+        f"nsteps = {config['minimization_steps']}",
+        f"emtol = {config['minimization_tolerance']:g}",
+        f"emstep = {config['minimization_step_nm']:g}",
+        "nstlist = 20",
+        "cutoff-scheme = Verlet",
+        "verlet-buffer-tolerance = -1",
+        "rlist = 1.35",
+        "coulombtype = Reaction-Field",
+        "rcoulomb = 1.1",
+        "epsilon-r = 15",
+        "epsilon-rf = 0",
+        "vdwtype = Cut-off",
+        "vdw-modifier = Potential-shift-verlet",
+        "rvdw = 1.1",
+        "DispCorr = no",
+        "constraints = none",
+        "lincs-iter = 4",
+        "lincs-order = 8",
         # Steepest descent can rotate a constrained CG backbone substantially
         # while retaining sub-per-mille constraint error.  Keep a hard 60°
         # warning gate while avoiding false 30° warnings during relaxation.
-        "lincs-warnangle = 60", "pbc = xyz",
+        "lincs-warnangle = 60",
+        "pbc = xyz",
     ]
     (directory / "mini.mdp").write_text("\n".join(mini) + "\n", encoding="utf-8")
     stages.append(("mini", "mini.mdp"))
 
-    def dynamics(name: str, ns: float, dt_fs: float, temperature: float, tau_t: float,
-                 *, npt: bool, pressure: float = 1.0, tau_p: float = 4.0,
-                 gen_vel: bool) -> None:
+    def dynamics(
+        name: str,
+        ns: float,
+        dt_fs: float,
+        temperature: float,
+        tau_t: float,
+        *,
+        npt: bool,
+        pressure: float = 1.0,
+        tau_p: float = 5.0,
+        gen_vel: bool,
+    ) -> None:
         dt = dt_fs / 1000.0
-        lines = ["integrator = md", f"dt = {dt:g}", f"nsteps = {int(round(ns * 1000 / dt))}",
-                 "continuation = no" if gen_vel else "continuation = yes",
-                 "tcoupl = v-rescale", "tc-grps = System", f"tau-t = {tau_t:g}", f"ref-t = {temperature:g}"]
+        lines = [
+            "integrator = md",
+            f"dt = {dt:g}",
+            f"nsteps = {int(round(ns * 1000 / dt))}",
+            "continuation = no" if gen_vel else "continuation = yes",
+            "tcoupl = v-rescale",
+            "tc-grps = System",
+            f"tau-t = {tau_t:g}",
+            f"ref-t = {temperature:g}",
+        ]
         if gen_vel:
             lines += ["gen-vel = yes", f"gen-temp = {temperature:g}", "gen-seed = -1"]
         else:
             lines += ["gen-vel = no"]
         if npt:
             ref_p = f"{pressure:g} {pressure:g}" if config["has_membrane"] else f"{pressure:g}"
-            lines += ["pcoupl = C-rescale", f"pcoupltype = {pressure_type}", f"tau-p = {tau_p:g}",
-                      f"ref-p = {ref_p}", f"compressibility = {compress}"]
+            lines += [
+                "pcoupl = C-rescale",
+                f"pcoupltype = {pressure_type}",
+                f"tau-p = {tau_p:g}",
+                f"ref-p = {ref_p}",
+                f"compressibility = {compress}",
+            ]
         else:
             lines += ["pcoupl = no"]
         lines += _common(config, dt)
@@ -170,25 +247,48 @@ def write_mdp_files(directory: Path, config: dict) -> list[tuple[str, str]]:
         stages.append((name, filename))
 
     if config["equilibration_1"]:
-        dynamics("equilibration_1", config["eq1_duration_ns"], config["eq1_timestep_fs"],
-                 config["eq1_temperature"], config["eq1_tau_t"], npt=False, gen_vel=True)
+        dynamics(
+            "equilibration_1",
+            config["eq1_duration_ns"],
+            config["eq1_timestep_fs"],
+            config["eq1_temperature"],
+            config["eq1_tau_t"],
+            npt=False,
+            gen_vel=True,
+        )
     if config["equilibration_2"]:
-        dynamics("equilibration_2", config["eq2_duration_ns"], config["eq2_timestep_fs"],
-                 config["eq2_temperature"], config["eq2_tau_t"], npt=True,
-                 pressure=config["eq2_pressure"], tau_p=config["eq2_tau_p"],
-                 gen_vel=not config["equilibration_1"])
-    dynamics("production", config["production_ns"], config["production_timestep_fs"],
-             config["production_temperature"], config["production_tau_t"], npt=True,
-             pressure=config["production_pressure"], tau_p=config["production_tau_p"],
-             gen_vel=not (config["equilibration_1"] or config["equilibration_2"]))
+        dynamics(
+            "equilibration_2",
+            config["eq2_duration_ns"],
+            config["eq2_timestep_fs"],
+            config["eq2_temperature"],
+            config["eq2_tau_t"],
+            npt=True,
+            pressure=config["eq2_pressure"],
+            tau_p=config["eq2_tau_p"],
+            gen_vel=not config["equilibration_1"],
+        )
+    dynamics(
+        "production",
+        config["production_ns"],
+        config["production_timestep_fs"],
+        config["production_temperature"],
+        config["production_tau_t"],
+        npt=True,
+        pressure=config["production_pressure"],
+        tau_p=config["production_tau_p"],
+        gen_vel=not (config["equilibration_1"] or config["equilibration_2"]),
+    )
     return stages
 
 
 def write_index(system, path: Path) -> None:
     groups: dict[str, list[int]] = {"System": list(range(1, system.num_atoms + 1))}
     names = {
-        ComponentKind.PROTEIN: "Protein", ComponentKind.MEMBRANE: "Membrane",
-        ComponentKind.SOLVENT: "Solvent", ComponentKind.IONS: "Ions",
+        ComponentKind.PROTEIN: "Protein",
+        ComponentKind.MEMBRANE: "Membrane",
+        ComponentKind.SOLVENT: "Solvent",
+        ComponentKind.IONS: "Ions",
     }
     for component in system.components:
         name = names.get(component.kind)
@@ -202,7 +302,7 @@ def write_index(system, path: Path) -> None:
                 continue
             handle.write(f"[ {name} ]\n")
             for start in range(0, len(indices), 15):
-                handle.write(" ".join(str(value) for value in indices[start:start + 15]) + "\n")
+                handle.write(" ".join(str(value) for value in indices[start : start + 15]) + "\n")
 
 
 def write_run_script(path: Path, stages: list[tuple[str, str]], config: dict) -> None:
@@ -212,21 +312,26 @@ def write_run_script(path: Path, stages: list[tuple[str, str]], config: dict) ->
         # requesting PME offload is both meaningless and rejected by GROMACS.
         gpu = f' -nb gpu -gpu_id "{config["gpu_ids"].replace(",", "")}"'
     lines = [
-        "#!/usr/bin/env bash", "set -euo pipefail", 'GMX="${GMX:-gmx}"',
-        f"NTMPI=${{NTMPI:-{config['mpi_ranks']}}}", f"NTOMP=${{NTOMP:-{config['threads'] // config['mpi_ranks']}}}",
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'GMX="${GMX:-gmx}"',
+        f"NTMPI=${{NTMPI:-{config['mpi_ranks']}}}",
+        f"NTOMP=${{NTOMP:-{config['threads'] // config['mpi_ranks']}}}",
         'command -v "$GMX" >/dev/null || { echo "GROMACS executable not found: $GMX" >&2; exit 127; }',
-        'coord="input.gro"', 'checkpoint=""',
+        'coord="input.gro"',
+        'checkpoint=""',
     ]
     for stage, filename in stages:
         lines += [
             f'echo "[GMXBUILDER] Preparing {stage}"',
             'if [[ -n "$checkpoint" ]]; then',
             f'  "$GMX" grompp -f "mdp/{filename}" -c "$coord" -t "$checkpoint" -p topol.top -n index.ndx -o "{stage}.tpr" -maxwarn 0',
-            'else',
+            "else",
             f'  "$GMX" grompp -f "mdp/{filename}" -c "$coord" -p topol.top -n index.ndx -o "{stage}.tpr" -maxwarn 0',
-            'fi',
+            "fi",
             f'"$GMX" mdrun -deffnm "{stage}" -ntmpi "$NTMPI" -ntomp "$NTOMP"{gpu}',
-            f'coord="{stage}.gro"', f'checkpoint="{stage}.cpt"',
+            f'coord="{stage}.gro"',
+            f'checkpoint="{stage}.cpt"',
         ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     path.chmod(0o755)

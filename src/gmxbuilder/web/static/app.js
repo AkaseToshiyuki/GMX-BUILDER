@@ -435,6 +435,7 @@ function configureTaskSpecificControls() {
     else systemName.value = 'membrane_system';
   }
   syncCoarseGrainedInputControls(false);
+  updateCgOrientationControlLabels();
   syncCgOrientationMode();
 }
 
@@ -456,13 +457,24 @@ function coarseGrainedIncludesProtein() {
   return document.getElementById('cg-include-protein')?.checked !== false;
 }
 
+let _cgOrientMode = 'ppm';
+let _cgOrientZOffset = 0.0;
+let _cgOrientTilt = 0.0;
+let _cgOrientPhi = 0.0;
+let _cgOrientedPdbContent = null;
+let _cgOrientPreviewRequestId = 0;
+let _cgOrientPreviewTimer = null;
+
 function syncCgOrientationMode() {
-  var method = document.getElementById('cg-orientation-method')?.value || 'ppm';
-  document.querySelectorAll('.cg-orientation-manual').forEach(function(field) {
-    field.classList.toggle('hidden', method !== 'manual');
-    var input = field.querySelector('input');
-    if (input) input.disabled = method !== 'manual';
+  document.querySelectorAll('.cg-orient-tab').forEach(function(tab) {
+    tab.classList.toggle('active', tab.dataset.method === _cgOrientMode);
   });
+  document.getElementById('cg-orient-auto-result')?.classList.toggle(
+    'hidden', _cgOrientMode !== 'ppm'
+  );
+  document.getElementById('cg-orient-manual')?.classList.toggle(
+    'hidden', _cgOrientMode !== 'manual'
+  );
 }
 
 function syncCoarseGrainedInputControls(invalidate) {
@@ -745,13 +757,13 @@ function collectCoarseGrainedSimulationParams() {
     eq2_temperature: Number(document.getElementById('cg-eq2-temperature')?.value || 310),
     eq2_tau_t: Number(document.getElementById('cg-eq2-tau-t')?.value || 1),
     eq2_pressure: Number(document.getElementById('cg-eq2-pressure')?.value || 1),
-    eq2_tau_p: Number(document.getElementById('cg-eq2-tau-p')?.value || 4),
+    eq2_tau_p: Number(document.getElementById('cg-eq2-tau-p')?.value || 5),
     production_ns: Number(document.getElementById('cg-production-ns')?.value || 1000),
     production_timestep_fs: Number(document.getElementById('cg-production-dt')?.value || 20),
     production_temperature: Number(document.getElementById('cg-production-temperature')?.value || 310),
     production_tau_t: Number(document.getElementById('cg-production-tau-t')?.value || 1),
     production_pressure: Number(document.getElementById('cg-production-pressure')?.value || 1),
-    production_tau_p: Number(document.getElementById('cg-production-tau-p')?.value || 4),
+    production_tau_p: Number(document.getElementById('cg-production-tau-p')?.value || 5),
     output_interval_ps: Number(document.getElementById('cg-output-ps')?.value || 100),
     energy_interval_ps: Number(document.getElementById('cg-energy-ps')?.value || 20),
     log_interval_ps: Number(document.getElementById('cg-log-ps')?.value || 20),
@@ -836,12 +848,19 @@ function restoreCoarseGrainedConfig(taskState) {
   value('cg-elastic-lower', mapping.elastic_lower);
   value('cg-elastic-upper', mapping.elastic_upper);
   var orientation = taskState.step_cg_orientation_config || {};
-  value('cg-orientation-method', orientation.method);
+  _cgOrientMode = orientation.method === 'manual' ? 'manual' : 'ppm';
   value('cg-orientation-half-thickness', orientation.half_thickness);
-  value('cg-orient-rotate-x', orientation.rotate_x);
-  value('cg-orient-rotate-y', orientation.rotate_y);
-  value('cg-orient-rotate-z', orientation.rotate_z);
-  value('cg-orient-z-offset', orientation.z_offset);
+  _cgOrientZOffset = Number(orientation.z_offset || 0);
+  _cgOrientTilt = Number(orientation.tilt || 0);
+  _cgOrientPhi = Number(orientation.phi || 0);
+  [
+    ['cg-orient-manual-z', _cgOrientZOffset],
+    ['cg-orient-manual-z-num', _cgOrientZOffset],
+    ['cg-orient-manual-tilt', _cgOrientTilt],
+    ['cg-orient-manual-tilt-num', _cgOrientTilt],
+    ['cg-orient-manual-phi', _cgOrientPhi],
+    ['cg-orient-manual-phi-num', _cgOrientPhi],
+  ].forEach(function(entry) { value(entry[0], entry[1]); });
   var environment = taskState.step_cg_environment_config || {};
   value('cg-n-lipids-per-leaflet', environment.n_lipids_per_leaflet);
   if (Array.isArray(environment.upper_leaflet) && environment.upper_leaflet.length) {
@@ -894,6 +913,7 @@ function restoreCoarseGrainedConfig(taskState) {
   value('cg-mpi-ranks', simulation.mpi_ranks);
   if (simulation.system_name) value('system-name', simulation.system_name);
   syncCoarseGrainedInputControls(false);
+  updateCgOrientationControlLabels();
   syncCgOrientationMode();
 }
 
@@ -953,15 +973,14 @@ function loadTaskDefaults() {
     if (cgSecondary) cgSecondary.value = cgMapping.secondary_structure || 'auto';
     if (cgElastic) cgElastic.checked = cgMapping.elastic !== false;
     var cgOrientation = defaults.cg_orientation || {};
-    setDefaultValue('cg-orientation-method', cgOrientation.method || 'ppm');
+    _cgOrientMode = cgOrientation.method === 'manual' ? 'manual' : 'ppm';
     setDefaultValue(
       'cg-orientation-half-thickness',
       cgOrientation.half_thickness == null ? 1.4 : cgOrientation.half_thickness
     );
-    setDefaultValue('cg-orient-rotate-x', cgOrientation.rotate_x == null ? 0 : cgOrientation.rotate_x);
-    setDefaultValue('cg-orient-rotate-y', cgOrientation.rotate_y == null ? 0 : cgOrientation.rotate_y);
-    setDefaultValue('cg-orient-rotate-z', cgOrientation.rotate_z == null ? 0 : cgOrientation.rotate_z);
-    setDefaultValue('cg-orient-z-offset', cgOrientation.z_offset == null ? 0 : cgOrientation.z_offset);
+    _cgOrientZOffset = Number(cgOrientation.z_offset || 0);
+    _cgOrientTilt = Number(cgOrientation.tilt || 0);
+    _cgOrientPhi = Number(cgOrientation.phi || 0);
     var cgEnvironmentDefaults = defaults.cg_environment || {};
     var cgCount = document.getElementById('cg-n-lipids-per-leaflet');
     if (cgCount) cgCount.value = cgEnvironmentDefaults.n_lipids_per_leaflet || 150;
@@ -1174,7 +1193,7 @@ async function _loadStepViewerPdb(stepName) {
   return null;
 }
 
-async function renderCoarseGrainedViewer(stepName) {
+async function renderCoarseGrainedViewer(stepName, pdbOverride, preserveCamera) {
   var targetMap = {
     cg_mapping: 'cg-mapping-viewer',
     cg_orientation: 'cg-orientation-viewer',
@@ -1205,7 +1224,7 @@ async function renderCoarseGrainedViewer(stepName) {
     delete window._cgViewers[targetId];
     cached = null;
   }
-  var pdb = await _loadStepViewerPdb(stepName);
+  var pdb = pdbOverride || await _loadStepViewerPdb(stepName);
   if (!pdb) {
     if (cached) {
       try { cached.viewer.clear(); } catch (e) {}
@@ -1235,8 +1254,13 @@ async function renderCoarseGrainedViewer(stepName) {
   }
   target.classList.remove('viewer-unavailable');
   viewer.removeAllModels();
+  if (viewer.removeAllShapes) viewer.removeAllShapes();
+  if (viewer.removeAllLabels) viewer.removeAllLabels();
   var model = viewer.addModel(pdb, 'pdb');
-  viewer.setStyle({}, {sphere: {radius: 0.16, colorscheme: 'Jmol'}});
+  viewer.setStyle({}, {
+    sphere: {radius: 0.16, colorscheme: 'Jmol'},
+    stick: {radius: 0.065, colorscheme: 'Jmol'}
+  });
   if (stepName === 'cg_mapping' || stepName === 'cg_orientation') {
     viewer.setStyle({}, {sphere: {radius: 0.14, colorscheme: 'Jmol'}, stick: {radius: 0.08, colorscheme: 'Jmol'}});
   }
@@ -1246,26 +1270,17 @@ async function renderCoarseGrainedViewer(stepName) {
   );
   viewer.setStyle({resn: 'W'}, {sphere: {radius: 0.045, color: '#60a5fa', opacity: 0.14}});
   viewer.setStyle({resn: ['NA', 'CL']}, {sphere: {radius: 0.24, colorscheme: 'Jmol'}});
-  if (stepName === 'cg_orientation' && viewer.addShape) {
+  if (stepName === 'cg_orientation') {
     var half = Number(document.getElementById('cg-orientation-half-thickness')?.value || 1.4);
-    var shape = viewer.addShape({});
-    if (shape && shape.addBox) {
-      [-half, half].forEach(function(z) {
-        shape.addBox({
-          corner: {x: -8, y: -8, z: z - 0.025},
-          dimensions: {w: 16, h: 16, d: 0.05},
-          color: '#94a3b8', opacity: 0.28,
-        });
-      });
-    }
+    addCgOrientationPlaneMarkers(viewer, pdb, half);
   }
   // The mapping checkpoint box is only an internal envelope estimate.  The
   // user-defined physical PBC cell begins at CG Environment.
-  if (stepName !== 'cg_mapping' && viewer.addUnitCell) {
+  if (stepName !== 'cg_mapping' && stepName !== 'cg_orientation' && viewer.addUnitCell) {
     viewer.addUnitCell(model, {boxColor: '#64748b'});
   }
   if (viewer.resize) viewer.resize();
-  viewer.zoomTo();
+  if (!preserveCamera) viewer.zoomTo();
   viewer.render();
   viewer.setSlab(-10000, 10000);
   requestAnimationFrame(function() {
@@ -1274,6 +1289,156 @@ async function renderCoarseGrainedViewer(stepName) {
     viewer.render();
   });
   return true;
+}
+
+function addCgOrientationPlaneMarkers(viewer, pdb, halfThicknessNm) {
+  // PDB/3Dmol coordinates are Angstrom, while the Martini workflow stores
+  // scientific distances in nm. Keep this conversion local and explicit.
+  var xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  (pdb || '').split('\n').forEach(function(line) {
+    if (line.indexOf('ATOM') !== 0 && line.indexOf('HETATM') !== 0) return;
+    var x = Number.parseFloat(line.substring(30, 38));
+    var y = Number.parseFloat(line.substring(38, 46));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    xMin = Math.min(xMin, x); xMax = Math.max(xMax, x);
+    yMin = Math.min(yMin, y); yMax = Math.max(yMax, y);
+  });
+  var halfSpanA = 30.0;
+  if (Number.isFinite(xMin) && Number.isFinite(yMin)) {
+    halfSpanA = Math.max(
+      halfSpanA,
+      Math.max(xMax - xMin, yMax - yMin) / 2.0 + 20.0
+    );
+  }
+  var interfaceA = Number(halfThicknessNm) * 10.0;
+  var spacingA = 15.0;
+  if (!Number.isFinite(interfaceA) || interfaceA <= 0 || !viewer.addSphere) return;
+  for (var xA = -halfSpanA; xA <= halfSpanA + 0.01; xA += spacingA) {
+    for (var yA = -halfSpanA; yA <= halfSpanA + 0.01; yA += spacingA) {
+      [-interfaceA, interfaceA].forEach(function(zA) {
+        viewer.addSphere({
+          center: {x: xA, y: yA, z: zA},
+          radius: 1.2, color: '#94a3b8', opacity: 0.55,
+        });
+      });
+    }
+  }
+}
+
+function cgOrientationConfig() {
+  var config = {
+    method: _cgOrientMode,
+    half_thickness: Number(
+      document.getElementById('cg-orientation-half-thickness')?.value || 1.4
+    ),
+  };
+  if (_cgOrientMode === 'manual') {
+    config.z_offset = _cgOrientZOffset;
+    config.tilt = _cgOrientTilt;
+    config.phi = _cgOrientPhi;
+  }
+  return config;
+}
+
+function updateCgOrientationControlLabels() {
+  var z = document.getElementById('cg-orient-manual-z-val');
+  var tilt = document.getElementById('cg-orient-manual-tilt-val');
+  var phi = document.getElementById('cg-orient-manual-phi-val');
+  if (z) z.textContent = Number(_cgOrientZOffset).toFixed(2);
+  if (tilt) tilt.textContent = Number(_cgOrientTilt).toFixed(0);
+  if (phi) phi.textContent = Number(_cgOrientPhi).toFixed(0);
+}
+
+async function requestCgOrientationPreview(config, preserveCamera) {
+  if (!state.taskId) return null;
+  var requestId = ++_cgOrientPreviewRequestId;
+  var response = await fetch('/api/cg-orient-preview/' + state.taskId, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({config: config}),
+  });
+  var data = await response.json();
+  if (requestId !== _cgOrientPreviewRequestId) return null;
+  if (!response.ok || data.status !== 'ok') {
+    throw new Error(data.error || 'Martini orientation preview failed');
+  }
+  _cgOrientedPdbContent = data.oriented_pdb || null;
+  if (!_cgOrientedPdbContent) throw new Error('Orientation preview returned no coordinates');
+  data.viewer_rendered = await renderCoarseGrainedViewer(
+    'cg_orientation', _cgOrientedPdbContent, preserveCamera === true
+  );
+  return data;
+}
+
+async function runCgAutomaticOrientationPreview() {
+  var status = document.getElementById('cg-orient-preview-status');
+  var zResult = document.getElementById('cg-orient-result-z');
+  var tiltResult = document.getElementById('cg-orient-result-tilt');
+  if (status) {
+    status.textContent = 'Computing exact Martini backend preview...';
+    status.style.color = '#d97706';
+  }
+  if (zResult) zResult.textContent = 'Computing...';
+  if (tiltResult) tiltResult.textContent = '—';
+  try {
+    var data = await requestCgOrientationPreview({
+      method: 'ppm',
+      half_thickness: Number(
+        document.getElementById('cg-orientation-half-thickness')?.value || 1.4
+      ),
+    }, false);
+    if (!data) return;
+    var metrics = data.orientation || {};
+    if (zResult) zResult.textContent = Number(metrics.z_offset_nm || 0).toFixed(2) + ' nm (PPM)';
+    if (tiltResult) tiltResult.textContent = Number(metrics.refinement_degrees || 0).toFixed(1) + '°';
+    if (status) {
+      status.textContent = data.viewer_rendered
+        ? 'Preview matches the coordinates Check will save'
+        : 'Exact coordinates are ready, but this browser cannot display the 3D preview';
+      status.style.color = data.viewer_rendered ? '#059669' : '#d97706';
+    }
+  } catch (error) {
+    if (zResult) zResult.textContent = 'Unavailable';
+    if (status) {
+      status.textContent = error.message || 'Preview failed';
+      status.style.color = '#dc2626';
+    }
+  }
+}
+
+async function runCgManualOrientationPreview() {
+  var status = document.getElementById('cg-orient-preview-status');
+  if (status) {
+    status.textContent = 'Updating exact preview...';
+    status.style.color = '#d97706';
+  }
+  try {
+    var data = await requestCgOrientationPreview(cgOrientationConfig(), true);
+    if (data && status) {
+      status.textContent = data.viewer_rendered
+        ? 'Live preview matches the coordinates Check will save'
+        : 'Exact coordinates updated, but this browser cannot display the 3D preview';
+      status.style.color = data.viewer_rendered ? '#059669' : '#d97706';
+    }
+  } catch (error) {
+    if (status) {
+      status.textContent = error.message || 'Preview failed';
+      status.style.color = '#dc2626';
+    }
+  }
+}
+
+function scheduleCgManualOrientationPreview(delayMs) {
+  if (_cgOrientPreviewTimer !== null) clearTimeout(_cgOrientPreviewTimer);
+  ++_cgOrientPreviewRequestId;
+  _cgOrientPreviewTimer = setTimeout(
+    runCgManualOrientationPreview, delayMs == null ? 120 : delayMs
+  );
+}
+
+function showCgOrientationPreview() {
+  if (_cgOrientMode === 'manual') scheduleCgManualOrientationPreview(0);
+  else runCgAutomaticOrientationPreview();
 }
 
 async function confirmCoarseGrainedSystem() {
@@ -1310,7 +1475,69 @@ async function confirmCoarseGrainedSystem() {
   }
 }
 
+function initCgOrientationControls() {
+  var controls = {
+    z: {
+      slider: document.getElementById('cg-orient-manual-z'),
+      number: document.getElementById('cg-orient-manual-z-num'),
+    },
+    tilt: {
+      slider: document.getElementById('cg-orient-manual-tilt'),
+      number: document.getElementById('cg-orient-manual-tilt-num'),
+    },
+    phi: {
+      slider: document.getElementById('cg-orient-manual-phi'),
+      number: document.getElementById('cg-orient-manual-phi-num'),
+    },
+  };
+
+  function syncPair(name, source, userChanged) {
+    var pair = controls[name];
+    if (!pair.slider || !pair.number) return;
+    if (source === 'slider') pair.number.value = pair.slider.value;
+    else pair.slider.value = pair.number.value;
+    var value = Number(source === 'slider' ? pair.slider.value : pair.number.value);
+    if (!Number.isFinite(value)) return;
+    if (name === 'z') _cgOrientZOffset = value;
+    else if (name === 'tilt') _cgOrientTilt = value;
+    else _cgOrientPhi = value;
+    updateCgOrientationControlLabels();
+    if (userChanged) {
+      invalidateCoarseGrainedFrom('cg_orientation');
+      scheduleCgManualOrientationPreview(120);
+    }
+  }
+
+  Object.keys(controls).forEach(function(name) {
+    var pair = controls[name];
+    if (pair.slider) pair.slider.addEventListener('input', function() {
+      syncPair(name, 'slider', true);
+    });
+    if (pair.number) pair.number.addEventListener('input', function() {
+      syncPair(name, 'number', true);
+    });
+  });
+
+  document.querySelectorAll('.cg-orient-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      var nextMode = tab.dataset.method === 'manual' ? 'manual' : 'ppm';
+      if (_cgOrientMode !== nextMode) {
+        _cgOrientMode = nextMode;
+        invalidateCoarseGrainedFrom('cg_orientation');
+      }
+      syncCgOrientationMode();
+      showCgOrientationPreview();
+    });
+  });
+  document.getElementById('cg-orient-rerun-btn')?.addEventListener(
+    'click', runCgAutomaticOrientationPreview
+  );
+  updateCgOrientationControlLabels();
+  syncCgOrientationMode();
+}
+
 function initCoarseGrainedControls() {
+  initCgOrientationControls();
   var includeProtein = document.getElementById('cg-include-protein');
   if (includeProtein) includeProtein.addEventListener('change', function() {
     syncCoarseGrainedInputControls(true);
@@ -1380,9 +1607,7 @@ function initCoarseGrainedControls() {
   var inputIds = [
     'cg-protein-model', 'cg-secondary', 'cg-secondary-string', 'cg-elastic',
     'cg-elastic-force', 'cg-elastic-lower', 'cg-elastic-upper',
-    'cg-n-lipids-per-leaflet', 'cg-orientation-method',
-    'cg-orientation-half-thickness', 'cg-orient-rotate-x', 'cg-orient-rotate-y',
-    'cg-orient-rotate-z', 'cg-orient-z-offset',
+    'cg-n-lipids-per-leaflet',
     'cg-include-solvent', 'cg-padding', 'cg-salt'
   ];
   inputIds.forEach(function(id) {
@@ -1396,7 +1621,6 @@ function initCoarseGrainedControls() {
         id === 'cg-include-solvent' || id === 'cg-padding' ? 'cg_solvation' :
         'cg_environment';
       invalidateCoarseGrainedFrom(step);
-      if (id === 'cg-orientation-method') syncCgOrientationMode();
       if (id === 'cg-include-solvent') {
         var padding = document.getElementById('cg-padding');
         var salt = document.getElementById('cg-salt');
@@ -1509,7 +1733,9 @@ function goToWizardStep(idx) {
     setTimeout(function() { window._renderIonViewer(); }, 400);
   }
 
-  if (modName && modName.indexOf('cg_') === 0 && modName !== 'cg_model') {
+  if (modName === 'cg_orientation') {
+    setTimeout(showCgOrientationPreview, 250);
+  } else if (modName && modName.indexOf('cg_') === 0 && modName !== 'cg_model') {
     setTimeout(function() { renderCoarseGrainedViewer(modName); }, 250);
   }
 
@@ -3555,7 +3781,20 @@ async function _doCheckStep(stepName, statusElId, btnId) {
         if (stepName === 'cg_mapping' && statusEl) {
           statusEl.textContent += ' — downstream box dimensions are derived automatically from this mapped extent';
         }
-        var cgViewerRendered = await renderCoarseGrainedViewer(stepName);
+        var cgViewerRendered;
+        if (stepName === 'cg_orientation') {
+          _cgOrientedPdbContent = await _loadStepViewerPdb('cg_orientation');
+          cgViewerRendered = await renderCoarseGrainedViewer(
+            stepName, _cgOrientedPdbContent, false
+          );
+          var cgPreviewStatus = document.getElementById('cg-orient-preview-status');
+          if (cgPreviewStatus) {
+            cgPreviewStatus.textContent = 'Showing saved Step 4 coordinates';
+            cgPreviewStatus.style.color = '#059669';
+          }
+        } else {
+          cgViewerRendered = await renderCoarseGrainedViewer(stepName);
+        }
         if (cgConfirmation) {
           cgConfirmation.disabled = cgViewerRendered !== true;
           if (!cgViewerRendered && statusEl) {
@@ -5297,7 +5536,7 @@ var _DEFAULT_EM = Object.assign({}, _DEFAULT_EM_BASE);
 var _DEFAULT_OUTPUT = {
   nstxout_compressed: 5000, nstxout: 0, nstvout: 0, nstfout: 0,
   nstcalcenergy: 100, nstenergy: 1000, nstlog: 1000,
-  enabled: true, nstlist: 20, comm_mode: "linear", comm_grps: "System",
+  enabled: true, nstlist: 20, comm_mode: "linear", comm_grps: "SOLU_MEMB SOLV",
   constraints: "h-bonds", temperature: 310.15,
   mdp_overrides_text: ""
 };
@@ -5310,7 +5549,7 @@ var _MEMBRANE_SCHEDULE = [
   { bb:50,   sc:0,    lipid:0,    dih:0,    dt:2.0, nsteps:250000, ensemble:"npt",  tcoupl:"v-rescale", tau_t:"1.0", tau_p:"5.0", ref_p:"1.0", compress:"4.5e-5", nstcomm:100, pcoupl:"C-rescale", comm_grps:"SOLU_MEMB SOLV" },
 ];
 var _SOLUTION_SCHEDULE = [
-  { bb:400, sc:40, lipid:0, dih:0, dt:1.0, nsteps:125000, ensemble:"nvt",
+  { bb:400, sc:40, lipid:0, dih:0, dt:1.0, nsteps:250000, ensemble:"nvt",
     tcoupl:"v-rescale", tau_t:"1.0", nstcomm:100, comm_grps:"SOLU SOLV" },
 ];
 
@@ -5686,12 +5925,12 @@ function stageEnabledControl(id, enabled) {
 }
 
 function commGroupOptions() {
-  var options = [["System", "System — all atoms (recommended)"]];
+  var options = [["System", "System — all atoms"]];
   var modules = (state.taskType && state.taskType.visible_modules) || [];
   if (modules.indexOf("membrane") >= 0) {
     options.push(["SOLU_MEMB SOLV", "SOLU_MEMB + SOLV"]);
     options.push(["SOLU MEMB SOLV", "SOLU + MEMB + SOLV"]);
-  } else if (!state.taskType || state.taskType.pipeline !== "liquid") {
+  } else {
     options.push(["SOLU SOLV", "SOLU + SOLV"]);
   }
   return options;
@@ -7419,16 +7658,14 @@ function buildModuleConfig(focusStep) {
       };
     }
     if (wants('cg_orientation') && environment === 'bilayer') {
-      var cgOrientationMethod = document.getElementById('cg-orientation-method')?.value || 'ppm';
       config.cg_orientation = {
-        method: cgOrientationMethod,
+        method: _cgOrientMode,
         half_thickness: Number(document.getElementById('cg-orientation-half-thickness')?.value || 1.4),
       };
-      if (cgOrientationMethod === 'manual') {
-        config.cg_orientation.rotate_x = Number(document.getElementById('cg-orient-rotate-x')?.value || 0);
-        config.cg_orientation.rotate_y = Number(document.getElementById('cg-orient-rotate-y')?.value || 0);
-        config.cg_orientation.rotate_z = Number(document.getElementById('cg-orient-rotate-z')?.value || 0);
-        config.cg_orientation.z_offset = Number(document.getElementById('cg-orient-z-offset')?.value || 0);
+      if (_cgOrientMode === 'manual') {
+        config.cg_orientation.z_offset = _cgOrientZOffset;
+        config.cg_orientation.tilt = _cgOrientTilt;
+        config.cg_orientation.phi = _cgOrientPhi;
       }
     }
     if (wants('cg_environment')) {

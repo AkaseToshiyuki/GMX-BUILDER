@@ -108,8 +108,7 @@ def _run_smiles_acpype(
             return result, attempt_work
         detail = result.stdout + "\n" + result.stderr
         coordinate_failure = (
-            "Atoms TOO close" in detail
-            or "Coordinates issues with your system" in detail
+            "Atoms TOO close" in detail or "Coordinates issues with your system" in detail
         )
         if not coordinate_failure:
             break
@@ -170,19 +169,22 @@ def _gaff_tool_environment() -> dict[str, str]:
 
 def gaff_available() -> bool:
     env_path = gaff_environment_path()
-    return all((env_path / "bin" / executable).is_file() for executable in (
-        "acpype", "antechamber", "parmchk2", "tleap", "obabel"
-    ))
+    return all(
+        (env_path / "bin" / executable).is_file()
+        for executable in ("acpype", "antechamber", "parmchk2", "tleap", "obabel")
+    )
 
 
 def _mol2_integer_charge(path: Path, name: str) -> int:
     """Return the integer charge encoded by one Open Babel MOL2 file."""
     lines = path.read_text(errors="replace").splitlines()
     try:
-        start = next(
-            index for index, line in enumerate(lines)
-            if line.strip().upper() == "@<TRIPOS>ATOM"
-        ) + 1
+        start = (
+            next(
+                index for index, line in enumerate(lines) if line.strip().upper() == "@<TRIPOS>ATOM"
+            )
+            + 1
+        )
     except StopIteration as exc:
         raise RuntimeError(f"Charge estimation produced an invalid MOL2 for {name}") from exc
     charges = []
@@ -200,14 +202,14 @@ def _mol2_integer_charge(path: Path, name: str) -> int:
     charge_sum = float(sum(charges))
     net_charge = int(round(charge_sum))
     if abs(charge_sum - net_charge) > 0.05:
-        raise RuntimeError(
-            f"Charge estimate for {name} sums to {charge_sum:+.3f}, not an integer"
-        )
+        raise RuntimeError(f"Charge estimate for {name} sums to {charge_sum:+.3f}, not an integer")
     return net_charge
 
 
 def _restore_mol2_heavy_atom_names(
-    path: Path, input_names: tuple[str, ...], input_elements: tuple[str, ...],
+    path: Path,
+    input_names: tuple[str, ...],
+    input_elements: tuple[str, ...],
 ) -> None:
     """Restore PDB heavy-atom names after Open Babel pH protonation."""
     lines = path.read_text(errors="replace").splitlines()
@@ -271,9 +273,7 @@ def estimate_gaff_net_charge(
     charges are accepted only when they sum closely to one integer.
     """
     if not gaff_available():
-        raise RuntimeError(
-            f"GAFF2 environment is unavailable at {gaff_environment_path()}"
-        )
+        raise RuntimeError(f"GAFF2 environment is unavailable at {gaff_environment_path()}")
     target_pH = float(pH)
     if not 1.0 <= target_pH <= 13.0:
         raise ValueError("Ligand charge estimation pH must be between 1.0 and 13.0")
@@ -303,8 +303,13 @@ def estimate_gaff_net_charge(
         result = _run_external(
             [
                 str(gaff_environment_path() / "bin" / "obabel"),
-                "-ipdb", str(pdb_path), "-omol2", "-O", str(mol2_path),
-                "-p", f"{target_pH:.3f}",
+                "-ipdb",
+                str(pdb_path),
+                "-omol2",
+                "-O",
+                str(mol2_path),
+                "-p",
+                f"{target_pH:.3f}",
             ],
             cwd=work,
             env=_gaff_tool_environment(),
@@ -316,10 +321,14 @@ def estimate_gaff_net_charge(
 
         lines = mol2_path.read_text(errors="replace").splitlines()
         try:
-            start = next(
-                index for index, line in enumerate(lines)
-                if line.strip().upper() == "@<TRIPOS>ATOM"
-            ) + 1
+            start = (
+                next(
+                    index
+                    for index, line in enumerate(lines)
+                    if line.strip().upper() == "@<TRIPOS>ATOM"
+                )
+                + 1
+            )
         except StopIteration as exc:
             raise RuntimeError(f"Charge estimation produced an invalid MOL2 for {name}") from exc
         charges = []
@@ -340,7 +349,7 @@ def estimate_gaff_net_charge(
             raise RuntimeError(f"Charge estimation produced no finite charges for {name}")
         net_charge = _mol2_integer_charge(mol2_path, name)
         counts = Counter(elements)
-        ordered_elements = (["C"] if counts.get("C") else [])
+        ordered_elements = ["C"] if counts.get("C") else []
         if counts.get("H"):
             ordered_elements.append("H")
         ordered_elements.extend(sorted(set(counts) - set(ordered_elements)))
@@ -376,21 +385,26 @@ def _cache_root(molecule_name: str | None = None) -> Path:
     from gmxbuilder.runtime.prebuilt_assets import ensure_prebuilt_assets
 
     ensure_prebuilt_assets()
-    return Path(os.environ.get(
-        "GMXBUILDER_GAFF_CACHE",
-        Path.home() / ".cache" / "gmxbuilder" / "gaff2",
-    ))
+    return Path(
+        os.environ.get(
+            "GMXBUILDER_GAFF_CACHE",
+            Path.home() / ".cache" / "gmxbuilder" / "gaff2",
+        )
+    )
 
 
 @contextmanager
 def task_gaff_cache(
-    root: str | Path, isolated_names: set[str] | frozenset[str],
+    root: str | Path,
+    isolated_names: set[str] | frozenset[str],
 ) -> Iterator[None]:
     """Route GAFF artifacts to one task-owned cache for this execution."""
-    token = _task_cache_root.set((
-        Path(root).expanduser().resolve(),
-        frozenset(str(name).upper() for name in isolated_names),
-    ))
+    token = _task_cache_root.set(
+        (
+            Path(root).expanduser().resolve(),
+            frozenset(str(name).upper() for name in isolated_names),
+        )
+    )
     try:
         yield
     finally:
@@ -476,9 +490,7 @@ def _load_cached(directory: Path) -> GAFFTemplate | None:
     itp_path = directory / "lipid.itp"
     atomtypes_path = directory / "atomtypes.itp"
     gro_path = directory / "lipid.gro"
-    if not all(path.is_file() for path in (
-        metadata_path, itp_path, atomtypes_path, gro_path
-    )):
+    if not all(path.is_file() for path in (metadata_path, itp_path, atomtypes_path, gro_path)):
         return None
     try:
         metadata = json.loads(metadata_path.read_text())
@@ -497,8 +509,11 @@ def _load_cached(directory: Path) -> GAFFTemplate | None:
     ):
         return None
     return GAFFTemplate(
-        name=metadata["name"], atom_names=atom_names, coordinates=coordinates,
-        itp_path=itp_path, atomtypes_path=atomtypes_path,
+        name=metadata["name"],
+        atom_names=atom_names,
+        coordinates=coordinates,
+        itp_path=itp_path,
+        atomtypes_path=atomtypes_path,
         charge_method=metadata["charge_method"],
     )
 
@@ -513,9 +528,7 @@ def prepare_gaff_lipid(
 ) -> GAFFTemplate:
     """Return a persistent, atom-order-consistent GAFF2 template."""
     if not gaff_available():
-        raise RuntimeError(
-            f"GAFF2 environment is unavailable at {gaff_environment_path()}"
-        )
+        raise RuntimeError(f"GAFF2 environment is unavailable at {gaff_environment_path()}")
     molecule_name = _safe_name(name)
     charge_method = (
         charge_method or os.environ.get("GMXBUILDER_GAFF_CHARGE_METHOD", "bcc")
@@ -541,11 +554,23 @@ def prepare_gaff_lipid(
             result, generated_work = _run_smiles_acpype(
                 [
                     str(gaff_environment_path() / "bin" / "acpype"),
-                    "-i", smiles, "-b", molecule_name,
-                    "-c", charge_method, "-n", str(int(net_charge)),
-                    "-a", "gaff2", "-o", "gmx", "-w",
+                    "-i",
+                    smiles,
+                    "-b",
+                    molecule_name,
+                    "-c",
+                    charge_method,
+                    "-n",
+                    str(int(net_charge)),
+                    "-a",
+                    "gaff2",
+                    "-o",
+                    "gmx",
+                    "-w",
                 ],
-                work=work, env=env, timeout=timeout,
+                work=work,
+                env=env,
+                timeout=timeout,
             )
             if result.returncode != 0:
                 detail = (result.stdout + "\n" + result.stderr)[-4000:]
@@ -556,20 +581,27 @@ def prepare_gaff_lipid(
             if not (source_itp.is_file() and source_gro.is_file()):
                 raise RuntimeError(f"ACPYPE did not produce GROMACS files for {name}")
             _normalize_itp(
-                source_itp, staging / "lipid.itp",
-                staging / "atomtypes.itp", molecule_name,
+                source_itp,
+                staging / "lipid.itp",
+                staging / "atomtypes.itp",
+                molecule_name,
             )
             shutil.copy2(source_gro, staging / "lipid.gro")
             coordinates, atom_names = _read_gro(staging / "lipid.gro")
-            (staging / "metadata.json").write_text(json.dumps({
-                "schema_version": 1,
-                "name": molecule_name,
-                "smiles": smiles,
-                "net_charge": int(net_charge),
-                "charge_method": charge_method,
-                "atom_names": list(atom_names),
-                "num_atoms": len(atom_names),
-            }, indent=2))
+            (staging / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": molecule_name,
+                        "smiles": smiles,
+                        "net_charge": int(net_charge),
+                        "charge_method": charge_method,
+                        "atom_names": list(atom_names),
+                        "num_atoms": len(atom_names),
+                    },
+                    indent=2,
+                )
+            )
             if directory.exists():
                 shutil.rmtree(directory)
             staging.rename(directory)
@@ -597,9 +629,7 @@ def prepare_gaff_molecule(
     without changing the user-supplied heavy-atom coordinates.
     """
     if not gaff_available():
-        raise RuntimeError(
-            f"GAFF2 environment is unavailable at {gaff_environment_path()}"
-        )
+        raise RuntimeError(f"GAFF2 environment is unavailable at {gaff_environment_path()}")
     indices = [int(index) for index in atom_indices]
     if not indices:
         raise ValueError(f"No atoms supplied for molecule {name}")
@@ -616,22 +646,27 @@ def prepare_gaff_molecule(
     input_elements = tuple(str(structure.elements[index]).strip() for index in indices)
     if len(set(input_names)) != len(input_names):
         raise ValueError(f"Molecule {name} has duplicate atom names")
-    signature = json.dumps({
-        "names": input_names,
-        "elements": [str(structure.elements[index]).strip() for index in indices],
-        "distances": np.round(
-            np.linalg.norm(
-                structure.coordinates[indices][:, None, :] -
-                structure.coordinates[indices][None, :, :], axis=2
-            ), 3,
-        ).tolist(),
-        "protonation_pH": round(target_pH, 3),
-    }, sort_keys=True)
+    signature = json.dumps(
+        {
+            "names": input_names,
+            "elements": [str(structure.elements[index]).strip() for index in indices],
+            "distances": np.round(
+                np.linalg.norm(
+                    structure.coordinates[indices][:, None, :]
+                    - structure.coordinates[indices][None, :, :],
+                    axis=2,
+                ),
+                3,
+            ).tolist(),
+            "protonation_pH": round(target_pH, 3),
+        },
+        sort_keys=True,
+    )
     key = _cache_key(molecule_name, signature, int(net_charge), charge_method)
     directory = _cache_root(molecule_name) / f"MOL_{molecule_name}-{key}"
     cached = _load_cached(directory)
     if cached is not None:
-        if cached.atom_names[:len(input_names)] != input_names:
+        if cached.atom_names[: len(input_names)] != input_names:
             raise RuntimeError(f"Cached GAFF2 atom order mismatch for {name}")
         return cached
 
@@ -661,9 +696,18 @@ def prepare_gaff_molecule(
             PDBWriter.write(ligand_structure, pdb_path, title=f"GAFF2 input {molecule_name}")
             env = _gaff_tool_environment()
             obabel = _run_external(
-                [str(gaff_environment_path() / "bin" / "obabel"),
-                 "-ipdb", str(pdb_path), "-omol2", "-O", str(mol2_path), "-h"],
-                cwd=work, env=env, timeout=300,
+                [
+                    str(gaff_environment_path() / "bin" / "obabel"),
+                    "-ipdb",
+                    str(pdb_path),
+                    "-omol2",
+                    "-O",
+                    str(mol2_path),
+                    "-h",
+                ],
+                cwd=work,
+                env=env,
+                timeout=300,
             )
             if obabel.returncode != 0 or not mol2_path.is_file():
                 detail = (obabel.stdout + "\n" + obabel.stderr)[-4000:]
@@ -672,10 +716,19 @@ def prepare_gaff_molecule(
             if explicit_charge != int(net_charge):
                 protonated_path = work / "molecule_ph.mol2"
                 protonated = _run_external(
-                    [str(gaff_environment_path() / "bin" / "obabel"),
-                     "-ipdb", str(pdb_path), "-omol2", "-O", str(protonated_path),
-                     "-p", f"{target_pH:.3f}"],
-                    cwd=work, env=env, timeout=300,
+                    [
+                        str(gaff_environment_path() / "bin" / "obabel"),
+                        "-ipdb",
+                        str(pdb_path),
+                        "-omol2",
+                        "-O",
+                        str(protonated_path),
+                        "-p",
+                        f"{target_pH:.3f}",
+                    ],
+                    cwd=work,
+                    env=env,
+                    timeout=300,
                 )
                 if protonated.returncode != 0 or not protonated_path.is_file():
                     detail = (protonated.stdout + "\n" + protonated.stderr)[-4000:]
@@ -690,15 +743,31 @@ def prepare_gaff_molecule(
                         "protonation state."
                     )
                 _restore_mol2_heavy_atom_names(
-                    protonated_path, input_names, input_elements,
+                    protonated_path,
+                    input_names,
+                    input_elements,
                 )
                 mol2_path = protonated_path
             result = _run_external(
-                [str(gaff_environment_path() / "bin" / "acpype"),
-                 "-i", str(mol2_path), "-b", molecule_name,
-                 "-c", charge_method, "-n", str(int(net_charge)),
-                 "-a", "gaff2", "-o", "gmx", "-w"],
-                cwd=work, env=env, timeout=timeout,
+                [
+                    str(gaff_environment_path() / "bin" / "acpype"),
+                    "-i",
+                    str(mol2_path),
+                    "-b",
+                    molecule_name,
+                    "-c",
+                    charge_method,
+                    "-n",
+                    str(int(net_charge)),
+                    "-a",
+                    "gaff2",
+                    "-o",
+                    "gmx",
+                    "-w",
+                ],
+                cwd=work,
+                env=env,
+                timeout=timeout,
             )
             if result.returncode != 0:
                 detail = _acpype_failure_detail(work, result)
@@ -709,25 +778,32 @@ def prepare_gaff_molecule(
             if not (source_itp.is_file() and source_gro.is_file()):
                 raise RuntimeError(f"ACPYPE did not produce GROMACS files for {name}")
             _normalize_itp(
-                source_itp, staging / "lipid.itp",
-                staging / "atomtypes.itp", molecule_name,
+                source_itp,
+                staging / "lipid.itp",
+                staging / "atomtypes.itp",
+                molecule_name,
             )
             shutil.copy2(source_gro, staging / "lipid.gro")
             coordinates, atom_names = _read_gro(staging / "lipid.gro")
-            if atom_names[:len(input_names)] != input_names:
+            if atom_names[: len(input_names)] != input_names:
                 raise RuntimeError(
                     f"GAFF2 changed heavy-atom order for {name}: "
-                    f"expected {input_names}, got {atom_names[:len(input_names)]}"
+                    f"expected {input_names}, got {atom_names[: len(input_names)]}"
                 )
-            (staging / "metadata.json").write_text(json.dumps({
-                "schema_version": 1,
-                "name": molecule_name,
-                "identity_signature": signature,
-                "net_charge": int(net_charge),
-                "charge_method": charge_method,
-                "atom_names": list(atom_names),
-                "num_atoms": len(atom_names),
-            }, indent=2))
+            (staging / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": molecule_name,
+                        "identity_signature": signature,
+                        "net_charge": int(net_charge),
+                        "charge_method": charge_method,
+                        "atom_names": list(atom_names),
+                        "num_atoms": len(atom_names),
+                    },
+                    indent=2,
+                )
+            )
             if directory.exists():
                 shutil.rmtree(directory)
             staging.rename(directory)

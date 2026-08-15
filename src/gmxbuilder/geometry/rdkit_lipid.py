@@ -81,7 +81,8 @@ def _seed_explicit_stereochemistry(molecule, smiles: str, seed: int) -> bool:
         return result
 
     match = connectivity_graph(molecule).GetSubstructMatch(
-        connectivity_graph(reference), useChirality=False,
+        connectivity_graph(reference),
+        useChirality=False,
     )
     if len(match) != reference.GetNumAtoms() or len(set(match)) != len(match):
         return False
@@ -110,9 +111,7 @@ def _seed_explicit_stereochemistry(molecule, smiles: str, seed: int) -> bool:
     return True
 
 
-def _sample_lipid_tail_torsions(
-    mol, conformer, names: list[str], rtp: dict, seed: int
-) -> None:
+def _sample_lipid_tail_torsions(mol, conformer, names: list[str], rtp: dict, seed: int) -> None:
     """Generate reproducible membrane-like trans/gauche acyl-tail torsions.
 
     An all-trans hydrocarbon chain is a high-length crystal-like starting
@@ -128,7 +127,8 @@ def _sample_lipid_tail_torsions(
     chains = []
     for prefix in ("C2", "C3"):
         chain = [
-            (int(name[2:]), name) for name in names
+            (int(name[2:]), name)
+            for name in names
             if name.startswith(prefix) and name[2:].isdigit()
         ]
         if chain:
@@ -149,11 +149,13 @@ def _sample_lipid_tail_torsions(
         chain_names = [name for _suffix, name in sorted(chain)]
         rotatable_starts = []
         for start in range(len(chain_names) - 3):
-            atoms = [index[name] for name in chain_names[start:start + 4]]
-            if not all(mol.GetBondBetweenAtoms(left, right) is not None
-                       for left, right in zip(atoms, atoms[1:])):
+            atoms = [index[name] for name in chain_names[start : start + 4]]
+            if not all(
+                mol.GetBondBetweenAtoms(left, right) is not None
+                for left, right in zip(atoms, atoms[1:])
+            ):
                 continue
-            central = chain_names[start + 1:start + 3]
+            central = chain_names[start + 1 : start + 3]
             central_types = [atom_types.get(name, "") for name in central]
             if central_types == ["CEL1", "CEL1"]:
                 # Natural phospholipid double bonds are cis in the bundled
@@ -165,9 +167,7 @@ def _sample_lipid_tail_torsions(
                 angle = 180.0
             else:
                 rotatable_starts.append(start)
-                angle = float(rng.choice(
-                    [180.0, 60.0, -60.0], p=[0.72, 0.14, 0.14]
-                ))
+                angle = float(rng.choice([180.0, 60.0, -60.0], p=[0.72, 0.14, 0.14]))
             rdMolTransforms.SetDihedralDeg(conformer, *atoms, angle)
 
         # Every long saturated segment needs at least one thermal gauche
@@ -175,9 +175,7 @@ def _sample_lipid_tail_torsions(
         # chain.  Use separated defects to avoid hairpin/self-clash geometry.
         if len(rotatable_starts) >= 4:
             forced = rotatable_starts[len(rotatable_starts) // 2]
-            atoms = [
-                index[name] for name in chain_names[forced:forced + 4]
-            ]
+            atoms = [index[name] for name in chain_names[forced : forced + 4]]
             current = rdMolTransforms.GetDihedralDeg(conformer, *atoms)
             if abs(abs(current) - 180.0) < 20.0:
                 rdMolTransforms.SetDihedralDeg(
@@ -191,7 +189,8 @@ def _orient_for_membrane(coords: np.ndarray, names: list[str]) -> np.ndarray:
     tail_names = []
     for prefix in ("C2", "C3"):
         candidates = [
-            (int(name[2:]), name) for name in names
+            (int(name[2:]), name)
+            for name in names
             if name.startswith(prefix) and name[2:].isdigit()
         ]
         if candidates:
@@ -223,9 +222,7 @@ def _orient_for_membrane(coords: np.ndarray, names: list[str]) -> np.ndarray:
     return oriented - oriented.mean(axis=0)
 
 
-def _align_tail_subtrees(
-    coords: np.ndarray, names: list[str], rtp: dict
-) -> np.ndarray:
+def _align_tail_subtrees(coords: np.ndarray, names: list[str], rtp: dict) -> np.ndarray:
     """Rigidly point both complete acyl-tail subtrees down the membrane Z axis."""
     name_index = {name: index for index, name in enumerate(names)}
     adjacency = {name: set() for name in names}
@@ -240,11 +237,7 @@ def _align_tail_subtrees(
         ("C1F", "C2F", r"C(\d+)F", 0.12, 0.10),
         ("C3S", "C4S", r"C(\d+)S", -0.12, -0.10),
     ):
-        if (
-            root not in name_index
-            or first not in name_index
-            or first not in adjacency[root]
-        ):
+        if root not in name_index or first not in name_index or first not in adjacency[root]:
             continue
         terminal_candidates = []
         for name in names:
@@ -276,9 +269,7 @@ def _align_tail_subtrees(
         rotation, _ = Rotation.align_vectors([target], [axis])
         indices = [name_index[name] for name in subtree]
         base_values = rotation.apply(coords[indices] - origin)
-        fixed_indices = [
-            index for index in range(len(coords)) if index not in indices
-        ]
+        fixed_indices = [index for index in range(len(coords)) if index not in indices]
         fixed_values = coords[fixed_indices]
         best_values = base_values
         best_clearance = -np.inf
@@ -334,11 +325,13 @@ def _align_gaff_tail_subtrees(
         for atom in molecule.GetAtoms()
     }
     polar = [
-        atom.GetIdx() for atom in molecule.GetAtoms()
+        atom.GetIdx()
+        for atom in molecule.GetAtoms()
         if atom.GetSymbol().upper() in {"N", "O", "P", "S"}
     ]
     terminals = [
-        atom.GetIdx() for atom in molecule.GetAtoms()
+        atom.GetIdx()
+        for atom in molecule.GetAtoms()
         if atom.GetSymbol() == "C" and atom.GetDegree() == 1
     ]
     candidates: dict[frozenset[int], tuple[tuple[int, ...], int, int]] = {}
@@ -363,9 +356,7 @@ def _align_gaff_tail_subtrees(
                 stack.append(neighbor)
         if root in component or terminal not in component:
             continue
-        carbon_count = sum(
-            molecule.GetAtomWithIdx(index).GetSymbol() == "C" for index in component
-        )
+        carbon_count = sum(molecule.GetAtomWithIdx(index).GetSymbol() == "C" for index in component)
         if carbon_count < 6 or any(index in polar for index in component):
             continue
         key = frozenset(component)
@@ -412,7 +403,7 @@ def _align_gaff_tail_subtrees(
         # Remove folded cis-like single-bond torsions along the hydrocarbon
         # path.  Double bonds and rings keep their force-field geometry.
         for path_index in range(1, len(path) - 2):
-            atoms = tuple(path[path_index - 1:path_index + 3])
+            atoms = tuple(path[path_index - 1 : path_index + 3])
             left, right = atoms[1], atoms[2]
             bond = molecule.GetBondBetweenAtoms(left, right)
             if bond is None or bond.GetBondType() != Chem.BondType.SINGLE or bond.IsInRing():
@@ -489,11 +480,11 @@ def _build_cached(
         from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
 
         template = prepare_gaff_lipid(lipid_name, smiles, net_charge)
-        coords = _orient_for_membrane(
-            template.coordinates.copy(), list(template.atom_names)
-        )
+        coords = _orient_for_membrane(template.coordinates.copy(), list(template.atom_names))
         aligned = _align_gaff_tail_subtrees(
-            coords.copy(), list(template.atom_names), smiles,
+            coords.copy(),
+            list(template.atom_names),
+            smiles,
         )
         # Tail rotations are an optional bootstrap improvement, not a reason
         # to corrupt a valid GAFF2 conformer.  Some branched headgroups (DPPS
@@ -531,9 +522,10 @@ def _build_cached(
             )
     conformer = mol.GetConformer()
     _sample_lipid_tail_torsions(mol, conformer, names, rtp, seed)
-    coords = np.asarray([
-        list(conformer.GetAtomPosition(index)) for index in range(mol.GetNumAtoms())
-    ]) / 10.0
+    coords = (
+        np.asarray([list(conformer.GetAtomPosition(index)) for index in range(mol.GetNumAtoms())])
+        / 10.0
+    )
 
     coords = _orient_for_membrane(np.asarray(coords), list(names))
     prealigned = coords.copy()
@@ -585,11 +577,11 @@ def build_rdkit_lipid_geometry(
         from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
 
         template = prepare_gaff_lipid(lipid_name, smiles, int(net_charge))
-        coords = _orient_for_membrane(
-            template.coordinates.copy(), list(template.atom_names)
-        )
+        coords = _orient_for_membrane(template.coordinates.copy(), list(template.atom_names))
         aligned = _align_gaff_tail_subtrees(
-            coords.copy(), list(template.atom_names), smiles,
+            coords.copy(),
+            list(template.atom_names),
+            smiles,
         )
         if not _has_intramolecular_overlap(aligned):
             coords = aligned

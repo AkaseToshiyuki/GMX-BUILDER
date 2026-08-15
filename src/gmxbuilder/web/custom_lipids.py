@@ -50,7 +50,10 @@ class TaskLipidLibrary(EquilibratedLipidLibrary):
         self.isolated_names = {name.upper() for name in isolated_names}
 
     def _candidate_dirs(
-        self, lipid_name: str, force_field: str, lipid_ff: str | None = None,
+        self,
+        lipid_name: str,
+        force_field: str,
+        lipid_ff: str | None = None,
     ) -> list[Path]:
         candidates = super()._candidate_dirs(lipid_name, force_field, lipid_ff)
         if str(lipid_name).strip().upper() in self.isolated_names:
@@ -101,14 +104,16 @@ class CustomLipidStore:
             raise ValueError(f"Custom lipid name {name} is already used in this task")
 
         definition = dict(properties)
-        definition.update({
-            "name": name,
-            "force_field": str(force_field).lower(),
-            "lipid_ff": "gaff2",
-            "parameterizations": ["gaff2"],
-            "task_scoped": True,
-            "submitted_at": _now(),
-        })
+        definition.update(
+            {
+                "name": name,
+                "force_field": str(force_field).lower(),
+                "lipid_ff": "gaff2",
+                "parameterizations": ["gaff2"],
+                "task_scoped": True,
+                "submitted_at": _now(),
+            }
+        )
         _atomic_json(self.definition_path(name), definition)
         status = {
             "name": name,
@@ -170,8 +175,7 @@ class CustomLipidStore:
             raise KeyError(f"Unknown custom lipid: {normalized}")
         status = self.load_status(normalized)
         safe_definition = {
-            key: value for key, value in definition.items()
-            if key not in {"submitted_at"}
+            key: value for key, value in definition.items() if key not in {"submitted_at"}
         }
         return {**safe_definition, **status, "task_scoped": True}
 
@@ -197,7 +201,9 @@ class CustomLipidStore:
 
 @contextmanager
 def task_custom_lipid_scope(
-    task_dir: str | Path, *, include_unready: set[str] | None = None,
+    task_dir: str | Path,
+    *,
+    include_unready: set[str] | None = None,
 ) -> Iterator[CustomLipidStore]:
     """Activate only this task's custom definitions and artifact roots."""
     store = CustomLipidStore(task_dir)
@@ -232,7 +238,10 @@ def run_custom_lipid_build(task_dir: str | Path, name: str) -> None:
         )
 
         store.update_status(
-            normalized, state="running", phase="parameterization", progress=10,
+            normalized,
+            state="running",
+            phase="parameterization",
+            progress=10,
             message="Calculating task-scoped GAFF2/AM1-BCC parameters",
         )
         prepare_gaff_lipid(
@@ -241,19 +250,30 @@ def run_custom_lipid_build(task_dir: str | Path, name: str) -> None:
             int(definition.get("charge", 0)),
         )
         store.update_status(
-            normalized, state="running", phase="pre_equilibration", progress=35,
+            normalized,
+            state="running",
+            phase="pre_equilibration",
+            progress=35,
             message="Running explicit-solvent semi-isotropic NPT pre-equilibration",
         )
         npt_ps = float(os.environ.get("GMXBUILDER_CUSTOM_LIPID_NPT_PS", "1000"))
         builder = LipidEquilibrationBuilder(library=store.library({normalized}))
         builder.build(
-            normalized, force_field, "gaff2", npt_ps=npt_ps, force=True,
+            normalized,
+            force_field,
+            "gaff2",
+            npt_ps=npt_ps,
+            force=True,
         )
         entry = store.library({normalized}).inspect(normalized, force_field, "gaff2")
         if entry is None:
             raise RuntimeError("Pre-equilibration completed without a validated conformer library")
         store.update_status(
-            normalized, state="ready", phase="complete", progress=100,
+            normalized,
+            state="ready",
+            phase="complete",
+            progress=100,
             message="Validated task-scoped lipid library is ready",
-            completed_at=_now(), n_conformations=len(entry.conformer_files),
+            completed_at=_now(),
+            n_conformations=len(entry.conformer_files),
         )

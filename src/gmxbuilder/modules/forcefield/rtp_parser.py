@@ -50,23 +50,49 @@ class RTPParser:
                     else:
                         # New residue name — skip non-standard residues (water, ions)
                         rn = section.upper().strip()
-                        if rn in ("HOH", "HO4", "SOL", "WAT", "NA", "CL", "K", "CA", "MG", "ZN",
-                                  "NA+", "CL-", "K+", "CA2+", "MG2+", "ZN2+", "UREA", "MOH",
-                                  "1PROPANOL", "ETHANOL", "METHANOL"):
+                        if rn in (
+                            "HOH",
+                            "HO4",
+                            "SOL",
+                            "WAT",
+                            "NA",
+                            "CL",
+                            "K",
+                            "CA",
+                            "MG",
+                            "ZN",
+                            "NA+",
+                            "CL-",
+                            "K+",
+                            "CA2+",
+                            "MG2+",
+                            "ZN2+",
+                            "UREA",
+                            "MOH",
+                            "1PROPANOL",
+                            "ETHANOL",
+                            "METHANOL",
+                        ):
                             current_res = rn
                             current_section = None
                             if rn not in self._residues:
                                 self._residues[rn] = {
-                                    "atoms": [], "bonds": [], "angles": [],
-                                    "dihedrals": [], "impropers": [],
+                                    "atoms": [],
+                                    "bonds": [],
+                                    "angles": [],
+                                    "dihedrals": [],
+                                    "impropers": [],
                                 }
                         else:
                             current_res = rn
                             current_section = None
                             if current_res not in self._residues:
                                 self._residues[current_res] = {
-                                    "atoms": [], "bonds": [], "angles": [],
-                                    "dihedrals": [], "impropers": [],
+                                    "atoms": [],
+                                    "bonds": [],
+                                    "angles": [],
+                                    "dihedrals": [],
+                                    "impropers": [],
                                 }
                     continue
 
@@ -163,9 +189,7 @@ def _tdb_path(force_field: str, end: str) -> Path:
     preferred = "merged" if force_field == "charmm36" else "aminoacids"
     path = ff_path / f"{preferred}.{suffix}"
     if not path.exists():
-        raise FileNotFoundError(
-            f"{end}-terminal database not found for force field: {force_field}"
-        )
+        raise FileNotFoundError(f"{end}-terminal database not found for force field: {force_field}")
     return path
 
 
@@ -188,8 +212,11 @@ def _parse_tdb(path: Path) -> dict[str, dict]:
                 operation = lowered
             else:
                 current_patch = {
-                    "replace": [], "add": [], "delete": [],
-                    "bonds": [], "impropers": [],
+                    "replace": [],
+                    "add": [],
+                    "delete": [],
+                    "bonds": [],
+                    "impropers": [],
                 }
                 patches[section] = current_patch
                 operation = ""
@@ -210,9 +237,7 @@ def _parse_tdb(path: Path) -> dict[str, dict]:
                     new_name = old_name
                 else:
                     continue
-                current_patch["replace"].append(
-                    (old_name, new_name, atom_type, float(parts[-1]))
-                )
+                current_patch["replace"].append((old_name, new_name, atom_type, float(parts[-1])))
             except ValueError:
                 continue
         elif operation == "add":
@@ -232,9 +257,11 @@ def _parse_tdb(path: Path) -> dict[str, dict]:
             except (ValueError, IndexError):
                 pending_add = None
                 continue
-            names = [base_name] if count == 1 else [
-                f"{base_name}{number}" for number in range(1, count + 1)
-            ]
+            names = (
+                [base_name]
+                if count == 1
+                else [f"{base_name}{number}" for number in range(1, count + 1)]
+            )
             for name in names:
                 current_patch["add"].append((name, atom_type, charge, control))
             pending_add = None
@@ -248,8 +275,7 @@ def _apply_tdb_patch(base_template: dict, patch: dict) -> dict:
     result = copy.deepcopy(base_template)
     deleted = set(patch["delete"])
     replacements = {
-        old: (new, atom_type, charge)
-        for old, new, atom_type, charge in patch["replace"]
+        old: (new, atom_type, charge) for old, new, atom_type, charge in patch["replace"]
     }
     rename = {old: replacement[0] for old, replacement in replacements.items()}
 
@@ -298,9 +324,7 @@ def _apply_tdb_patch(base_template: dict, patch: dict) -> dict:
     return result
 
 
-def get_terminal_residue(
-    force_field: str, base_resname: str, end: str
-) -> tuple[str, dict]:
+def get_terminal_residue(force_field: str, base_resname: str, end: str) -> tuple[str, dict]:
     """Return the force-field-specific standard terminal residue template."""
     force_field = force_field.strip().lower()
     base_resname = base_resname.strip().upper()
@@ -333,9 +357,7 @@ def get_terminal_residue(
         )
     patch_name = next((name for name in candidates if name and name in patches), None)
     if patch_name is None:
-        raise KeyError(
-            f"No standard {end}-terminal patch for {base_resname} in {force_field}"
-        )
+        raise KeyError(f"No standard {end}-terminal patch for {base_resname} in {force_field}")
     generated = _apply_tdb_patch(base_template, patches[patch_name])
     parser.set_residue(variant_name, generated)
     return variant_name, generated

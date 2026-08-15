@@ -63,12 +63,30 @@ def test_every_advertised_charmm_lipid_passes_identity_audit(force_field):
 @pytest.mark.parametrize(
     "lipid_name",
     [
-        "DLIPA", "DLIPG", "DLIPS", "PAPC", "PAPE", "PAPG", "PAPI",
-        "PIPI", "PMPC", "SMPC", "SOP2", "SOP3", "SOPI", "LPC16",
-        "LPC18", "LPE16", "LYSPG", "DSM",
-        "DOPGD", "DPPGD",
-        "PPCPL", "PPEPL",
-        "MGDG", "DGDG",
+        "DLIPA",
+        "DLIPG",
+        "DLIPS",
+        "PAPC",
+        "PAPE",
+        "PAPG",
+        "PAPI",
+        "PIPI",
+        "PMPC",
+        "SMPC",
+        "SOP2",
+        "SOP3",
+        "SOPI",
+        "LPC16",
+        "LPC18",
+        "LPE16",
+        "LYSPG",
+        "DSM",
+        "DOPGD",
+        "DPPGD",
+        "PPCPL",
+        "PPEPL",
+        "MGDG",
+        "DGDG",
         "CAMP",
     ],
 )
@@ -78,16 +96,26 @@ def test_modular_charmm36m_lipid_template_is_connected_and_exact(lipid_name):
     assert template is not None
     atom_names = {atom[0] for atom in template["atoms"]}
     assert len(atom_names) == len(template["atoms"])
-    assert all(left in atom_names and right in atom_names
-               for left, right in template["bonds"])
+    assert all(left in atom_names and right in atom_names for left, right in template["bonds"])
     assert lipid_rtp_identity_issues(lipid_name, "charmm36m") == ()
 
 
 @pytest.mark.parametrize(
     "lipid_name",
     [
-        "DLIPA", "DLIPC", "DLIPE", "DLIPG", "DLIPS", "ERG",
-        "LPC16", "LPC18", "LPE16", "LYSPG", "PUPC", "SITO", "STIG",
+        "DLIPA",
+        "DLIPC",
+        "DLIPE",
+        "DLIPG",
+        "DLIPS",
+        "ERG",
+        "LPC16",
+        "LPC18",
+        "LPE16",
+        "LYSPG",
+        "PUPC",
+        "SITO",
+        "STIG",
     ],
 )
 def test_current_lipid_stream_is_exposed_to_classic_charmm(lipid_name):
@@ -98,7 +126,8 @@ def test_current_lipid_stream_is_exposed_to_classic_charmm(lipid_name):
 @pytest.mark.parametrize("lipid_name", ["DOPGD", "DPPGD"])
 @pytest.mark.parametrize("force_field", ["charmm36", "charmm36m"])
 def test_published_dag_template_is_available_in_both_charmm_releases(
-    lipid_name, force_field,
+    lipid_name,
+    force_field,
 ):
     template_name, template = lipid_rtp_template(lipid_name, force_field)
     assert template_name == lipid_name
@@ -114,7 +143,8 @@ def test_published_dag_template_is_available_in_both_charmm_releases(
 @pytest.mark.parametrize("lipid_name", ["PPCPL", "PPEPL"])
 @pytest.mark.parametrize("force_field", ["charmm36", "charmm36m"])
 def test_published_plasmalogen_template_is_available_in_both_charmm_releases(
-    lipid_name, force_field,
+    lipid_name,
+    force_field,
 ):
     _template_name, template = lipid_rtp_template(lipid_name, force_field)
     assert template is not None
@@ -164,12 +194,12 @@ def test_gm1_uses_native_charmm_glycolipid_patches(force_field):
     assert len(names) == len(set(names)) == 237
     assert max(map(len, names)) <= 5
     atoms = {atom[0]: atom[1:3] for atom in template["atoms"]}
-    assert atoms["C1S"] == ("CTO2", 0.0)       # CERB
-    assert atoms["O1X"] == ("OC301", -0.36)   # Glc-Cer
-    assert atoms["O4X"] == ("OC301", -0.36)   # Gal(beta1-4)Glc
-    assert atoms["O4Y"] == ("OC301", -0.36)   # GalNAc(beta1-4)Gal
-    assert atoms["O3Z"] == ("OC301", -0.36)   # Gal(beta1-3)GalNAc
-    assert atoms["C2A"] == ("CC3062", 0.28)   # Neu5Ac(alpha2-3)Gal
+    assert atoms["C1S"] == ("CTO2", 0.0)  # CERB
+    assert atoms["O1X"] == ("OC301", -0.36)  # Glc-Cer
+    assert atoms["O4X"] == ("OC301", -0.36)  # Gal(beta1-4)Glc
+    assert atoms["O4Y"] == ("OC301", -0.36)  # GalNAc(beta1-4)Gal
+    assert atoms["O3Z"] == ("OC301", -0.36)  # Gal(beta1-3)GalNAc
+    assert atoms["C2A"] == ("CC3062", 0.28)  # Neu5Ac(alpha2-3)Gal
     assert ("O1X", "C1S") in template["bonds"]
     assert ("O4X", "C1Y") in template["bonds"]
     assert ("O4Y", "C1Z") in template["bonds"]

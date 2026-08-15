@@ -19,9 +19,7 @@ def _validate_gro_name(value: object, label: str, atom_index: int) -> str:
     if not text:
         raise ValueError(f"GRO {label} at atom {atom_index + 1} is empty")
     if len(text) > 5:
-        raise ValueError(
-            f"GRO {label} {text!r} at atom {atom_index + 1} exceeds 5 characters"
-        )
+        raise ValueError(f"GRO {label} {text!r} at atom {atom_index + 1} exceeds 5 characters")
     if not text.isascii() or any(character.isspace() for character in text):
         raise ValueError(
             f"GRO {label} {text!r} at atom {atom_index + 1} must contain "
@@ -29,8 +27,7 @@ def _validate_gro_name(value: object, label: str, atom_index: int) -> str:
         )
     if any(ord(character) < 33 or ord(character) > 126 for character in text):
         raise ValueError(
-            f"GRO {label} {text!r} at atom {atom_index + 1} contains "
-            "unsupported characters"
+            f"GRO {label} {text!r} at atom {atom_index + 1} contains unsupported characters"
         )
     return text
 
@@ -53,7 +50,7 @@ class GROReader:
             n_atoms = int(lines[1].strip())
         except ValueError as exc:
             raise ParseError(f"Invalid atom count in GRO file: {lines[1].strip()!r}") from exc
-        atom_lines = lines[2:2 + n_atoms]
+        atom_lines = lines[2 : 2 + n_atoms]
 
         if len(lines) < 2 + n_atoms + 1:
             raise ParseError(
@@ -62,9 +59,7 @@ class GROReader:
         box_line = lines[2 + n_atoms].strip()
 
         if len(atom_lines) != n_atoms:
-            raise ParseError(
-                f"Expected {n_atoms} atom lines, got {len(atom_lines)}"
-            )
+            raise ParseError(f"Expected {n_atoms} atom lines, got {len(atom_lines)}")
 
         # Parse atoms
         coords = np.zeros((n_atoms, 3), dtype=np.float64)
@@ -91,9 +86,9 @@ class GROReader:
                         atom_names[i] = parts[2] if len(parts) > 2 else ""
                         coords[i] = [float(parts[3]), float(parts[4]), float(parts[5])]
                     except (ValueError, IndexError):
-                        raise ParseError(f"Malformed atom line {i+1}: {line[:60]}") from exc
+                        raise ParseError(f"Malformed atom line {i + 1}: {line[:60]}") from exc
                 else:
-                    raise ParseError(f"Malformed atom line {i+1}: {line[:60]}") from exc
+                    raise ParseError(f"Malformed atom line {i + 1}: {line[:60]}") from exc
 
         # Parse box vectors (GROMACS formats: 1/3/5/9 values).  The official
         # nine-field order is v1(x), v2(y), v3(z), v1(y), v1(z), v2(x),
@@ -103,24 +98,28 @@ class GROReader:
         except ValueError as exc:
             raise ParseError(f"Malformed GRO box line: {box_line!r}") from exc
         if len(box_parts) not in {1, 3, 5, 9}:
-            raise ParseError(
-                "GRO box line must contain 1, 3, 5, or 9 numeric values"
-            )
+            raise ParseError("GRO box line must contain 1, 3, 5, or 9 numeric values")
         if len(box_parts) == 9:
             values = box_parts
-            box = np.array([
-                [values[0], values[3], values[4]],
-                [values[5], values[1], values[6]],
-                [values[7], values[8], values[2]],
-            ], dtype=np.float64)
+            box = np.array(
+                [
+                    [values[0], values[3], values[4]],
+                    [values[5], values[1], values[6]],
+                    [values[7], values[8], values[2]],
+                ],
+                dtype=np.float64,
+            )
         elif len(box_parts) == 5:
             # 5-value: v1(x) v2(y) v3(z) v1(y) v1(z) — triclinic with v2,v3 diagonal-only
             v1x, v2y, v3z, v1y, v1z = box_parts[:5]
-            box = np.array([
-                [v1x, v1y, v1z],
-                [0.0, v2y, 0.0],
-                [0.0, 0.0, v3z],
-            ], dtype=np.float64)
+            box = np.array(
+                [
+                    [v1x, v1y, v1z],
+                    [0.0, v2y, 0.0],
+                    [0.0, 0.0, v3z],
+                ],
+                dtype=np.float64,
+            )
         elif len(box_parts) == 3:
             # Diagonal-only box
             box = np.diag([box_parts[0], box_parts[1], box_parts[2]])
@@ -165,10 +164,12 @@ class GROWriter:
             raise ValueError("GRO box vectors must define a finite nonzero volume")
         validated_names = []
         for i in range(n):
-            validated_names.append((
-                _validate_gro_name(structure.resnames[i] or "UNK", "residue name", i),
-                _validate_gro_name(structure.atom_names[i] or "X", "atom name", i),
-            ))
+            validated_names.append(
+                (
+                    _validate_gro_name(structure.resnames[i] or "UNK", "residue name", i),
+                    _validate_gro_name(structure.atom_names[i] or "X", "atom name", i),
+                )
+            )
 
         with open(path, "w") as fh:
             fh.write(f"{title}\n")
@@ -188,15 +189,23 @@ class GROWriter:
                 normalized_resid = max(1, int(resid))
                 wrapped_resid = (normalized_resid - 1) % 99999 + 1
                 wrapped_atom = i % 99999 + 1
-                fh.write(f"{wrapped_resid:5d}{resname:<5s}{aname:>5s}{wrapped_atom:5d}{x:8.3f}{y:8.3f}{z:8.3f}\n")
+                fh.write(
+                    f"{wrapped_resid:5d}{resname:<5s}{aname:>5s}{wrapped_atom:5d}{x:8.3f}{y:8.3f}{z:8.3f}\n"
+                )
 
             # Box line
             if is_diagonal:
                 fh.write(f" {diag[0]:10.5f} {diag[1]:10.5f} {diag[2]:10.5f}\n")
             else:
                 values = (
-                    box[0, 0], box[1, 1], box[2, 2],
-                    box[0, 1], box[0, 2], box[1, 0],
-                    box[1, 2], box[2, 0], box[2, 1],
+                    box[0, 0],
+                    box[1, 1],
+                    box[2, 2],
+                    box[0, 1],
+                    box[0, 2],
+                    box[1, 0],
+                    box[1, 2],
+                    box[2, 0],
+                    box[2, 1],
                 )
                 fh.write(" " + " ".join(f"{v:10.5f}" for v in values) + "\n")

@@ -34,9 +34,7 @@ class _ObservedModule(BaseModule):
                 self.active -= 1
 
 
-def test_overlapping_requests_for_one_task_execute_strictly_serial(
-    tmp_path, monkeypatch
-):
+def test_overlapping_requests_for_one_task_execute_strictly_serial(tmp_path, monkeypatch):
     runner = StepRunner(tmp_path / "task", "membrane-bilayer")
     observed = _ObservedModule()
     monkeypatch.setattr(
@@ -45,10 +43,7 @@ def test_overlapping_requests_for_one_task_execute_strictly_serial(
     )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(runner.run_step, "input", {"seed": seed})
-            for seed in (1, 2)
-        ]
+        futures = [executor.submit(runner.run_step, "input", {"seed": seed}) for seed in (1, 2)]
         results = [future.result() for future in futures]
 
     assert [result["status"] for result in results] == ["ok", "ok"]

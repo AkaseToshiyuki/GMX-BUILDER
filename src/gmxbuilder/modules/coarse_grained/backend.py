@@ -37,7 +37,9 @@ def normalize_environment(config: dict, metadata: dict, coordinates=None) -> dic
     environment = str(metadata.get("cg_environment", config.get("environment", "bilayer"))).lower()
     include_protein = metadata.get("cg_include_protein", True) is True
     rotations = {
-        axis: _finite_number(config.get(f"rotate_{axis}", 0.0), f"Rotation {axis.upper()}", -180.0, 180.0)
+        axis: _finite_number(
+            config.get(f"rotate_{axis}", 0.0), f"Rotation {axis.upper()}", -180.0, 180.0
+        )
         for axis in "xyz"
     }
     z_offset = _finite_number(config.get("z_offset", 0.0), "Protein Z offset", -8.0, 8.0)
@@ -87,9 +89,9 @@ def normalize_environment(config: dict, metadata: dict, coordinates=None) -> dic
                 "Asymmetric bilayer mode requires an explicit lower-leaflet composition"
             )
         lower = normalize_composition(
-            config.get("lower_leaflet", [
-                {"name": item["name"], "ratio": item["ratio"]} for item in upper
-            ]),
+            config.get(
+                "lower_leaflet", [{"name": item["name"], "ratio": item["ratio"]} for item in upper]
+            ),
             label="Lower",
         )
         if not asymmetric and lower != upper:
@@ -121,25 +123,29 @@ def normalize_environment(config: dict, metadata: dict, coordinates=None) -> dic
         required_z = float(protein_extent[2]) + 2.0 * abs(z_offset) + 3.0
         box_xy = max(math.sqrt(count * weighted_apl + protein_xy_area), required_xy, 5.0)
         dry_box_z = max(6.0, required_z)
-        normalized.update({
-            "upper_leaflet": upper,
-            "lower_leaflet": lower,
-            "asymmetric": asymmetric,
-            "n_lipids_per_leaflet": count,
-            "weighted_apl_nm2": weighted_apl,
-            "box_xy": box_xy,
-            "box_z": dry_box_z,
-            "dry_box_z": dry_box_z,
-        })
+        normalized.update(
+            {
+                "upper_leaflet": upper,
+                "lower_leaflet": lower,
+                "asymmetric": asymmetric,
+                "n_lipids_per_leaflet": count,
+                "weighted_apl_nm2": weighted_apl,
+                "box_xy": box_xy,
+                "box_z": dry_box_z,
+                "dry_box_z": dry_box_z,
+            }
+        )
     elif environment == "solution":
         padding = 1.5
         box_xy = max(float(max(protein_extent[0], protein_extent[1])) + 2.0 * padding, 5.0)
         box_z = max(float(protein_extent[2]) + 2.0 * abs(z_offset) + 2.0 * padding, 6.0)
-        normalized.update({
-            "box_xy": box_xy,
-            "box_z": box_z,
-            "dry_box_z": box_z,
-        })
+        normalized.update(
+            {
+                "box_xy": box_xy,
+                "box_z": box_z,
+                "dry_box_z": box_z,
+            }
+        )
     else:
         raise ModuleConfigError("environment must be solution or bilayer")
     return normalized
@@ -201,9 +207,11 @@ def normalize_solvation(config: dict, metadata: dict) -> dict:
 def _materialize_inputs(system, config: dict, work: Path) -> tuple[list[str], str | None]:
     toppar = work / "toppar"
     materialize_assets(toppar)
-    asset_names = list(__import__(
-        "gmxbuilder.modules.coarse_grained.assets", fromlist=["load_manifest"]
-    ).load_manifest()["files"])
+    asset_names = list(
+        __import__(
+            "gmxbuilder.modules.coarse_grained.assets", fromlist=["load_manifest"]
+        ).load_manifest()["files"]
+    )
     core_name = "martini_v3.0.0.itp"
     bonded_name = "martini_v3.0.0_ffbonded_v2.itp"
     asset_names = [core_name, bonded_name] + sorted(
@@ -217,7 +225,8 @@ def _materialize_inputs(system, config: dict, work: Path) -> tuple[list[str], st
     if system.metadata.get("cg_include_protein", True):
         texts = dict(system.metadata.get("cg_topology_texts") or {})
         protein_texts = {
-            name: text for name, text in texts.items()
+            name: text
+            for name, text in texts.items()
             if name.endswith(".itp") and name != "martini_v3.0.0.itp"
         }
         if not protein_texts:
@@ -225,9 +234,15 @@ def _materialize_inputs(system, config: dict, work: Path) -> tuple[list[str], st
         write_topology_texts(protein_texts, toppar)
         for name in sorted(protein_texts):
             itp_input.append(f"include:{toppar / name}")
-        protein_source = (task_root(config) / str(system.metadata.get("cg_protein_pdb", ""))).resolve()
+        protein_source = (
+            task_root(config) / str(system.metadata.get("cg_protein_pdb", ""))
+        ).resolve()
         task_dir = task_root(config)
-        if task_dir not in protein_source.parents or not protein_source.is_file() or protein_source.is_symlink():
+        if (
+            task_dir not in protein_source.parents
+            or not protein_source.is_file()
+            or protein_source.is_symlink()
+        ):
             raise ModuleConfigError("Task-owned mapped protein coordinates are missing")
         protein_path = work / "cg_protein.pdb"
         shutil.copy2(protein_source, protein_path)
@@ -268,16 +283,32 @@ def _membrane_command(environment: dict, corrections: dict | None = None) -> str
     """Build one COBY bilayer command, including optional exact-count offsets."""
     corrections = corrections or {}
     parts = ["params:LTF", "leaflet:upper", *coby_lipid_tokens(environment["upper_leaflet"])]
+    upper_params = {
+        str(entry["name"]): str(entry["builder_params"]) for entry in environment["upper_leaflet"]
+    }
     for name, value in sorted(dict(corrections.get("upper") or {}).items()):
         if int(value):
+            if name not in upper_params:
+                raise ModuleConfigError(
+                    f"Exact-count correction references unknown upper-leaflet lipid {name}"
+                )
             parts.append(
-                f"lipid_extra:name:{name}:extra_type:absolute:extra_val:{int(value)}"
+                f"lipid_extra:name:{name}:params:{upper_params[name]}:"
+                f"extra_type:absolute:extra_val:{int(value)}"
             )
     parts.extend(["leaflet:lower", *coby_lipid_tokens(environment["lower_leaflet"])])
+    lower_params = {
+        str(entry["name"]): str(entry["builder_params"]) for entry in environment["lower_leaflet"]
+    }
     for name, value in sorted(dict(corrections.get("lower") or {}).items()):
         if int(value):
+            if name not in lower_params:
+                raise ModuleConfigError(
+                    f"Exact-count correction references unknown lower-leaflet lipid {name}"
+                )
             parts.append(
-                f"lipid_extra:name:{name}:extra_type:absolute:extra_val:{int(value)}"
+                f"lipid_extra:name:{name}:params:{lower_params[name]}:"
+                f"extra_type:absolute:extra_val:{int(value)}"
             )
     parts.extend(["leaflet:membrane", "protein_buffer:0.264", "kick:0.02"])
     return " ".join(parts)
@@ -326,7 +357,9 @@ def _has_corrections(corrections: dict[str, dict[str, int]]) -> bool:
     return any(value for leaflet in corrections.values() for value in leaflet.values())
 
 
-def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) -> tuple[Path, Path, str]:
+def build_with_coby(
+    system, config: dict, *, solvate: bool, final_salt: bool
+) -> tuple[Path, Path, str]:
     """Build one deterministic stage and return GRO, topology and COBY log."""
     try:
         from COBY import COBY
@@ -341,7 +374,11 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
     solv = dict(system.metadata.get("cg_solvation_config") or {})
     kwargs: dict = {
         "randseed": int(env.get("seed", 42)),
-        "box": [float(env.get("box_xy", 12.0)), float(env.get("box_xy", 12.0)), float(env.get("box_z", 14.0))],
+        "box": [
+            float(env.get("box_xy", 12.0)),
+            float(env.get("box_xy", 12.0)),
+            float(env.get("box_z", 14.0)),
+        ],
         "box_type": "rectangular",
         "itp_input": itp_input,
         "out_sys": str(work / "system"),
@@ -363,7 +400,10 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
 
     def _run_coby():
         try:
-            with contextlib.redirect_stdout(output_capture), contextlib.redirect_stderr(output_capture):
+            with (
+                contextlib.redirect_stdout(output_capture),
+                contextlib.redirect_stderr(output_capture),
+            ):
                 return COBY(**kwargs)
         except (AssertionError, KeyError, OSError, TypeError, ValueError) as exc:
             detail = str(exc).strip() or exc.__class__.__name__
@@ -389,8 +429,7 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
             final_residual = _leaflet_count_corrections(env, actual)
             if _has_corrections(final_residual):
                 details = "; ".join(
-                    f"{leaflet}={sum(actual[leaflet].values())}"
-                    for leaflet in ("upper", "lower")
+                    f"{leaflet}={sum(actual[leaflet].values())}" for leaflet in ("upper", "lower")
                 )
                 raise ModuleConfigError(
                     "COBY could not satisfy the requested exact leaflet counts after "
@@ -404,9 +443,7 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
         raise ModuleConfigError("COBY completed without coordinate and topology outputs")
     built_structure = GROReader().read(gro)
     try:
-        fractional = built_structure.coordinates @ np.linalg.inv(
-            built_structure.box_vectors
-        )
+        fractional = built_structure.coordinates @ np.linalg.inv(built_structure.box_vectors)
     except np.linalg.LinAlgError as exc:
         raise ModuleConfigError("COBY produced a singular periodic box") from exc
     outside = np.any((fractional < -1e-5) | (fractional >= 1.0 + 1e-5), axis=1)
@@ -423,5 +460,9 @@ def build_with_coby(system, config: dict, *, solvate: bool, final_salt: bool) ->
     topology_text = top.read_text(encoding="utf-8")
     topology_text = topology_text.replace(str(work) + "/", "")
     top.write_text(topology_text, encoding="utf-8")
-    log = (work / "coby.log").read_text(encoding="utf-8", errors="replace") if (work / "coby.log").is_file() else output_capture.getvalue()
+    log = (
+        (work / "coby.log").read_text(encoding="utf-8", errors="replace")
+        if (work / "coby.log").is_file()
+        else output_capture.getvalue()
+    )
     return gro, top, log

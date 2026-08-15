@@ -43,18 +43,20 @@ def _request(*, peer: str, forwarded: str = "", proto: str = "http") -> Request:
     if forwarded:
         headers.append((b"x-forwarded-for", forwarded.encode()))
         headers.append((b"x-forwarded-proto", proto.encode()))
-    return Request({
-        "type": "http",
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": "/",
-        "raw_path": b"/",
-        "query_string": b"",
-        "headers": headers,
-        "client": (peer, 1234),
-        "server": ("127.0.0.1", 7788),
-    })
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": headers,
+            "client": (peer, 1234),
+            "server": ("127.0.0.1", 7788),
+        }
+    )
 
 
 def test_nonloopback_bind_requires_explicit_mode(monkeypatch):
@@ -153,9 +155,7 @@ def test_json_body_limit_rejects_declared_and_chunked_requests(monkeypatch):
 def test_forwarded_client_and_proto_are_used_only_from_trusted_proxy(monkeypatch):
     monkeypatch.setenv("GMXBUILDER_TRUSTED_PROXIES", "127.0.0.1/32,10.0.0.0/8")
     config = SecurityConfig.from_environment()
-    trusted = _request(
-        peer="127.0.0.1", forwarded="203.0.113.9, 10.1.2.3", proto="https"
-    )
+    trusted = _request(peer="127.0.0.1", forwarded="203.0.113.9, 10.1.2.3", proto="https")
     assert client_identity(trusted, config) == "203.0.113.9"
     assert request_is_https(trusted, config) is True
 
@@ -171,9 +171,7 @@ def test_rate_limit_survives_limiter_recreation_and_uses_private_file(tmp_path):
     assert first.allow("198.51.100.4", "heavy", 2, 60, now=1001) == (True, 0)
 
     restarted = DurableRateLimiter(path)
-    allowed, retry_after = restarted.allow(
-        "198.51.100.4", "heavy", 2, 60, now=1002
-    )
+    allowed, retry_after = restarted.allow("198.51.100.4", "heavy", 2, 60, now=1002)
     assert allowed is False
     assert retry_after == 58
     assert path.stat().st_mode & 0o077 == 0
@@ -206,23 +204,19 @@ def test_template_has_no_runtime_cdn_dependency_or_inline_script_handler():
     assert "/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js" in template
 
 
-def test_uv_lock_pins_registry_artifacts_and_vcs_commit():
+def test_uv_lock_pins_registry_and_direct_url_artifacts():
     lock = tomllib.loads((ROOT / "uv.lock").read_text())
     packages = lock["package"]
-    registry_packages = [
-        package for package in packages if "registry" in package.get("source", {})
-    ]
+    registry_packages = [package for package in packages if "registry" in package.get("source", {})]
     assert registry_packages
     for package in registry_packages:
-        artifacts = ([package["sdist"]] if "sdist" in package else []) + package.get(
-            "wheels", []
-        )
+        artifacts = ([package["sdist"]] if "sdist" in package else []) + package.get("wheels", [])
         assert artifacts, package["name"]
         assert all(item.get("hash", "").startswith("sha256:") for item in artifacts)
     pdbfixer = next(package for package in packages if package["name"] == "pdbfixer")
-    source = pdbfixer["source"]["git"]
     commit = "94cfa4c0ca551cdc5f13320f9a658efd59f2b881"
-    assert f"rev={commit}" in source and source.endswith(f"#{commit}")
+    assert pdbfixer["source"]["url"].endswith(f"/{commit}.tar.gz")
+    assert pdbfixer["sdist"]["hash"].startswith("sha256:")
 
 
 def test_distribution_excludes_runtime_outputs_and_bytecode():
@@ -249,4 +243,4 @@ def test_local_installer_emits_hardened_service_and_safe_bind_default():
     ):
         assert directive in installer
     assert "GMXBUILDER_DEPLOYMENT_MODE" in installer
-    assert "uv sync" in installer and "--frozen" in installer
+    assert '"$UV_BIN" sync' in installer and "--frozen" in installer

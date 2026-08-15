@@ -51,9 +51,7 @@ def test_hydrogens_are_assigned_to_their_parent_protein_component(tmp_path, monk
     monkeypatch.setattr(
         "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: tmp_path
     )
-    monkeypatch.setattr(
-        "gmxbuilder.modules.forcefield.hdb.HDBHydrogenAdder", FakeHydrogenAdder
-    )
+    monkeypatch.setattr("gmxbuilder.modules.forcefield.hdb.HDBHydrogenAdder", FakeHydrogenAdder)
 
     result = StructureProcessor().run(
         system, {"skip_protonation": True, "prepare_standard_termini": False}
@@ -79,23 +77,33 @@ def _residue_system(resname, atom_names, elements):
     )
     return System(
         structure=structure,
-        components=[
-            Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(atom_names)))
-        ],
+        components=[Component("PROTEIN_A", ComponentKind.PROTEIN, np.arange(len(atom_names)))],
         metadata={"force_field": "charmm36"},
     )
 
 
 def _disulfide_system(force_field="amber14sb", cross_chain=False):
     atom_names = ["N", "CA", "C", "O", "CB", "SG"] * 2
-    first = np.array([
-        [0.00, 0.00, 0.00], [0.145, 0.00, 0.00], [0.245, 0.10, 0.00],
-        [0.225, 0.22, 0.00], [0.145, -0.12, 0.00], [0.20, -0.25, 0.00],
-    ])
-    second = np.array([
-        [0.37, 0.08, 0.00], [0.47, 0.16, 0.00], [0.59, 0.10, 0.00],
-        [0.69, 0.16, 0.00], [0.47, -0.02, 0.00], [0.403, -0.25, 0.00],
-    ])
+    first = np.array(
+        [
+            [0.00, 0.00, 0.00],
+            [0.145, 0.00, 0.00],
+            [0.245, 0.10, 0.00],
+            [0.225, 0.22, 0.00],
+            [0.145, -0.12, 0.00],
+            [0.20, -0.25, 0.00],
+        ]
+    )
+    second = np.array(
+        [
+            [0.37, 0.08, 0.00],
+            [0.47, 0.16, 0.00],
+            [0.59, 0.10, 0.00],
+            [0.69, 0.16, 0.00],
+            [0.47, -0.02, 0.00],
+            [0.403, -0.25, 0.00],
+        ]
+    )
     structure = Structure(
         coordinates=np.vstack([first, second]),
         box_vectors=np.eye(3) * 4.0,
@@ -107,17 +115,19 @@ def _disulfide_system(force_field="amber14sb", cross_chain=False):
     )
     return System(
         structure=structure,
-        components=[
-            Component("PROTEIN", ComponentKind.PROTEIN, np.arange(12))
-        ],
+        components=[Component("PROTEIN", ComponentKind.PROTEIN, np.arange(12))],
         metadata={"force_field": force_field},
     )
+
+
 def test_amber_forcefield_translates_standard_ile_and_charmm_histidine_names(monkeypatch):
-    system = _residue_system("ILE", ["N", "CA", "CB", "CG1", "CG2", "CD1", "C", "O"], ["N", "C", "C", "C", "C", "C", "C", "O"])
-    system.metadata["force_field"] = "amber99sb-ildn"
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
+    system = _residue_system(
+        "ILE",
+        ["N", "CA", "CB", "CG1", "CG2", "CD1", "C", "O"],
+        ["N", "C", "C", "C", "C", "C", "C", "O"],
     )
+    system.metadata["force_field"] = "amber99sb-ildn"
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     result = StructureProcessor().run(
         system, {"skip_protonation": True, "prepare_standard_termini": False}
@@ -137,13 +147,12 @@ def test_amber_forcefield_translates_standard_ile_and_charmm_histidine_names(mon
 @pytest.mark.parametrize("force_field", ["charmm36", "charmm36m"])
 def test_charmm_forcefields_translate_pdb_ile_cd1_from_actual_rtp(monkeypatch, force_field):
     system = _residue_system(
-        "ILE", ["N", "CA", "CB", "CG1", "CG2", "CD1", "C", "O"],
+        "ILE",
+        ["N", "CA", "CB", "CG1", "CG2", "CD1", "C", "O"],
         ["N", "C", "C", "C", "C", "C", "C", "O"],
     )
     system.metadata["force_field"] = force_field
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     result = StructureProcessor().run(
         system, {"skip_protonation": True, "prepare_standard_termini": False}
@@ -156,9 +165,7 @@ def test_charmm_forcefields_translate_pdb_ile_cd1_from_actual_rtp(monkeypatch, f
 def test_unassigned_histidine_fails_instead_of_guessing_tautomer(monkeypatch):
     system = _residue_system("HIS", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
     system.metadata["force_field"] = "amber99sb-ildn"
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     with pytest.raises(ModuleConfigError, match="Unassigned HIS protonation state"):
         StructureProcessor().run(
@@ -168,9 +175,7 @@ def test_unassigned_histidine_fails_instead_of_guessing_tautomer(monkeypatch):
 
 def test_enabled_protonation_rejects_incomplete_assignments(monkeypatch):
     system = _residue_system("HIS", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     with pytest.raises(ModuleConfigError, match="Incomplete protonation assignments.*A:1 HIS"):
         StructureProcessor().run(
@@ -186,9 +191,7 @@ def test_enabled_protonation_rejects_incomplete_assignments(monkeypatch):
 
 def test_enabled_protonation_accepts_complete_histidine_assignment(monkeypatch):
     system = _residue_system("HIS", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     result = StructureProcessor().run(
         system,
@@ -209,9 +212,7 @@ def test_confirmed_forcefield_rejects_incomplete_heavy_atom_residue(monkeypatch)
     system.metadata.update(
         {"force_field": "amber99sb-ildn", "requested_force_field": "amber99sb-ildn"}
     )
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     with pytest.raises(ModuleConfigError, match="Incomplete protein heavy atoms"):
         StructureProcessor().run(
@@ -230,13 +231,9 @@ def test_deamidation_changes_atom_identity_and_residue(
     monkeypatch, source, patch_id, product, carbonyl, oxygen, old_atom, new_atom
 ):
     atom_names = ["N", "CA", "C", "O", "CB", carbonyl, oxygen, old_atom]
-    system = _residue_system(
-        source, atom_names, ["N", "C", "C", "O", "C", "C", "O", "N"]
-    )
+    system = _residue_system(source, atom_names, ["N", "C", "C", "O", "C", "C", "O", "N"])
     original_coordinates = system.structure.coordinates.copy()
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     result = StructureProcessor().run(
         system,
@@ -252,9 +249,7 @@ def test_deamidation_changes_atom_identity_and_residue(
     assert old_atom not in result.system.structure.atom_names
     changed_index = result.system.structure.atom_names.index(new_atom)
     assert result.system.structure.elements[changed_index] == "O"
-    np.testing.assert_array_equal(
-        result.system.structure.coordinates, original_coordinates
-    )
+    np.testing.assert_array_equal(result.system.structure.coordinates, original_coordinates)
     assert result.system.metadata["n_modifications"] == 1
 
 
@@ -263,9 +258,7 @@ def test_unsupported_patch_fails_before_mutating_structure(monkeypatch):
         "SER", ["N", "CA", "C", "O", "CB", "OG"], ["N", "C", "C", "O", "C", "O"]
     )
     original = system.structure.copy()
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     with pytest.raises(ModuleConfigError, match="PHOS_SER is unavailable"):
         StructureProcessor().run(
@@ -283,13 +276,12 @@ def test_unsupported_patch_fails_before_mutating_structure(monkeypatch):
 
 def test_charmm36m_phosphoserine_builds_native_heavy_atoms(monkeypatch):
     system = _residue_system(
-        "SER", ["N", "CA", "C", "O", "CB", "OG"],
+        "SER",
+        ["N", "CA", "C", "O", "CB", "OG"],
         ["N", "C", "C", "O", "C", "O"],
     )
     system.metadata["force_field"] = "charmm36m"
-    monkeypatch.setattr(
-        "gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None
-    )
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
 
     result = StructureProcessor().run(
         system,
@@ -321,17 +313,13 @@ def test_unparameterized_terminus_cap_fails_before_mutating_structure():
 def test_patch_catalog_is_forcefield_specific():
     asn = {item["id"]: item for item in list_patches_for_residue("ASN", "charmm36")}
     ser = {item["id"]: item for item in list_patches_for_residue("SER", "charmm36")}
-    charmm36m_ser = {
-        item["id"]: item for item in list_patches_for_residue("SER", "charmm36m")
-    }
+    charmm36m_ser = {item["id"]: item for item in list_patches_for_residue("SER", "charmm36m")}
     assert asn["DEA_ASN"]["supported"] is True
     assert ser["PHOS_SER"]["supported"] is False
     assert ser["PHOS_SER"]["support_reason"]
     assert charmm36m_ser["PHOS_SER"]["supported"] is True
     assert charmm36m_ser["PHOS_SER"]["charge_shift"] == -1
-    amber_ser = {
-        item["id"]: item for item in list_patches_for_residue("SER", "amber14sb")
-    }
+    amber_ser = {item["id"]: item for item in list_patches_for_residue("SER", "amber14sb")}
     assert amber_ser["PHOS_SER"]["supported"] is True
     assert amber_ser["PHOS_SER"]["charge_shift"] == -2
     assert amber_ser["PHOS1_SER"]["supported"] is True
@@ -349,10 +337,7 @@ def test_system_formal_charge_uses_forcefield_specific_modified_template():
 
 
 def test_charmm_cysteine_oxidation_labels_match_native_templates():
-    patches = {
-        item["id"]: item
-        for item in list_patches_for_residue("CYS", "charmm36m")
-    }
+    patches = {item["id"]: item for item in list_patches_for_residue("CYS", "charmm36m")}
     assert patches["CSO_CYS"]["supported"] is True
     assert "protonated sulfenic acid" in patches["CSO_CYS"]["description"]
     assert patches["CSO_CYS"]["formula_addition"] == "O"
@@ -365,10 +350,7 @@ def test_charmm_cysteine_oxidation_labels_match_native_templates():
 
 
 def test_new_charmm_ptm_catalog_uses_unambiguous_native_chemistry():
-    lysine = {
-        item["id"]: item
-        for item in list_patches_for_residue("LYS", "charmm36m")
-    }
+    lysine = {item["id"]: item for item in list_patches_for_residue("LYS", "charmm36m")}
     assert lysine["KME_LYS"]["product_name"] == "MLZ"
     assert lysine["KME2_LYS"]["product_name"] == "MLY"
     assert lysine["KME3_LYS"]["product_name"] == "M3L"
@@ -379,18 +361,12 @@ def test_new_charmm_ptm_catalog_uses_unambiguous_native_chemistry():
     assert lysine["MAL_LYS"]["supported"] is False
     assert "dimethyllysine" in lysine["MAL_LYS"]["support_reason"]
 
-    arginine = {
-        item["id"]: item
-        for item in list_patches_for_residue("ARG", "charmm36m")
-    }
+    arginine = {item["id"]: item for item in list_patches_for_residue("ARG", "charmm36m")}
     assert arginine["RME2_ARG"]["product_name"] == "2MR"
     assert arginine["RME2A_ARG"]["product_name"] == "DA2"
     assert arginine["RME_ARG"]["supported"] is False
 
-    cysteine = {
-        item["id"]: item
-        for item in list_patches_for_residue("CYS", "charmm36m")
-    }
+    cysteine = {item["id"]: item for item in list_patches_for_residue("CYS", "charmm36m")}
     assert cysteine["CSN_CYS"]["product_name"] == "SNC"
     assert cysteine["SMC_CYS"]["supported"] is True
     assert cysteine["OCS_CYS"]["charge_shift"] == -1
@@ -427,22 +403,17 @@ def test_disulfide_pair_builds_cyx_and_explicit_sg_bond():
         {
             "skip_protonation": True,
             "prepare_standard_termini": False,
-            "crosslinks": [
-                {"type": "disulfide", "first_index": 0, "second_index": 1}
-            ],
+            "crosslinks": [{"type": "disulfide", "first_index": 0, "second_index": 1}],
         },
     )
     assert result.success
     assert set(result.system.structure.resnames) == {"CYX"}
     assert "HG" not in result.system.structure.atom_names
     sulphurs = [
-        index for index, name in enumerate(result.system.structure.atom_names)
-        if name == "SG"
+        index for index, name in enumerate(result.system.structure.atom_names) if name == "SG"
     ]
     assert len(sulphurs) == 2
-    assert any(
-        {bond.i, bond.j} == set(sulphurs) for bond in result.system.topology.bonds
-    )
+    assert any({bond.i, bond.j} == set(sulphurs) for bond in result.system.topology.bonds)
     assert result.system.metadata["crosslinks"][0]["status"] == "passed"
 
 
@@ -453,9 +424,7 @@ def test_disulfide_rejects_distant_or_unsupported_pair_before_mutation():
     config = {
         "skip_protonation": True,
         "prepare_standard_termini": False,
-        "crosslinks": [
-            {"type": "disulfide", "first_index": 0, "second_index": 1}
-        ],
+        "crosslinks": [{"type": "disulfide", "first_index": 0, "second_index": 1}],
     }
     with pytest.raises(ModuleConfigError, match="will not drag distant side chains"):
         StructureProcessor().run(distant, config)
@@ -474,8 +443,14 @@ def test_noncontiguous_repeated_residue_identifier_fails_closed():
     order.insert(7, order.pop(1))
     system.structure.coordinates = system.structure.coordinates[order]
     for attribute in (
-        "atom_names", "resnames", "resids", "chain_ids", "elements",
-        "occupancies", "tempfactors", "segids",
+        "atom_names",
+        "resnames",
+        "resids",
+        "chain_ids",
+        "elements",
+        "occupancies",
+        "tempfactors",
+        "segids",
     ):
         values = getattr(system.structure, attribute)
         setattr(system.structure, attribute, [values[index] for index in order])
@@ -498,9 +473,7 @@ def test_noncontiguous_repeated_residue_identifier_fails_closed():
         ("charmm36", "CYX_CYS"),
     ],
 )
-def test_complex_unvalidated_modifications_remain_explicitly_unavailable(
-    force_field, patch_id
-):
+def test_complex_unvalidated_modifications_remain_explicitly_unavailable(force_field, patch_id):
     from gmxbuilder.modules.modifications.patches import patch_capability
 
     supported, reason = patch_capability(patch_id, force_field)
@@ -534,11 +507,14 @@ def test_step_runner_returns_config_error_instead_of_http_500(tmp_path):
     runner = StepRunner(tmp_path, pipeline_type="membrane-bilayer")
     system.save_checkpoint(runner.step_dir("forcefield"))
 
-    result = runner.run_step("structure", {
-        "skip_protonation": True,
-        "prepare_standard_termini": False,
-        "termini": {"A": {"nter": "FOR", "cter": ""}},
-    })
+    result = runner.run_step(
+        "structure",
+        {
+            "skip_protonation": True,
+            "prepare_standard_termini": False,
+            "termini": {"A": {"nter": "FOR", "cter": ""}},
+        },
+    )
 
     assert result["status"] == "error"
     assert "FOR cap is unavailable" in result["error"]

@@ -9,6 +9,8 @@ import numpy as np
 from gmxbuilder.core.topology import Topology
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import TopologyError
+
+
 class TopologyWriter:
     """Write GROMACS .top and .itp files with proper force field parameters."""
 
@@ -33,9 +35,7 @@ class TopologyWriter:
             return 1, 9, 4
         if self.force_field == "oplsaa":
             return 1, 3, 1
-        raise TopologyError(
-            f"No bonded-function mapping for force field {self.force_field!r}"
-        )
+        raise TopologyError(f"No bonded-function mapping for force field {self.force_field!r}")
 
     @staticmethod
     def _generate_graph_terms(
@@ -70,15 +70,15 @@ class TopologyWriter:
                     dihedrals.add(min(term, reverse))
 
         bonded = set(canonical_bonds)
-        angle_endpoints = {
-            tuple(sorted((left, right))) for left, _center, right in angles
-        }
-        pairs = sorted({
-            tuple(sorted((outer_left, outer_right)))
-            for outer_left, _middle_left, _middle_right, outer_right in dihedrals
-            if tuple(sorted((outer_left, outer_right))) not in bonded
-            and tuple(sorted((outer_left, outer_right))) not in angle_endpoints
-        })
+        angle_endpoints = {tuple(sorted((left, right))) for left, _center, right in angles}
+        pairs = sorted(
+            {
+                tuple(sorted((outer_left, outer_right)))
+                for outer_left, _middle_left, _middle_right, outer_right in dihedrals
+                if tuple(sorted((outer_left, outer_right))) not in bonded
+                and tuple(sorted((outer_left, outer_right))) not in angle_endpoints
+            }
+        )
         return sorted(angles), sorted(dihedrals), pairs
 
     @staticmethod
@@ -117,17 +117,12 @@ class TopologyWriter:
         runs: list[tuple[int, str, int]] = []
         previous_key: tuple[str, int, str] | None = None
         contiguous_block = False
-        for index, (resname, resid) in enumerate(
-            zip(structure.resnames, structure.resids)
-        ):
+        for index, (resname, resid) in enumerate(zip(structure.resnames, structure.resids)):
             if index in excluded or str(resname) not in residue_names:
                 previous_key = None
                 contiguous_block = False
                 continue
-            chain = (
-                str(structure.chain_ids[index])
-                if index < len(structure.chain_ids) else ""
-            )
+            chain = str(structure.chain_ids[index]) if index < len(structure.chain_ids) else ""
             key = (str(resname), int(resid), chain)
             if key != previous_key:
                 if contiguous_block and runs and runs[-1][1] == key[0]:
@@ -217,6 +212,7 @@ class TopologyWriter:
         # Determine component groups
         from gmxbuilder.io.pdb import _PROTEIN_RESNAMES
         from gmxbuilder.modules.membrane.lipids import LipidRegistry
+
         _PROTEIN_SET = set(_PROTEIN_RESNAMES)
 
         protein_res = {rn for rn in res_counts if rn in _PROTEIN_SET}
@@ -234,9 +230,12 @@ class TopologyWriter:
         registered_lipids = set(LipidRegistry.list())
         lipid_res = {rn for rn in res_counts if rn in registered_lipids}
         ligand_res = {
-            rn for rn in res_counts
-            if rn not in _PROTEIN_SET and rn not in water_res
-            and rn not in ion_res and rn not in lipid_res
+            rn
+            for rn in res_counts
+            if rn not in _PROTEIN_SET
+            and rn not in water_res
+            and rn not in ion_res
+            and rn not in lipid_res
             and not any(
                 index in nucleic_indices and structure.resnames[index] == rn
                 for index in range(structure.num_atoms)
@@ -269,17 +268,13 @@ class TopologyWriter:
                     if rtp.get_residue(lipid_name) is not None:
                         continue
                     lipid = LipidRegistry.get(lipid_name)
-                    template = prepare_gaff_lipid(
-                        lipid_name, lipid.smiles, lipid.charge
-                    )
+                    template = prepare_gaff_lipid(lipid_name, lipid.smiles, lipid.charge)
                     external_molecule_types[lipid_name] = template.name
                     filename = f"{lipid_name}_atomtypes.itp"
                     (top_dir / filename).write_text(template.atomtypes_path.read_text())
                     external_atomtype_includes.append(filename)
             else:
-                raise TopologyError(
-                    f"Unsupported Amber lipid backend {selected_lipid_ff!r}"
-                )
+                raise TopologyError(f"Unsupported Amber lipid backend {selected_lipid_ff!r}")
 
         ligand_parameters = self.ff_config.get("ligand_parameters", {}) or {}
         for ligand_name in sorted(ligand_res):
@@ -312,7 +307,9 @@ class TopologyWriter:
             for chain_id, chain_indices in protein_chains:
                 moltype = f"Protein_chain_{chain_id}"
                 chain_itp = top_dir / f"topol_{moltype}.itp"
-                self._write_protein_itp_for_indices(structure, chain_itp, chain_indices, moltype, topology=topology)
+                self._write_protein_itp_for_indices(
+                    structure, chain_itp, chain_indices, moltype, topology=topology
+                )
                 fh.write(f'#include "topol_{moltype}.itp"\n')
 
             for record in native_nucleic:
@@ -345,7 +342,9 @@ class TopologyWriter:
                     ligand_itp.write_text(source.read_text())
                 else:
                     self._write_lipid_itp(
-                        ligand, structure, ligand_itp,
+                        ligand,
+                        structure,
+                        ligand_itp,
                         apply_lipid_restraints=False,
                     )
                 fh.write(f'#include "{ligand}.itp"\n')
@@ -362,15 +361,11 @@ class TopologyWriter:
             fh.write("[ molecules ]\n")
             molecule_records: list[tuple[int, str, int]] = []
             for chain_id, chain_indices in protein_chains:
-                molecule_records.append((
-                    min(chain_indices), f"Protein_chain_{chain_id}", 1
-                ))
+                molecule_records.append((min(chain_indices), f"Protein_chain_{chain_id}", 1))
 
             for record in native_nucleic:
                 indices = [int(index) for index in record["atom_indices"]]
-                molecule_records.append((
-                    min(indices), str(record["molecule_type"]), 1
-                ))
+                molecule_records.append((min(indices), str(record["molecule_type"]), 1))
 
             # GROMACS consumes coordinates in [molecules] order.  Mixed
             # leaflets are spatially shuffled, so grouping all POPC then all
@@ -378,27 +373,19 @@ class TopologyWriter:
             for first, molecule_name, count in self._ordered_residue_run_records(
                 structure, molecule_res, excluded_indices=nucleic_indices
             ):
-                molecule_type = external_molecule_types.get(
-                    molecule_name, molecule_name
-                )
+                molecule_type = external_molecule_types.get(molecule_name, molecule_name)
                 molecule_records.append((first, molecule_type, count))
 
             if water_res:
                 water_atoms: dict[tuple[str, int, str], int] = {}
-                for index, (name, resid) in enumerate(
-                    zip(structure.resnames, structure.resids)
-                ):
+                for index, (name, resid) in enumerate(zip(structure.resnames, structure.resids)):
                     if name not in water_res:
                         continue
-                    chain = (
-                        structure.chain_ids[index]
-                        if index < len(structure.chain_ids) else ""
-                    )
+                    chain = structure.chain_ids[index] if index < len(structure.chain_ids) else ""
                     key = (str(name), int(resid), str(chain))
                     water_atoms[key] = water_atoms.get(key, 0) + 1
                 invalid_sites = [
-                    key for key, count in water_atoms.items()
-                    if count != water_model.n_atoms
+                    key for key, count in water_atoms.items() if count != water_model.n_atoms
                 ]
                 if invalid_sites:
                     name, resid, chain = invalid_sites[0]
@@ -412,23 +399,16 @@ class TopologyWriter:
                         f"SOL atom count {n_water} is not divisible by the "
                         f"{water_model_name} site count {water_model.n_atoms}"
                     )
-                water_runs = self._ordered_residue_run_records(
-                    structure, water_res
-                )
+                water_runs = self._ordered_residue_run_records(structure, water_res)
                 molecule_records.extend(
-                    (first, "SOL", count)
-                    for first, _source_name, count in water_runs
+                    (first, "SOL", count) for first, _source_name, count in water_runs
                 )
 
             # Preserve coordinate order.  Different ion species are separate
             # one-atom molecule types, so alphabetically regrouping them makes
             # GROMACS assign (for example) CL parameters to an NA coordinate.
-            molecule_records.extend(
-                self._ordered_residue_run_records(structure, ion_res)
-            )
-            for _first, molecule_type, count in sorted(
-                molecule_records, key=lambda item: item[0]
-            ):
+            molecule_records.extend(self._ordered_residue_run_records(structure, ion_res))
+            for _first, molecule_type, count in sorted(molecule_records, key=lambda item: item[0]):
                 fh.write(f"{molecule_type:<34s} {count}\n")
 
     # ------------------------------------------------------------------
@@ -466,9 +446,7 @@ class TopologyWriter:
 
         if topology is not None:
             chain_by_atom = {
-                index: chain
-                for chain, indices in chain_map.items()
-                for index in indices
+                index: chain for chain, indices in chain_map.items() for index in indices
             }
             for bond in topology.bonds:
                 first = chain_by_atom.get(int(bond.i))
@@ -490,19 +468,28 @@ class TopologyWriter:
     # Protein ITP
     # ------------------------------------------------------------------
 
-    def _write_protein_itp(self, structure: Structure, path: Path,
-                           protein_res: set[str] | None = None) -> None:
+    def _write_protein_itp(
+        self, structure: Structure, path: Path, protein_res: set[str] | None = None
+    ) -> None:
         """Write a protein ITP (legacy — use _write_protein_itp_for_indices for per-chain)."""
         if protein_res:
-            protein_indices = [i for i in range(min(structure.num_atoms, len(structure.resnames)))
-                              if structure.resnames[i] in protein_res]
+            protein_indices = [
+                i
+                for i in range(min(structure.num_atoms, len(structure.resnames)))
+                if structure.resnames[i] in protein_res
+            ]
         else:
             protein_indices = list(range(min(structure.num_atoms, len(structure.resnames))))
         self._write_protein_itp_for_indices(structure, path, protein_indices, "Protein_chain")
 
-    def _write_protein_itp_for_indices(self, structure: Structure, path: Path,
-                                       atom_indices: list[int], moltype: str = "Protein_chain",
-                                       topology: Topology | None = None) -> None:
+    def _write_protein_itp_for_indices(
+        self,
+        structure: Structure,
+        path: Path,
+        atom_indices: list[int],
+        moltype: str = "Protein_chain",
+        topology: Topology | None = None,
+    ) -> None:
         """Write a protein ITP for a specific set of atom indices (e.g. one chain).
 
         Includes [ atoms ], [ bonds ], [ angles ], [ dihedrals ], [ impropers ]
@@ -551,18 +538,12 @@ class TopologyWriter:
                 # Explicit ACE/NME residues are already complete RTP residues.
                 # Their adjacent amino acid must remain an internal residue so
                 # its -C/+N references form the cap peptide bond.
-                if (end == "N" and base_name == "ACE") or (
-                    end == "C" and base_name == "NME"
-                ):
+                if (end == "N" and base_name == "ACE") or (end == "C" and base_name == "NME"):
                     continue
-                variant_name, variant = get_terminal_residue(
-                    self.force_field, base_name, end
-                )
+                variant_name, variant = get_terminal_residue(self.force_field, base_name, end)
                 base = self._rtp.get_residue(base_name)
                 if base is None:
-                    raise TopologyError(
-                        f"RTP residue {base_name} not found in {self.force_field}"
-                    )
+                    raise TopologyError(f"RTP residue {base_name} not found in {self.force_field}")
                 base_atoms = {atom[0] for atom in base["atoms"]}
                 variant_atoms = {atom[0] for atom in variant["atoms"]}
                 added = variant_atoms - base_atoms
@@ -593,9 +574,7 @@ class TopologyWriter:
                 atype = at.name
                 charge = at.charge
             else:
-                raise TopologyError(
-                    f"No {self.force_field} RTP atom type for {template_rn}:{an}"
-                )
+                raise TopologyError(f"No {self.force_field} RTP atom type for {template_rn}:{an}")
 
             seq1 = seq_idx + 1  # 1-based
             atoms_lines.append(
@@ -619,8 +598,7 @@ class TopologyWriter:
             for key, atoms in residue_atoms.items()
         }
         seq_to_structure_index = {
-            seq_idx + 1: structure_index
-            for seq_idx, structure_index in enumerate(atom_indices)
+            seq_idx + 1: structure_index for seq_idx, structure_index in enumerate(atom_indices)
         }
         connected_boundaries: set[int] = set()
         for position in range(len(residue_order) - 1):
@@ -717,9 +695,7 @@ class TopologyWriter:
         # terms alone produce a syntactically valid but physically incomplete
         # topology.
         all_bonds = sorted({tuple(sorted(bond)) for bond in all_bonds})
-        generated_angles, generated_dihedrals, all_pairs = self._generate_graph_terms(
-            all_bonds
-        )
+        generated_angles, generated_dihedrals, all_pairs = self._generate_graph_terms(all_bonds)
         all_angles = sorted(set(all_angles) | set(generated_angles))
         all_dihedrals = sorted(set(all_dihedrals) | set(generated_dihedrals))
         all_impropers = sorted(set(all_impropers))
@@ -753,19 +729,14 @@ class TopologyWriter:
                 fh.write("\n[ dihedrals ]\n")
                 fh.write("; proper dihedrals generated from the bond graph\n")
                 for i1, i2, i3, i4 in all_dihedrals:
-                    fh.write(
-                        f"{i1:6d} {i2:6d} {i3:6d} {i4:6d}    {proper_funct}\n"
-                    )
+                    fh.write(f"{i1:6d} {i2:6d} {i3:6d} {i4:6d}    {proper_funct}\n")
                 if all_impropers:
                     fh.write("; impropers declared by RTP/TDB templates\n")
                     for improper in all_impropers:
                         i1, i2, i3, i4 = improper[:4]
                         parameters = " ".join(improper[4:])
                         suffix = f" {parameters}" if parameters else ""
-                        fh.write(
-                            f"{i1:6d} {i2:6d} {i3:6d} {i4:6d}    "
-                            f"{improper_funct}{suffix}\n"
-                        )
+                        fh.write(f"{i1:6d} {i2:6d} {i3:6d} {i4:6d}    {improper_funct}{suffix}\n")
 
             if all_pairs:
                 fh.write("\n[ pairs ]\n")
@@ -785,18 +756,13 @@ class TopologyWriter:
                 atom_name = structure.atom_names[structure_index].strip()
                 element = (
                     structure.elements[structure_index].strip().upper()
-                    if structure_index < len(structure.elements) else ""
+                    if structure_index < len(structure.elements)
+                    else ""
                 )
                 if element == "H" or atom_name.upper().startswith("H"):
                     continue
-                macro = (
-                    "POSRES_FC_BB" if atom_name in backbone_names
-                    else "POSRES_FC_SC"
-                )
-                fh.write(
-                    f"{local_index:6d}    1  {macro:>16s} "
-                    f"{macro:>16s} {macro:>16s}\n"
-                )
+                macro = "POSRES_FC_BB" if atom_name in backbone_names else "POSRES_FC_SC"
+                fh.write(f"{local_index:6d}    1  {macro:>16s} {macro:>16s} {macro:>16s}\n")
             fh.write("#endif\n")
 
     # ------------------------------------------------------------------
@@ -813,28 +779,29 @@ class TopologyWriter:
             infer_lipid_orientation,
         )
 
-        phosphorus = [
-            index for index, name in enumerate(atom_names)
-            if atom_element(name) == "P"
-        ]
+        phosphorus = [index for index, name in enumerate(atom_names) if atom_element(name) == "P"]
         if phosphorus:
             marker_index = phosphorus[0]
         else:
             orientation = infer_lipid_orientation(coordinates, atom_names)
-            projections = np.asarray(coordinates)[orientation.polar_indices] @ orientation.head_from_tail
+            projections = (
+                np.asarray(coordinates)[orientation.polar_indices] @ orientation.head_from_tail
+            )
             marker_index = int(orientation.polar_indices[int(np.argmax(projections))])
         with path.open("a") as handle:
             handle.write("\n#ifdef POSRES\n")
             handle.write("[ position_restraints ]\n")
             handle.write("; atom  funct  fc_x  fc_y             fc_z\n")
-            handle.write(
-                f"{marker_index + 1:6d}    1   0.0   0.0  POSRES_FC_LIPID\n"
-            )
+            handle.write(f"{marker_index + 1:6d}    1   0.0   0.0  POSRES_FC_LIPID\n")
             handle.write("#endif\n")
 
     def _write_lipid_itp(
-        self, lipid_name: str, structure: Structure, path: Path,
-        *, apply_lipid_restraints: bool = True,
+        self,
+        lipid_name: str,
+        structure: Structure,
+        path: Path,
+        *,
+        apply_lipid_restraints: bool = True,
     ) -> None:
         from gmxbuilder.modules.forcefield.lipid_policy import (
             lipid_rtp_identity_issues,
@@ -850,16 +817,11 @@ class TopologyWriter:
         first_resid = structure.resids[first_index]
         molecule_indices = []
         for index in range(first_index, structure.num_atoms):
-            if (
-                structure.resnames[index] != lipid_name
-                or structure.resids[index] != first_resid
-            ):
+            if structure.resnames[index] != lipid_name or structure.resids[index] != first_resid:
                 break
             molecule_indices.append(index)
 
-        rtp_name, rtp_residue = lipid_rtp_template(
-            lipid_name, self.force_field
-        )
+        rtp_name, rtp_residue = lipid_rtp_template(lipid_name, self.force_field)
         if rtp_residue is None:
             if not self.force_field.lower().startswith("amber"):
                 raise TopologyError(
@@ -883,17 +845,13 @@ class TopologyWriter:
                         "exact Lipid21 topology"
                     )
                 path.write_text(lipid21_itp_path(lipid_name).read_text())
-                self._append_exact_lipid_position_restraint(
-                    path, _coordinates, atom_names
-                )
+                self._append_exact_lipid_position_restraint(path, _coordinates, atom_names)
             elif selected_lipid_ff == "gaff2":
                 from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
                 from gmxbuilder.modules.membrane.lipids import LipidRegistry
 
                 lipid = LipidRegistry.get(lipid_name)
-                template = prepare_gaff_lipid(
-                    lipid_name, lipid.smiles, lipid.charge
-                )
+                template = prepare_gaff_lipid(lipid_name, lipid.smiles, lipid.charge)
                 if coordinate_order != template.atom_names:
                     raise TopologyError(
                         f"Lipid {lipid_name} coordinate order does not match its "
@@ -904,9 +862,7 @@ class TopologyWriter:
                     path, template.coordinates, template.atom_names
                 )
             else:
-                raise TopologyError(
-                    f"Unsupported Amber lipid backend {selected_lipid_ff!r}"
-                )
+                raise TopologyError(f"Unsupported Amber lipid backend {selected_lipid_ff!r}")
             return
 
         identity_issues = lipid_rtp_identity_issues(lipid_name, self.force_field)
@@ -923,9 +879,7 @@ class TopologyWriter:
             atom_name: (atom_type, charge)
             for atom_name, atom_type, charge, _group in rtp_residue["atoms"]
         }
-        coordinate_names = {
-            structure.atom_names[index].strip() for index in molecule_indices
-        }
+        coordinate_names = {structure.atom_names[index].strip() for index in molecule_indices}
         missing_atoms = sorted(set(rtp_atoms) - coordinate_names)
         extra_atoms = sorted(coordinate_names - set(rtp_atoms))
         if missing_atoms or extra_atoms:
@@ -955,9 +909,7 @@ class TopologyWriter:
                 bonds.append((name_to_idx[atom1], name_to_idx[atom2]))
         bonds = sorted({tuple(sorted(bond)) for bond in bonds})
         if not bonds:
-            raise TopologyError(
-                f"Lipid {lipid_name} RTP template contains no usable bonds"
-            )
+            raise TopologyError(f"Lipid {lipid_name} RTP template contains no usable bonds")
         graph_bonds = [(left + 1, right + 1) for left, right in bonds]
         angles, dihedrals, pairs = self._generate_graph_terms(graph_bonds)
         angle_funct, proper_funct, improper_funct = self._bonded_function_types()
@@ -966,8 +918,7 @@ class TopologyWriter:
             atom_names = improper[:4]
             if all(name in name_to_idx for name in atom_names):
                 impropers.append(
-                    tuple(name_to_idx[name] + 1 for name in atom_names)
-                    + tuple(improper[4:])
+                    tuple(name_to_idx[name] + 1 for name in atom_names) + tuple(improper[4:])
                 )
 
         # Protect native cis lipid double bonds during early equilibration.
@@ -981,26 +932,27 @@ class TopologyWriter:
                 adjacency[right].add(left)
         cis_dihedrals: list[tuple[int, int, int, int]] = []
         for left, right in rtp_residue.get("bonds", []):
-            if (
-                atom_type_by_name.get(left) != "CEL1"
-                or atom_type_by_name.get(right) != "CEL1"
-            ):
+            if atom_type_by_name.get(left) != "CEL1" or atom_type_by_name.get(right) != "CEL1":
                 continue
             left_outer = sorted(
-                name for name in adjacency[left] - {right}
+                name
+                for name in adjacency[left] - {right}
                 if atom_type_by_name.get(name, "").startswith("C")
             )
             right_outer = sorted(
-                name for name in adjacency[right] - {left}
+                name
+                for name in adjacency[right] - {left}
                 if atom_type_by_name.get(name, "").startswith("C")
             )
             if left_outer and right_outer:
-                cis_dihedrals.append((
-                    name_to_idx[left_outer[0]] + 1,
-                    name_to_idx[left] + 1,
-                    name_to_idx[right] + 1,
-                    name_to_idx[right_outer[0]] + 1,
-                ))
+                cis_dihedrals.append(
+                    (
+                        name_to_idx[left_outer[0]] + 1,
+                        name_to_idx[left] + 1,
+                        name_to_idx[right] + 1,
+                        name_to_idx[right_outer[0]] + 1,
+                    )
+                )
 
         with open(path, "w") as fh:
             fh.write(f"; {lipid_name} topology — GMXBUILDER\n\n")
@@ -1009,7 +961,9 @@ class TopologyWriter:
             fh.write(";   nr  type  resnr residue  atom  cgnr  charge\n")
 
             for i, (an, atype, charge) in enumerate(lipid_atom_list):
-                fh.write(f"{i+1:6d} {atype:>6s} {1:6d} {lipid_name:>6s} {an:>6s} {i+1:6d}  {charge:10.6f}\n")
+                fh.write(
+                    f"{i + 1:6d} {atype:>6s} {1:6d} {lipid_name:>6s} {an:>6s} {i + 1:6d}  {charge:10.6f}\n"
+                )
 
             if bonds:
                 fh.write("\n[ bonds ]\n")
@@ -1019,29 +973,23 @@ class TopologyWriter:
                     # supported CHARMM lipid must resolve every bond against
                     # the selected force field's exact [ bondtypes ] table;
                     # grompp then fails explicitly if a parameter is absent.
-                    fh.write(f"{bi+1:6d} {bj+1:6d}    1\n")
+                    fh.write(f"{bi + 1:6d} {bj + 1:6d}    1\n")
 
             if angles:
                 fh.write("\n[ angles ]\n")
                 for atom1, atom2, atom3 in angles:
-                    fh.write(
-                        f"{atom1:6d} {atom2:6d} {atom3:6d}    {angle_funct}\n"
-                    )
+                    fh.write(f"{atom1:6d} {atom2:6d} {atom3:6d}    {angle_funct}\n")
 
             if dihedrals or impropers:
                 fh.write("\n[ dihedrals ]\n")
                 for atom1, atom2, atom3, atom4 in dihedrals:
-                    fh.write(
-                        f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    "
-                        f"{proper_funct}\n"
-                    )
+                    fh.write(f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    {proper_funct}\n")
                 for improper in impropers:
                     atom1, atom2, atom3, atom4 = improper[:4]
                     parameters = " ".join(improper[4:])
                     suffix = f" {parameters}" if parameters else ""
                     fh.write(
-                        f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    "
-                        f"{improper_funct}{suffix}\n"
+                        f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    {improper_funct}{suffix}\n"
                     )
 
             if pairs:
@@ -1054,22 +1002,19 @@ class TopologyWriter:
             # preferred phospholipid marker; O3 is used for sterols.
             if apply_lipid_restraints:
                 marker_indices = [
-                    name_to_idx[name] + 1 for name in ("P", "O3")
-                    if name in name_to_idx
+                    name_to_idx[name] + 1 for name in ("P", "O3") if name in name_to_idx
                 ]
                 if not marker_indices:
                     marker_indices = [
-                        index + 1 for index, (name, _atype, _charge)
-                        in enumerate(lipid_atom_list)
+                        index + 1
+                        for index, (name, _atype, _charge) in enumerate(lipid_atom_list)
                         if name.upper().startswith(("O", "N", "P", "S"))
                     ]
                 fh.write("\n#ifdef POSRES\n")
                 fh.write("[ position_restraints ]\n")
                 fh.write("; atom  funct  fc_x  fc_y             fc_z\n")
                 for atom_index in marker_indices:
-                    fh.write(
-                        f"{atom_index:6d}    1   0.0   0.0  POSRES_FC_LIPID\n"
-                    )
+                    fh.write(f"{atom_index:6d}    1   0.0   0.0  POSRES_FC_LIPID\n")
                 fh.write("#endif\n")
 
             if apply_lipid_restraints and cis_dihedrals:
@@ -1078,8 +1023,7 @@ class TopologyWriter:
                 fh.write(";   ai    aj    ak    al  type  phi  dphi  kfac\n")
                 for atom1, atom2, atom3, atom4 in cis_dihedrals:
                     fh.write(
-                        f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d} "
-                        "   1  0.0  0.0  DIHRES_FC\n"
+                        f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    1  0.0  0.0  DIHRES_FC\n"
                     )
                 fh.write("#endif\n")
 
@@ -1100,11 +1044,13 @@ class TopologyWriter:
         src = self._ff_path
         if not src.is_dir():
             import warnings
+
             warnings.warn(f"Force field directory not found: {src} — topology may be incomplete")
             return
 
         output_dir.mkdir(parents=True, exist_ok=True)
         import shutil
+
         # Only copy files needed at runtime — skip docs, archives, and build artifacts
         _NEEDED_SUFFIXES = {".itp", ".rtp", ".atp", ".hdb", ".tdb", ".arn", ".r2b"}
         for f in src.iterdir():

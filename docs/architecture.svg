@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">GMXBUILDER workflow architecture</title>
+  <desc id="desc">Independent atomistic and Martini workflows converge on validated GROMACS packages.</desc>
+  <defs>
+    <style>
+      .box{fill:#f7fbff;stroke:#245b8f;stroke-width:3;rx:14}
+      .gate{fill:#fff8e8;stroke:#b77800;stroke-width:3;rx:14}
+      .out{fill:#eef9f0;stroke:#287a3e;stroke-width:3;rx:14}
+      .t{font:600 21px sans-serif;fill:#142536;text-anchor:middle}
+      .s{font:16px sans-serif;fill:#33485c;text-anchor:middle}
+      .a{stroke:#4b6072;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#4b6072"/></marker>
+  </defs>
+  <rect width="1200" height="560" fill="white"/>
+  <text x="600" y="42" class="t" style="font-size:28px">GMXBUILDER independent workflow architecture</text>
+  <rect x="45" y="90" width="245" height="105" class="box"/>
+  <text x="168" y="130" class="t">Atomistic bilayer</text><text x="168" y="163" class="s">protein + membrane</text>
+  <rect x="45" y="230" width="245" height="105" class="box"/>
+  <text x="168" y="270" class="t">Atomistic solution</text><text x="168" y="303" class="s">protein / nucleic acid / ligand</text>
+  <rect x="45" y="370" width="245" height="105" class="box"/>
+  <text x="168" y="410" class="t">Pure membrane</text><text x="168" y="443" class="s">optional solvent and ions</text>
+  <rect x="365" y="125" width="245" height="105" class="box"/>
+  <text x="488" y="165" class="t">Martini 3 bilayer</text><text x="488" y="198" class="s">CG protein + membrane</text>
+  <rect x="365" y="335" width="245" height="105" class="box"/>
+  <text x="488" y="375" class="t">Martini 3 solution</text><text x="488" y="408" class="s">CG soluble system</text>
+  <rect x="690" y="165" width="215" height="230" class="gate"/>
+  <text x="798" y="210" class="t">Scientific gates</text>
+  <text x="798" y="250" class="s">identity + compatibility</text>
+  <text x="798" y="282" class="s">geometry + orientation</text>
+  <text x="798" y="314" class="s">topology + charge</text>
+  <text x="798" y="346" class="s">box + periodicity</text>
+  <text x="798" y="378" class="s">GROMACS validation</text>
+  <rect x="985" y="205" width="175" height="150" class="out"/>
+  <text x="1073" y="247" class="t">Export</text>
+  <text x="1073" y="283" class="s">coordinates + topology</text>
+  <text x="1073" y="313" class="s">MDP + run script</text>
+  <text x="1073" y="343" class="s">manifest + citations</text>
+  <path d="M290 143 C320 143 320 75 640 75 C680 75 675 190 690 220" class="a"/><path d="M290 283 L690 283" class="a"/><path d="M290 423 C320 423 320 490 640 490 C680 490 675 355 690 340" class="a"/>
+  <path d="M610 178 C650 178 655 205 690 220" class="a"/><path d="M610 388 C650 388 655 355 690 340" class="a"/><path d="M905 280 L985 280" class="a"/>
+  <text x="600" y="525" class="s">Supported workflows apply explicit scientific checks before producing a traceable simulation package.</text>
+</svg>

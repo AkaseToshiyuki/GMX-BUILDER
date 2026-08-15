@@ -29,11 +29,14 @@ logger = logging.getLogger(__name__)
 
 def _serialized_task_operation(method):
     """Keep every checkpoint-changing operation for one task strictly serial."""
+
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         with self._operation_lock:
             return method(self, *args, **kwargs)
+
     return wrapped
+
 
 # ---------------------------------------------------------------------------
 # Step definitions for each pipeline
@@ -109,15 +112,18 @@ MARTINI_SOLVENT_STEPS = [
     "export",
 ]
 
-MARTINI_PIPELINES = frozenset({
-    "martini3-bilayer",
-    "martini3-solvent",
-})
+MARTINI_PIPELINES = frozenset(
+    {
+        "martini3-bilayer",
+        "martini3-solvent",
+    }
+)
 
 
 def is_martini_pipeline(pipeline_type: str) -> bool:
     """Return whether *pipeline_type* uses the Martini 3 step contract."""
     return pipeline_type in MARTINI_PIPELINES
+
 
 # ---------------------------------------------------------------------------
 # Module factory — returns the BaseModule instance for a given step name
@@ -150,6 +156,7 @@ def _get_module(step_name: str, pipeline_type: str) -> BaseModule:
                 SolutionStructureProcessor,
                 SolutionTopologyAssigner,
             )
+
             solution_modules = {
                 "input": SolutionInputModule,
                 "forcefield": SolutionForceFieldSelector,
@@ -173,6 +180,7 @@ def _get_module(step_name: str, pipeline_type: str) -> BaseModule:
                 PureMembraneSolvationBuilder,
                 PureMembraneTopologyAssigner,
             )
+
             pure_modules = {
                 "forcefield": PureMembraneForceFieldSelector,
                 "membrane": PureMembraneBuilder,
@@ -188,30 +196,39 @@ def _get_module(step_name: str, pipeline_type: str) -> BaseModule:
             return _MODULE_CACHE[cache_key]
         if step_name == "input":
             from gmxbuilder.modules.input.pdb_input import PDBInputModule
+
             _MODULE_CACHE[cache_key] = PDBInputModule()
         elif step_name == "orient":
             from gmxbuilder.modules.membrane.orient_module import OrientModule
+
             _MODULE_CACHE[cache_key] = OrientModule()
         elif step_name == "structure":
             from gmxbuilder.modules.modifications.processor import StructureProcessor
+
             _MODULE_CACHE[cache_key] = StructureProcessor()
         elif step_name == "membrane":
             from gmxbuilder.modules.membrane.builder import MembraneBuilder
+
             _MODULE_CACHE[cache_key] = MembraneBuilder()
         elif step_name == "solvation":
             from gmxbuilder.modules.solvation.solvate import SolvationBuilder
+
             _MODULE_CACHE[cache_key] = SolvationBuilder()
         elif step_name == "ions":
             from gmxbuilder.modules.ions.add_ions import IonBuilder
+
             _MODULE_CACHE[cache_key] = IonBuilder()
         elif step_name == "forcefield":
             from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+
             _MODULE_CACHE[cache_key] = ForceFieldSelector()
         elif step_name == "topology":
             from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
+
             _MODULE_CACHE[cache_key] = ForceFieldAssigner()
         elif step_name == "export":
             from gmxbuilder.modules.export.exporter import ExportModule
+
             _MODULE_CACHE[cache_key] = ExportModule()
         else:
             raise KeyError(f"Unknown step: {step_name}")
@@ -239,6 +256,7 @@ def get_pipeline_steps(pipeline_type: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Step runner
 # ---------------------------------------------------------------------------
+
 
 class StepRunner:
     """Execute one pipeline step: load checkpoint → run module → save checkpoint."""
@@ -362,9 +380,13 @@ class StepRunner:
         else:
             prev_dir = self.prev_step_dir(step_name)
             if prev_dir is None or not prev_dir.exists():
-                prev_name = get_pipeline_steps(self.pipeline_type)[
-                    get_pipeline_steps(self.pipeline_type).index(step_name) - 1
-                ] if step_name in get_pipeline_steps(self.pipeline_type) else "previous"
+                prev_name = (
+                    get_pipeline_steps(self.pipeline_type)[
+                        get_pipeline_steps(self.pipeline_type).index(step_name) - 1
+                    ]
+                    if step_name in get_pipeline_steps(self.pipeline_type)
+                    else "previous"
+                )
                 return {
                     "status": "error",
                     "step": step_name,
@@ -378,9 +400,10 @@ class StepRunner:
             except (OSError, KeyError, ValueError) as exc:
                 logger.error("Failed to load checkpoint from %s: %s", prev_dir, exc)
                 return {
-                    "status": "error", "step": step_name,
+                    "status": "error",
+                    "step": step_name,
                     "error": f"Failed to load checkpoint: {exc}",
-            }
+                }
 
         # ---- 2. Inject config needed by the module ----
         # Always shallow-copy to avoid mutating the caller's config dict
@@ -408,21 +431,26 @@ class StepRunner:
         try:
             module.validate_config(config)
         except Exception as exc:
-            return {"status": "error", "step": step_name,
-                    "error": f"Config validation failed: {exc}"}
+            return {
+                "status": "error",
+                "step": step_name,
+                "error": f"Config validation failed: {exc}",
+            }
 
         try:
             result: ModuleResult = module.execute(system, config)
         except ModuleConfigError as exc:
             logger.warning("Step %s rejected invalid configuration: %s", step_name, exc)
             return {
-                "status": "error", "step": step_name,
+                "status": "error",
+                "step": step_name,
                 "error": str(exc),
             }
         except Exception as exc:
             logger.exception("Unhandled failure while running step %s", step_name)
             return {
-                "status": "error", "step": step_name,
+                "status": "error",
+                "step": step_name,
                 "error": f"Step execution failed: {exc}",
             }
         if not result.success:
@@ -443,7 +471,8 @@ class StepRunner:
         except OSError as exc:
             logger.error("Failed to invalidate downstream checkpoints: %s", exc)
             return {
-                "status": "error", "step": step_name,
+                "status": "error",
+                "step": step_name,
                 "error": f"Could not invalidate stale downstream checkpoints: {exc}",
             }
 
@@ -474,7 +503,12 @@ class StepRunner:
         # ---- 5. Write viewer PDB ----
         viewer_path = out_dir / "viewer.pdb"
         try:
-            system.write_viewer_pdb(viewer_path)
+            if is_martini_pipeline(self.pipeline_type):
+                from gmxbuilder.modules.coarse_grained.common import write_cg_viewer_pdb
+
+                write_cg_viewer_pdb(system, viewer_path, task_dir=self.task_dir)
+            else:
+                system.write_viewer_pdb(viewer_path)
         except Exception:
             pass  # Non-critical — frontend falls back to previous viewer
 
@@ -555,11 +589,10 @@ class StepRunner:
             or tuple(system.structure.resnames) != source_resnames
             or tuple(int(value) for value in system.structure.resids) != source_resids
         ):
-            raise RuntimeError(
-                "Topology assignment changed confirmed coordinates or atom ordering"
-            )
+            raise RuntimeError("Topology assignment changed confirmed coordinates or atom ordering")
         if is_martini_pipeline(self.pipeline_type):
             from gmxbuilder.modules.coarse_grained.assets import validate_toolchain
+
             gromacs_compatibility = {
                 "compatible": True,
                 "model": "Martini 3",
@@ -567,6 +600,7 @@ class StepRunner:
             }
         else:
             from gmxbuilder.modules.forcefield.catalog import validate_local_gromacs
+
             gromacs_compatibility = validate_local_gromacs(
                 str(system.metadata.get("force_field", "amber14sb"))
             )
@@ -579,9 +613,7 @@ class StepRunner:
         shutil.rmtree(export_dir, ignore_errors=True)
         export_cfg = dict(export_config or {})
         export_cfg["output_dir"] = str(export_dir)
-        export_cfg.setdefault(
-            "system_name", system.metadata.get("system_name", "system")
-        )
+        export_cfg.setdefault("system_name", system.metadata.get("system_name", "system"))
         export_module = _get_module("export", self.pipeline_type)
         export_module.validate_config(export_cfg)
         export_result = export_module.execute(system, export_cfg)
@@ -601,9 +633,7 @@ class StepRunner:
                 "Export integrity check failed: GRO atom count differs from the "
                 "confirmed checkpoint"
             )
-        if not np.allclose(
-            exported.coordinates, source_coordinates, rtol=0.0, atol=5.1e-4
-        ):
+        if not np.allclose(exported.coordinates, source_coordinates, rtol=0.0, atol=5.1e-4):
             raise RuntimeError(
                 "Export integrity check failed: GRO coordinates differ from the "
                 "confirmed checkpoint beyond GRO rounding precision"
@@ -632,8 +662,7 @@ class StepRunner:
                 )
 
             mdp_files = sorted(
-                name for name in members
-                if name.startswith("mdp/") and name.endswith(".mdp")
+                name for name in members if name.startswith("mdp/") and name.endswith(".mdp")
             )
             write_mdp = export_cfg.get("write_mdp", True) is not False
             has_run_script = "run_md.sh" in members
@@ -643,9 +672,7 @@ class StepRunner:
                     missing_simulation.append("run_md.sh")
                 if "mdp/mini.mdp" not in members:
                     missing_simulation.append("mdp/mini.mdp")
-                if not any(
-                    name.startswith("mdp/production") for name in mdp_files
-                ):
+                if not any(name.startswith("mdp/production") for name in mdp_files):
                     missing_simulation.append("mdp/production*.mdp")
                 if missing_simulation:
                     raise RuntimeError(
@@ -655,8 +682,7 @@ class StepRunner:
                 run_info = archive.getinfo("run_md.sh")
                 if not ((run_info.external_attr >> 16) & 0o111):
                     raise RuntimeError(
-                        "Simulation-ready package contract failed; run_md.sh "
-                        "is not executable"
+                        "Simulation-ready package contract failed; run_md.sh is not executable"
                     )
             elif has_run_script or mdp_files:
                 raise RuntimeError(
@@ -674,7 +700,7 @@ class StepRunner:
             f"Package manifest verified: run_md.sh + {len(mdp_files)} MDP files"
             if write_mdp
             else "Dry package manifest verified: coordinates and topology only; "
-                 "solvation was disabled, so no launcher or MDP files were included"
+            "solvation was disabled, so no launcher or MDP files were included"
         )
 
         return {
@@ -695,7 +721,7 @@ class StepRunner:
                 + [
                     package_message,
                     "Export integrity check passed: atom count, coordinates, and box "
-                    "match the confirmed checkpoint"
+                    "match the confirmed checkpoint",
                 ]
             ),
         }
@@ -704,6 +730,7 @@ class StepRunner:
 # ---------------------------------------------------------------------------
 # Metrics helpers
 # ---------------------------------------------------------------------------
+
 
 def _compute_step_metrics(system: System, step_name: str) -> dict:
     """Compute frontend-relevant metrics for this step."""
@@ -738,13 +765,16 @@ def _compute_step_metrics(system: System, step_name: str) -> dict:
         metrics["cg_mapping"] = system.metadata.get("cg_mapping", {})
 
     if step_name == "input":
-        metrics["input_repair"] = system.metadata.get("input_repair", {
-            "status": "not_needed",
-            "residues_repaired": 0,
-            "atoms_added": 0,
-            "residues": [],
-            "validation": "No missing standard protein heavy atoms detected.",
-        })
+        metrics["input_repair"] = system.metadata.get(
+            "input_repair",
+            {
+                "status": "not_needed",
+                "residues_repaired": 0,
+                "atoms_added": 0,
+                "residues": [],
+                "validation": "No missing standard protein heavy atoms detected.",
+            },
+        )
         metrics["input_modifications"] = system.metadata.get(
             "input_modifications",
             {"detected": 0, "recognized": 0, "records": [], "warnings": []},
@@ -765,11 +795,13 @@ def _compute_step_metrics(system: System, step_name: str) -> dict:
             if key in seen_residues:
                 continue
             seen_residues.add(key)
-            chains.setdefault(chain, []).append({
-                "resname": str(system.structure.resnames[index]).strip().upper(),
-                "resid": resid,
-                "is_protein": True,
-            })
+            chains.setdefault(chain, []).append(
+                {
+                    "resname": str(system.structure.resnames[index]).strip().upper(),
+                    "resid": resid,
+                    "is_protein": True,
+                }
+            )
         metrics["input_sequences"] = [
             {"chain_id": chain, "length": len(residues), "residues": residues}
             for chain, residues in chains.items()
@@ -780,9 +812,7 @@ def _compute_step_metrics(system: System, step_name: str) -> dict:
                 "chain_id": component.metadata.get("chain_id", ""),
                 "polymer_type": component.metadata.get("polymer_type", "unknown"),
                 "n_residues": component.metadata.get("n_residues", 0),
-                "unsupported_residues": component.metadata.get(
-                    "unsupported_residues", []
-                ),
+                "unsupported_residues": component.metadata.get("unsupported_residues", []),
             }
             for component in system.component_by_kind(ComponentKind.NUCLEIC_ACID)
         ]
@@ -804,16 +834,19 @@ def _compute_step_metrics(system: System, step_name: str) -> dict:
         }
 
     if step_name == "structure":
-        metrics["modification_geometry"] = system.metadata.get(
-            "modification_geometry", []
-        )
+        metrics["modification_geometry"] = system.metadata.get("modification_geometry", [])
         metrics["crosslinks"] = system.metadata.get("crosslinks", [])
         metrics["nucleic_acids"] = [
             {
                 key: record.get(key)
                 for key in (
-                    "molecule_type", "polymer_type", "chain_id", "net_charge",
-                    "atom_count", "residue_count", "backend",
+                    "molecule_type",
+                    "polymer_type",
+                    "chain_id",
+                    "net_charge",
+                    "atom_count",
+                    "residue_count",
+                    "backend",
                 )
             }
             for record in system.metadata.get("native_nucleic_topologies", [])
@@ -822,8 +855,6 @@ def _compute_step_metrics(system: System, step_name: str) -> dict:
     if step_name == "orient":
         metrics["orientation"] = system.metadata.get("_orient_params", {})
         metrics["orientation_method"] = system.metadata.get("_orientation_method")
-        metrics["orientation_quality"] = system.metadata.get(
-            "_orientation_quality", {}
-        )
+        metrics["orientation_quality"] = system.metadata.get("_orientation_quality", {})
 
     return metrics

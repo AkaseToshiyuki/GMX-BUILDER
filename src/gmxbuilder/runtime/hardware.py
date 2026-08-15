@@ -166,7 +166,8 @@ def _cuda_device_count() -> tuple[bool, int, str | None]:
 
 
 def probe_gromacs_gpu(
-    executable: str, device_id: int = 0,
+    executable: str,
+    device_id: int = 0,
 ) -> tuple[bool, str | None]:
     """Run one real short-range GPU step with a temporary argon box."""
     try:
@@ -178,8 +179,7 @@ def probe_gromacs_gpu(
                 for y in (0.6, 1.2, 1.8, 2.4):
                     for x in (0.6, 1.2, 1.8, 2.4):
                         coordinates.append(
-                            f"{1:5d}{'ARG':<5}{'AR':>5}{serial:5d}"
-                            f"{x:8.3f}{y:8.3f}{z:8.3f}"
+                            f"{1:5d}{'ARG':<5}{'AR':>5}{serial:5d}{x:8.3f}{y:8.3f}{z:8.3f}"
                         )
                         serial += 1
             (work / "probe.gro").write_text(
@@ -207,22 +207,57 @@ def probe_gromacs_gpu(
             )
             grompp = subprocess.run(
                 [
-                    executable, "grompp", "-f", "probe.mdp", "-c", "probe.gro",
-                    "-p", "probe.top", "-o", "probe.tpr", "-maxwarn", "1",
+                    executable,
+                    "grompp",
+                    "-f",
+                    "probe.mdp",
+                    "-c",
+                    "probe.gro",
+                    "-p",
+                    "probe.top",
+                    "-o",
+                    "probe.tpr",
+                    "-maxwarn",
+                    "1",
                 ],
-                cwd=work, capture_output=True, text=True, timeout=30, check=False,
+                cwd=work,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
             )
             if grompp.returncode != 0:
                 detail = (grompp.stdout + "\n" + grompp.stderr)[-1200:]
                 return False, f"GROMACS GPU probe input failed: {detail}"
             mdrun = subprocess.run(
                 [
-                    executable, "mdrun", "-s", "probe.tpr", "-deffnm", "probe",
-                    "-ntmpi", "1", "-ntomp", "1", "-nb", "gpu", "-pme", "cpu",
-                    "-bonded", "cpu", "-update", "cpu",
-                    "-gpu_id", str(int(device_id)), "-noconfout",
+                    executable,
+                    "mdrun",
+                    "-s",
+                    "probe.tpr",
+                    "-deffnm",
+                    "probe",
+                    "-ntmpi",
+                    "1",
+                    "-ntomp",
+                    "1",
+                    "-nb",
+                    "gpu",
+                    "-pme",
+                    "cpu",
+                    "-bonded",
+                    "cpu",
+                    "-update",
+                    "cpu",
+                    "-gpu_id",
+                    str(int(device_id)),
+                    "-noconfout",
                 ],
-                cwd=work, capture_output=True, text=True, timeout=45, check=False,
+                cwd=work,
+                capture_output=True,
+                text=True,
+                timeout=45,
+                check=False,
             )
             output = mdrun.stdout + "\n" + mdrun.stderr
             if mdrun.returncode != 0:
@@ -312,9 +347,7 @@ def configure_runtime_resources(
         os.sched_setaffinity(0, set(selected_cpu_ids))
 
     requested_task_threads = _positive_int(
-        task_threads
-        if task_threads is not None
-        else os.environ.get("GMXBUILDER_TASK_THREADS"),
+        task_threads if task_threads is not None else os.environ.get("GMXBUILDER_TASK_THREADS"),
         "Per-task thread count",
     )
     selected_task_threads = requested_task_threads or _default_task_threads(
@@ -331,9 +364,7 @@ def configure_runtime_resources(
     version, gpu_backend = _gromacs_build_info(executable)
     cuda_usable, visible_gpus, cuda_warning = _cuda_device_count()
     try:
-        detected_gpus = max(
-            0, int(os.environ.get("GMXBUILDER_DETECTED_GPU_COUNT", visible_gpus))
-        )
+        detected_gpus = max(0, int(os.environ.get("GMXBUILDER_DETECTED_GPU_COUNT", visible_gpus)))
     except ValueError:
         detected_gpus = visible_gpus
     gpu_compiled = bool(
@@ -395,9 +426,7 @@ def configure_runtime_resources(
     os.environ["GMXBUILDER_DETECTED_GPU_COUNT"] = str(detected_gpus)
     os.environ["GMXBUILDER_CPU_IDS"] = ",".join(map(str, selected_cpu_ids))
     os.environ["GMXBUILDER_GPU_COUNT"] = str(selected_gpu_count)
-    os.environ["GMXBUILDER_GPU_IDS"] = ",".join(
-        str(index) for index in range(selected_gpu_count)
-    )
+    os.environ["GMXBUILDER_GPU_IDS"] = ",".join(str(index) for index in range(selected_gpu_count))
     lipid_concurrency = min(2, selected_gpu_count) if selected_gpu_count else 1
     os.environ.setdefault(
         "GMXBUILDER_LIPID_THREADS",
@@ -476,7 +505,7 @@ def configured_cpu_ids() -> tuple[int, ...]:
     if raw.strip():
         return tuple(int(value) for value in raw.split(",") if value.strip())
     cpu_ids = available_cpu_ids()
-    return cpu_ids[:configured_cpu_cores()]
+    return cpu_ids[: configured_cpu_cores()]
 
 
 def configured_gpu_ids() -> tuple[int, ...]:
@@ -487,8 +516,7 @@ def configured_gpu_ids() -> tuple[int, ...]:
 def configured_gpu_devices() -> tuple[str, ...]:
     raw = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     return tuple(
-        value.strip() for value in raw.split(",")
-        if value.strip() and value.strip() != "-1"
+        value.strip() for value in raw.split(",") if value.strip() and value.strip() != "-1"
     )
 
 
@@ -508,14 +536,20 @@ def normalize_simulation_hardware(config: object | None) -> dict[str, object]:
     if not isinstance(raw, dict):
         raise ValueError("simulation hardware settings must be an object")
     allowed = {
-        "mode", "cpu_threads", "mpi_ranks", "gpu_count", "gpu_ids", "use_gpu",
-        "gmx_command", "mpi_launcher", "pin", "omp_threads",
+        "mode",
+        "cpu_threads",
+        "mpi_ranks",
+        "gpu_count",
+        "gpu_ids",
+        "use_gpu",
+        "gmx_command",
+        "mpi_launcher",
+        "pin",
+        "omp_threads",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
-        raise ValueError(
-            "unknown simulation hardware setting(s): " + ", ".join(unknown)
-        )
+        raise ValueError("unknown simulation hardware setting(s): " + ", ".join(unknown))
 
     mode = str(raw.get("mode", "thread-mpi")).strip().lower()
     if mode not in {"thread-mpi", "external-mpi"}:
@@ -532,13 +566,9 @@ def normalize_simulation_hardware(config: object | None) -> dict[str, object]:
         )
     derived_omp_threads = cpu_threads // mpi_ranks
     if "omp_threads" in raw:
-        omp_threads = _positive_int(
-            raw["omp_threads"], "Simulation OpenMP thread count"
-        )
+        omp_threads = _positive_int(raw["omp_threads"], "Simulation OpenMP thread count")
         if omp_threads != derived_omp_threads:
-            raise ValueError(
-                "simulation omp_threads must equal cpu_threads divided by mpi_ranks"
-            )
+            raise ValueError("simulation omp_threads must equal cpu_threads divided by mpi_ranks")
 
     use_gpu = raw.get("use_gpu", False)
     if not isinstance(use_gpu, bool):
@@ -547,9 +577,7 @@ def normalize_simulation_hardware(config: object | None) -> dict[str, object]:
     if isinstance(gpu_value, list):
         gpu_tokens = [str(value).strip() for value in gpu_value]
     else:
-        gpu_tokens = [
-            value.strip() for value in str(gpu_value).split(",") if value.strip()
-        ]
+        gpu_tokens = [value.strip() for value in str(gpu_value).split(",") if value.strip()]
     if any(not token.isdigit() for token in gpu_tokens):
         raise ValueError("simulation GPU IDs must be non-negative integers")
     gpu_ids = [int(token) for token in gpu_tokens]
@@ -558,16 +586,12 @@ def normalize_simulation_hardware(config: object | None) -> dict[str, object]:
     if use_gpu and not gpu_ids:
         raise ValueError("select at least one GPU ID when GPU execution is enabled")
     if use_gpu:
-        gpu_count = _positive_int(
-            raw.get("gpu_count", len(gpu_ids)), "Simulation GPU count"
-        )
+        gpu_count = _positive_int(raw.get("gpu_count", len(gpu_ids)), "Simulation GPU count")
         assert gpu_count is not None
         if gpu_count > 256:
             raise ValueError("simulation GPU count must not exceed 256")
         if gpu_count != len(gpu_ids):
-            raise ValueError(
-                "simulation gpu_count must equal the number of selected GPU IDs"
-            )
+            raise ValueError("simulation gpu_count must equal the number of selected GPU IDs")
         if gpu_count > mpi_ranks:
             raise ValueError(
                 "simulation MPI rank count must be at least the selected GPU count; "
@@ -586,8 +610,7 @@ def normalize_simulation_hardware(config: object | None) -> dict[str, object]:
     gmx_command = str(raw.get("gmx_command", default_command)).strip()
     if not gmx_command or not _COMMAND_TOKEN.fullmatch(gmx_command):
         raise ValueError(
-            "simulation GROMACS command must be one executable name or path "
-            "without shell syntax"
+            "simulation GROMACS command must be one executable name or path without shell syntax"
         )
     mpi_launcher = str(raw.get("mpi_launcher", "mpirun")).strip().lower()
     if mpi_launcher not in {"mpirun", "mpiexec", "srun"}:

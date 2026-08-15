@@ -46,21 +46,15 @@ def relax_interleaflet_clashes_xy(
     from scipy.spatial import cKDTree
 
     z_origin = min(float(upper[:, 2].min()), float(lower[:, 2].min())) - 1.0
-    z_box = (
-        max(float(upper[:, 2].max()), float(lower[:, 2].max()))
-        - z_origin
-        + 1.0
-    )
+    z_box = max(float(upper[:, 2].max()), float(lower[:, 2].max())) - z_origin + 1.0
     upper_search = upper.copy()
     if box_xy is not None:
         upper_search[:, :2] = wrap_periodic_coordinates(
-            upper_search[:, :2], box_xy,
+            upper_search[:, :2],
+            box_xy,
         )
     upper_search[:, 2] -= z_origin
-    tree_options = (
-        {"boxsize": np.asarray([box_xy, box_xy, z_box])}
-        if box_xy is not None else {}
-    )
+    tree_options = {"boxsize": np.asarray([box_xy, box_xy, z_box])} if box_xy is not None else {}
     tree = cKDTree(upper_search, **tree_options)
 
     # The established arguments retain their meaning as search controls, so
@@ -76,13 +70,12 @@ def relax_interleaflet_clashes_xy(
             candidate[:, :2] += np.asarray([shift_x, shift_y])
             if box_xy is not None:
                 candidate[:, :2] = wrap_periodic_coordinates(
-                    candidate[:, :2], box_xy,
+                    candidate[:, :2],
+                    box_xy,
                 )
             candidate[:, 2] -= z_origin
             nearest = tree.query(candidate, k=1)[0]
-            score = tuple(
-                float(value) for value in np.percentile(nearest, [0.0, 0.1, 1.0])
-            )
+            score = tuple(float(value) for value in np.percentile(nearest, [0.0, 0.1, 1.0]))
             if best_score is None or score > best_score:
                 best_score = score
                 best_shift[:] = (shift_x, shift_y)
@@ -128,10 +121,9 @@ def scale_lipid_centres_xy(
         if np.all(np.abs(errors) <= tolerance):
             break
 
-        lipid_centres = np.array([
-            coords[offsets[i]:offsets[i + 1], :2].mean(axis=0)
-            for i in range(len(lipid_sizes))
-        ])
+        lipid_centres = np.array(
+            [coords[offsets[i] : offsets[i + 1], :2].mean(axis=0) for i in range(len(lipid_sizes))]
+        )
         centre_spans = np.ptp(lipid_centres, axis=0)
         factors = np.ones(2, dtype=float)
         adjustable = centre_spans > tolerance
@@ -145,7 +137,7 @@ def scale_lipid_centres_xy(
         leaflet_centre = (xy_min + xy_max) / 2.0
         for i, centre in enumerate(lipid_centres):
             shift_xy = (centre - leaflet_centre) * (factors - 1.0)
-            coords[offsets[i]:offsets[i + 1], :2] += shift_xy
+            coords[offsets[i] : offsets[i + 1], :2] += shift_xy
         total_scale *= factors
 
     return coords, total_scale
@@ -157,8 +149,8 @@ def relax_lipid_clashes(
     n_lipids: int = 0,
     *,
     lipid_sizes: list[int] | None = None,
-    vdw_cutoff: float = 0.25,      # nm — lipids closer than this are "clashing"
-    displacement: float = 0.02,    # nm — push distance per iteration
+    vdw_cutoff: float = 0.25,  # nm — lipids closer than this are "clashing"
+    displacement: float = 0.02,  # nm — push distance per iteration
     n_iterations: int = 20,
     rng: np.random.Generator | None = None,
     freeze_headgroups: bool = True,
@@ -223,10 +215,12 @@ def relax_lipid_clashes(
     from scipy.spatial import cKDTree
 
     for _ in range(n_iterations):
-        centres = np.asarray([
-            coords[offsets[index]:offsets[index + 1], :2].mean(axis=0)
-            for index in range(n_lipids)
-        ])
+        centres = np.asarray(
+            [
+                coords[offsets[index] : offsets[index + 1], :2].mean(axis=0)
+                for index in range(n_lipids)
+            ]
+        )
         search_centres = centres.copy()
         tree_options = {}
         if box_xy is not None:
@@ -245,12 +239,8 @@ def relax_lipid_clashes(
         overlap = np.maximum(vdw_cutoff - distance, 0.0)
         degenerate = distance < 1e-8
         if np.any(degenerate):
-            centre_delta[degenerate] = rng.normal(
-                0.0, 1.0, (degenerate.sum(), 2)
-            )
-            distance[degenerate] = np.linalg.norm(
-                centre_delta[degenerate], axis=1
-            )
+            centre_delta[degenerate] = rng.normal(0.0, 1.0, (degenerate.sum(), 2))
+            distance[degenerate] = np.linalg.norm(centre_delta[degenerate], axis=1)
         push = centre_delta / distance[:, None] * overlap[:, None] * 0.5
         disp = np.zeros((n_lipids, 2))
         np.add.at(disp, lipid_i, push)
@@ -306,15 +296,13 @@ def rotate_lipids_away_from_clashes(
         transformed = values.copy()
         if box_xy is not None:
             transformed[:, :2] = wrap_periodic_coordinates(
-                transformed[:, :2], box_xy,
+                transformed[:, :2],
+                box_xy,
             )
         transformed[:, 2] -= z_origin
         return transformed
 
-    tree_options = (
-        {"boxsize": np.asarray([box_xy, box_xy, z_box])}
-        if box_xy is not None else {}
-    )
+    tree_options = {"boxsize": np.asarray([box_xy, box_xy, z_box])} if box_xy is not None else {}
     angles = np.linspace(0.0, 2.0 * np.pi, angle_samples, endpoint=False)[1:]
 
     for _ in range(max_rounds):
@@ -336,9 +324,7 @@ def rotate_lipids_away_from_clashes(
             molecule = coords[start:end].copy()
             centre_xy = molecule[:, :2].mean(axis=0)
             local_xy = molecule[:, :2] - centre_xy
-            current_clearance = float(
-                fixed_tree.query(_tree_coords(molecule), k=1)[0].min()
-            )
+            current_clearance = float(fixed_tree.query(_tree_coords(molecule), k=1)[0].min())
             best_clearance = current_clearance
             best_xy = molecule[:, :2]
             for angle in angles:
@@ -346,9 +332,7 @@ def rotate_lipids_away_from_clashes(
                 rotation = np.asarray([[cosine, -sine], [sine, cosine]])
                 candidate = molecule.copy()
                 candidate[:, :2] = local_xy @ rotation.T + centre_xy
-                clearance = float(
-                    fixed_tree.query(_tree_coords(candidate), k=1)[0].min()
-                )
+                clearance = float(fixed_tree.query(_tree_coords(candidate), k=1)[0].min())
                 if clearance > best_clearance:
                     best_clearance = clearance
                     best_xy = candidate[:, :2].copy()
@@ -364,9 +348,7 @@ def rotate_lipids_away_from_clashes(
     if len(pairs) == 0:
         return coords, min_distance
     distances = full_tree.sparse_distance_matrix(full_tree, min_distance).tocoo()
-    valid = (
-        distances.row < distances.col
-    ) & (owners[distances.row] != owners[distances.col])
+    valid = (distances.row < distances.col) & (owners[distances.row] != owners[distances.col])
     minimum = float(distances.data[valid].min()) if np.any(valid) else min_distance
     return coords, minimum
 
@@ -402,33 +384,27 @@ def rotate_lipids_away_from_external_clashes(
 
     offsets = np.cumsum([0] + sizes)
     z_origin = min(float(coords[:, 2].min()), float(external[:, 2].min())) - 1.0
-    z_box = (
-        max(float(coords[:, 2].max()), float(external[:, 2].max()))
-        - z_origin
-        + 1.0
-    )
+    z_box = max(float(coords[:, 2].max()), float(external[:, 2].max())) - z_origin + 1.0
 
     def tree_coords(values: np.ndarray) -> np.ndarray:
         transformed = values.copy()
         if box_xy is not None:
             transformed[:, :2] = wrap_periodic_coordinates(
-                transformed[:, :2], box_xy,
+                transformed[:, :2],
+                box_xy,
             )
         transformed[:, 2] -= z_origin
         return transformed
 
-    tree_options = (
-        {"boxsize": np.asarray([box_xy, box_xy, z_box])}
-        if box_xy is not None else {}
-    )
+    tree_options = {"boxsize": np.asarray([box_xy, box_xy, z_box])} if box_xy is not None else {}
     angles = np.linspace(0.0, 2.0 * np.pi, angle_samples, endpoint=False)[1:]
     external_tree = cKDTree(tree_coords(external), **tree_options)
 
     for _ in range(max_rounds):
         external_distances = external_tree.query(tree_coords(coords), k=1)[0]
-        offenders = np.unique(np.repeat(np.arange(len(sizes)), sizes)[
-            external_distances < min_distance
-        ])
+        offenders = np.unique(
+            np.repeat(np.arange(len(sizes)), sizes)[external_distances < min_distance]
+        )
         if len(offenders) == 0:
             return coords, min_distance
         improved = False
@@ -442,13 +418,11 @@ def rotate_lipids_away_from_external_clashes(
             local_xy = molecule[:, :2] - centre_xy
 
             def score(
-                candidate: np.ndarray, fixed_tree: cKDTree = fixed_tree,
+                candidate: np.ndarray,
+                fixed_tree: cKDTree = fixed_tree,
             ) -> tuple[float, float, float]:
                 nearest = fixed_tree.query(tree_coords(candidate), k=1)[0]
-                return tuple(
-                    float(value)
-                    for value in np.percentile(nearest, [0.0, 1.0, 10.0])
-                )
+                return tuple(float(value) for value in np.percentile(nearest, [0.0, 1.0, 10.0]))
 
             best_score = score(molecule)
             best_xy = molecule[:, :2]

@@ -66,6 +66,83 @@ def _itp_molecule_atoms(path: Path) -> dict[str, list[tuple[str, float]]]:
     return molecules
 
 
+@lru_cache(maxsize=1)
+def lipid_viewer_topologies() -> dict[str, dict[str, tuple]]:
+    """Return trusted bead order and topology edges for bundled lipids.
+
+    Browser PDB viewers cannot infer Martini bonds reliably from distance.
+    These edges are therefore read from the same bundled ITP files used by
+    GROMACS.  Constraints and virtual-site construction links are included so
+    rigid sterols are displayed as connected molecules as well.
+    """
+    root = _asset_root()
+    manifest = load_manifest()
+    wanted = set(manifest["lipids"])
+    topologies: dict[str, dict[str, tuple]] = {}
+
+    for filename in manifest.get("files", {}):
+        if not filename.endswith(".itp"):
+            continue
+        path = root / filename
+        section = ""
+        molecule: str | None = None
+        waiting_for_name = False
+        atom_names: list[str] = []
+        edges: set[tuple[int, int]] = set()
+
+        def save_current() -> None:
+            if molecule not in wanted or not atom_names:
+                return
+            topologies[molecule] = {
+                "atom_names": tuple(atom_names),
+                "edges": tuple(sorted(edges)),
+            }
+
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.split(";", 1)[0].strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                next_section = line[1:-1].strip().lower()
+                if next_section == "moleculetype":
+                    save_current()
+                    molecule = None
+                    atom_names = []
+                    edges = set()
+                    waiting_for_name = True
+                section = next_section
+                continue
+            fields = line.split()
+            if waiting_for_name:
+                molecule = fields[0].upper()
+                waiting_for_name = False
+                continue
+            if molecule not in wanted:
+                continue
+            if section == "atoms" and len(fields) >= 5 and fields[0].isdigit():
+                atom_names.append(fields[4].upper())
+                continue
+            if section in {"bonds", "constraints"} and len(fields) >= 2:
+                if fields[0].isdigit() and fields[1].isdigit():
+                    a, b = int(fields[0]), int(fields[1])
+                    if a != b:
+                        edges.add(tuple(sorted((a, b))))
+                continue
+            if section in {"virtual_sites2", "virtual_sites3", "virtual_sites4"}:
+                constructor_count = int(section[-1])
+                if len(fields) >= constructor_count + 1 and all(
+                    value.isdigit() for value in fields[: constructor_count + 1]
+                ):
+                    site = int(fields[0])
+                    for value in fields[1 : constructor_count + 1]:
+                        constructor = int(value)
+                        if site != constructor:
+                            edges.add(tuple(sorted((site, constructor))))
+        save_current()
+
+    return topologies
+
+
 def _coby_ltf_lipids() -> set[str]:
     """Return exact lipid names constructible by the pinned COBY LTF library."""
     try:
@@ -107,15 +184,12 @@ def _expand_bundled_lipidome(manifest: dict) -> dict:
                 key=lambda value: (value[-1], int(value[1:-1]), value[0]),
             )
             by_chain = {
-                suffix: [name for name in tails if name.endswith(suffix)]
-                for suffix in ("A", "B")
+                suffix: [name for name in tails if name.endswith(suffix)] for suffix in ("A", "B")
             }
             if not heads or any(not values for values in by_chain.values()):
                 continue
             tail_markers = [name for values in by_chain.values() for name in values[-2:]]
-            midplane_markers = [
-                values[min(1, len(values) - 1)] for values in by_chain.values()
-            ]
+            midplane_markers = [values[min(1, len(values) - 1)] for values in by_chain.values()]
             lipids[name] = {
                 "family": family,
                 "charge": int(round(sum(charge for _atom, charge in atoms))),
@@ -159,9 +233,7 @@ def verify_assets() -> list[str]:
                 continue
             fields = line.split()
             if len(fields) >= 5 and fields[0].isdigit():
-                available_beads.setdefault(fields[3].upper(), set()).add(
-                    fields[4].upper()
-                )
+                available_beads.setdefault(fields[3].upper(), set()).add(fields[4].upper())
     for lipid, definition in manifest["lipids"].items():
         required = {
             str(bead).upper()
@@ -216,9 +288,7 @@ def validate_toolchain() -> dict[str, str]:
         if versions.get(name) != expected[name]
     ]
     if mismatched:
-        raise ModuleConfigError(
-            "Unsupported Martini 3 tool versions: " + "; ".join(mismatched)
-        )
+        raise ModuleConfigError("Unsupported Martini 3 tool versions: " + "; ".join(mismatched))
     verify_assets()
     return {name: str(value) for name, value in versions.items()}
 
@@ -239,10 +309,7 @@ def public_capabilities() -> dict:
         "bundle_id": manifest["bundle_id"],
         "force_field": manifest["force_field"],
         "tools": tools,
-        "lipids": [
-            {"name": name, **values}
-            for name, values in manifest["lipids"].items()
-        ],
+        "lipids": [{"name": name, **values} for name, values in manifest["lipids"].items()],
         "environments": ["solution", "bilayer"],
         "water_model": "Martini regular water (W)",
         "ions": ["NA", "CL"],
@@ -253,6 +320,6 @@ def public_capabilities() -> dict:
             "custom_molecules": False,
             "post_translational_modifications": False,
             "curved_membranes": False,
-            "backmapping": False
-        }
+            "backmapping": False,
+        },
     }

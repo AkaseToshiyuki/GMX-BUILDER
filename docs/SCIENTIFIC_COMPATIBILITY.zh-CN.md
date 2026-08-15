@@ -153,7 +153,7 @@ capability API 返回。
 及 backmapping 均不支持。输入审计会阻断，不能将原子级模块的近似参数带入 CG。
 当前安装的权威脂质列表、后端版本和功能边界由
 `GET /api/coarse-grained/capabilities` 返回，操作流程见
-[用户手册](GMXBUILDER_USER_MANUAL_V1.0.2.zh-CN.md)。
+[用户手册](GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md)。
 
 ## 8. 构建质量与责任边界
 
