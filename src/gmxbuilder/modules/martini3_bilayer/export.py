@@ -28,7 +28,11 @@ class CGExportModule(BaseModule):
 
     def validate_config(self, config: dict) -> bool:
         self.validate_config_keys(
-            config, {"output_dir", "system_name", "write_mdp", "seed", "_task_dir", "_step_dir"}
+            config,
+            {
+                "output_dir", "system_name", "write_mdp", "execution_hardware",
+                "seed", "_task_dir", "_step_dir",
+            },
         )
         if not config.get("output_dir"):
             raise ModuleConfigError("CG export output directory is missing")
@@ -69,7 +73,12 @@ class CGExportModule(BaseModule):
         stages: list[tuple[str, str]] = []
         if write_mdp:
             stages = write_mdp_files(output_dir / "mdp", sim)
-            write_run_script(output_dir / "run_md.sh", stages, sim)
+            write_run_script(
+                output_dir / "run_md.sh",
+                stages,
+                sim,
+                config.get("execution_hardware"),
+            )
         if write_mdp:
             self._validate_with_gromacs(output_dir, sim)
         manifest = load_manifest()
@@ -108,7 +117,7 @@ class CGExportModule(BaseModule):
         (output_dir / "manifest.json").write_text(
             json.dumps(package_manifest, indent=2) + "\n", encoding="utf-8"
         )
-        archive_path = output_dir / f"{sim['system_name']}.zip"
+        archive_path = output_dir / f"{system_name}.zip"
         if archive_path.exists():
             archive_path.unlink()
         with zipfile.ZipFile(

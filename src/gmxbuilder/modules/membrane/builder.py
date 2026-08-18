@@ -173,7 +173,9 @@ class MembraneBuilder(BaseModule):
     description = "Generate lipid bilayer with optional protein embedding"
 
     _MIN_BOX_XY = 4.0  # nm
-    _MIN_LIPIDS_PER_LEAFLET = 64  # minimum lipids for a stable bilayer
+    # Minimum leaflet size accepted by this construction implementation.  This
+    # is a supported-input bound, not a claim of thermodynamic stability.
+    _MIN_LIPIDS_PER_LEAFLET = 64
     _GRID_JITTER = 0.05  # nm — random XY displacement for lipid placement
     _PROTEIN_EXCLUSION_XY = 0.20  # nm — grid-point exclusion around protein (tight)
     _LIPID_PROTEIN_MIN_DIST = 0.10  # nm — minimum lipid-protein atom distance
@@ -188,13 +190,11 @@ class MembraneBuilder(BaseModule):
     #   upper bound that is tightened to actual coordinates in step 11b.
     _BILAYER_Z_HEADROOM_FACTOR = 1.8
 
-    # _LIPID_PACKING_FACTOR: inverse fill-fraction for box sizing.
-    #   N lipids at natural APL need N×APL area.  The factor 1.30
-    #   shrinks the box so lipids sit at ~130 % of natural density.
-    #   This oversampling, combined with 10 % extra lipids and XY
-    #   compression, ensures solvent-impermeable coverage after
-    #   clash removal. The compression step then expands lipids uniformly
-    #   to seal the box edges.
+    # _LIPID_PACKING_FACTOR: construction fill factor for box sizing.
+    #   N lipids at the selected construction APL need N×APL area when the
+    #   factor is 1.00.  The separately oversampled placement pool supplies
+    #   candidates that can survive protein-clash removal; it does not change
+    #   the requested final areal density.
     _LIPID_PACKING_FACTOR = 1.00
 
     # _DENSE_GRID_SPACING: initial hexagonal grid point spacing (nm).
@@ -505,8 +505,8 @@ class MembraneBuilder(BaseModule):
             # Box sized for exactly n_lipids (not the oversampled target_n).
             # The 10% extra in target_n ensures enough survive clash removal.
             # After scaling (step 9c) the lipids exactly fill this box.
-            #   n_lipids = box_xy² / APL * 1.30
-            # → box_xy² = n_lipids * APL / 1.30 + protein_XY²
+            #   n_lipids = box_xy² / APL * packing_factor
+            # → box_xy² = n_lipids * APL / packing_factor + protein_XY²
             protein_xy_area = 0.0
             if has_protein:
                 ext_xy = prot_max_xy - prot_min_xy

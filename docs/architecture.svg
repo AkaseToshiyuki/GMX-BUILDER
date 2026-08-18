@@ -1,42 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
-  <title id="title">GMXBUILDER workflow architecture</title>
-  <desc id="desc">Independent atomistic and Martini workflows converge on validated GROMACS packages.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="760" viewBox="0 0 1800 760" role="img" aria-labelledby="title desc">
+  <title id="title">Shared scientific spine and task-specific workflow branches</title>
+  <desc id="desc">Five system types converge on a common sequence of explicit model, reviewed molecular state, environment construction, system completion and verified export, with only representation-specific operations branching.</desc>
   <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.3" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#416b8f"/></marker>
     <style>
-      .box{fill:#f7fbff;stroke:#245b8f;stroke-width:3;rx:14}
-      .gate{fill:#fff8e8;stroke:#b77800;stroke-width:3;rx:14}
-      .out{fill:#eef9f0;stroke:#287a3e;stroke-width:3;rx:14}
-      .t{font:600 21px sans-serif;fill:#142536;text-anchor:middle}
-      .s{font:16px sans-serif;fill:#33485c;text-anchor:middle}
-      .a{stroke:#4b6072;stroke-width:3;fill:none;marker-end:url(#arrow)}
+      .main{fill:#edf5fb;stroke:#3476aa;stroke-width:2.4}.branch{fill:#fafbfc;stroke:#9aabbb;stroke-width:2}
+      .cg{fill:#f4eef9;stroke:#835b9d;stroke-width:2}.line{fill:none;stroke:#416b8f;stroke-width:3.4;marker-end:url(#arrow)}
+      .branchline{fill:none;stroke:#7e91a2;stroke-width:2.8;marker-end:url(#arrow)}.h{font:700 24px 'Nimbus Roman','DejaVu Serif',serif;fill:#173f63;text-anchor:middle}
+      .s{font:18px 'Nimbus Roman','DejaVu Serif',serif;fill:#4b5f71;text-anchor:middle}.lane{font:700 20px 'Nimbus Roman','DejaVu Serif',serif;fill:#273a4b;text-anchor:end}
     </style>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#4b6072"/></marker>
   </defs>
-  <rect width="1200" height="560" fill="white"/>
-  <text x="600" y="42" class="t" style="font-size:28px">GMXBUILDER independent workflow architecture</text>
-  <rect x="45" y="90" width="245" height="105" class="box"/>
-  <text x="168" y="130" class="t">Atomistic bilayer</text><text x="168" y="163" class="s">protein + membrane</text>
-  <rect x="45" y="230" width="245" height="105" class="box"/>
-  <text x="168" y="270" class="t">Atomistic solution</text><text x="168" y="303" class="s">protein / nucleic acid / ligand</text>
-  <rect x="45" y="370" width="245" height="105" class="box"/>
-  <text x="168" y="410" class="t">Pure membrane</text><text x="168" y="443" class="s">optional solvent and ions</text>
-  <rect x="365" y="125" width="245" height="105" class="box"/>
-  <text x="488" y="165" class="t">Martini 3 bilayer</text><text x="488" y="198" class="s">CG protein + membrane</text>
-  <rect x="365" y="335" width="245" height="105" class="box"/>
-  <text x="488" y="375" class="t">Martini 3 solution</text><text x="488" y="408" class="s">CG soluble system</text>
-  <rect x="690" y="165" width="215" height="230" class="gate"/>
-  <text x="798" y="210" class="t">Scientific gates</text>
-  <text x="798" y="250" class="s">identity + compatibility</text>
-  <text x="798" y="282" class="s">geometry + orientation</text>
-  <text x="798" y="314" class="s">topology + charge</text>
-  <text x="798" y="346" class="s">box + periodicity</text>
-  <text x="798" y="378" class="s">GROMACS validation</text>
-  <rect x="985" y="205" width="175" height="150" class="out"/>
-  <text x="1073" y="247" class="t">Export</text>
-  <text x="1073" y="283" class="s">coordinates + topology</text>
-  <text x="1073" y="313" class="s">MDP + run script</text>
-  <text x="1073" y="343" class="s">manifest + citations</text>
-  <path d="M290 143 C320 143 320 75 640 75 C680 75 675 190 690 220" class="a"/><path d="M290 283 L690 283" class="a"/><path d="M290 423 C320 423 320 490 640 490 C680 490 675 355 690 340" class="a"/>
-  <path d="M610 178 C650 178 655 205 690 220" class="a"/><path d="M610 388 C650 388 655 355 690 340" class="a"/><path d="M905 280 L985 280" class="a"/>
-  <text x="600" y="525" class="s">Supported workflows apply explicit scientific checks before producing a traceable simulation package.</text>
+  <rect width="1800" height="760" fill="#fff"/>
+  <g transform="translate(250,300)">
+    <rect x="0" y="0" width="250" height="112" rx="16" class="main"/><text x="125" y="47" class="h">Explicit model</text><text x="125" y="78" class="s">identity + parameters</text>
+    <path d="M250 56 H310" class="line"/>
+    <rect x="320" y="0" width="250" height="112" rx="16" class="main"/><text x="445" y="47" class="h">Reviewed state</text><text x="445" y="78" class="s">chemistry + pose</text>
+    <path d="M570 56 H630" class="line"/>
+    <rect x="640" y="0" width="250" height="112" rx="16" class="main"/><text x="765" y="47" class="h">Environment</text><text x="765" y="78" class="s">bilayer or solvent box</text>
+    <path d="M890 56 H950" class="line"/>
+    <rect x="960" y="0" width="250" height="112" rx="16" class="main"/><text x="1085" y="47" class="h">Complete system</text><text x="1085" y="78" class="s">water + ions + groups</text>
+    <path d="M1210 56 H1270" class="line"/>
+    <rect x="1280" y="0" width="250" height="112" rx="16" class="main"/><text x="1405" y="47" class="h">Verified export</text><text x="1405" y="78" class="s">MDP + topology + script</text>
+  </g>
+
+  <text x="220" y="72" class="lane">Atomistic protein–bilayer</text><rect x="250" y="35" width="390" height="70" rx="13" class="branch"/><text x="445" y="66" class="h">Protein chemistry + orientation</text><text x="445" y="92" class="s">then composition-controlled bilayer</text>
+  <path d="M445 105 V285" class="branchline"/>
+  <text x="220" y="167" class="lane">Pure atomistic bilayer</text><rect x="250" y="130" width="390" height="70" rx="13" class="branch"/><text x="445" y="161" class="h">Independent leaflets</text><text x="445" y="187" class="s">dry or hydrated branch</text>
+  <path d="M640 165 H1000 Q1020 165 1020 185 V285" class="branchline"/>
+  <text x="220" y="262" class="lane">Atomistic solution</text><rect x="250" y="225" width="390" height="70" rx="13" class="branch"/><text x="445" y="256" class="h">Solute state</text><text x="445" y="282" class="s">solute-centred periodic box</text>
+  <path d="M640 260 H730 Q750 260 750 285" class="branchline"/>
+
+  <text x="220" y="540" class="lane">Martini 3 protein–bilayer</text><rect x="250" y="503" width="390" height="70" rx="13" class="cg"/><text x="445" y="534" class="h">Mapping + CG orientation</text><text x="445" y="560" class="s">then composition-controlled bilayer</text>
+  <path d="M445 503 V427" class="branchline"/>
+  <text x="220" y="635" class="lane">Martini 3 solution</text><rect x="250" y="598" width="390" height="70" rx="13" class="cg"/><text x="445" y="629" class="h">Mapping + connectivity</text><text x="445" y="655" class="s">mapped-solute CG box</text>
+  <path d="M640 633 H730 Q750 633 750 427" class="branchline"/>
+
+  <path d="M1010 427 V485 H1495 V427" class="branchline"/>
+  <rect x="960" y="500" width="590" height="76" rx="14" class="branch"/><text x="1255" y="532" class="h">Representation-specific validators and protocols</text><text x="1255" y="560" class="s">shared interaction contract; independent molecular implementations</text>
 </svg>

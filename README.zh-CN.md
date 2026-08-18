@@ -30,13 +30,12 @@ GMXBUILDER 是用于准备 GROMACS 模拟体系的网页、命令行和 HTTP API
 
 ## 快速开始
 
-环境要求：
+引导环境要求：
 
 - Linux 与 Python 3.10 或更高版本；
-- 可执行的 GROMACS；
+- CMake、C++17 编译器及 Python `venv` 模块；
 - 首次安装时能够访问网络；
-- 只有 GPU 运行才要求 CUDA 版 GROMACS；
-- 只有生成新 GAFF2 参数时才要求 AmberTools/ACPYPE。
+- 只有构建 CUDA 加速的受管理 GROMACS 时才要求 NVIDIA CUDA Toolkit。
 
 克隆公开仓库并运行安装器：
 
@@ -46,9 +45,11 @@ cd GMX-BUILDER
 ./install-local.sh
 ```
 
-安装器会从固定 HTTPS 来源获取单独分发的力场数据和预构建脂质归档，校验
-SHA-256，安装 Python 依赖，写入用户缓存并启动本地服务。安装过程不要求
-GitHub Token，也不要求 Git LFS。默认命令全程无人值守并使用安全的本机设置；
+安装器会复用兼容的 GROMACS 2026.0 及以上版本，或从经校验的官方 GROMACS
+2026.3 源码自动构建；它还会配置受管理的 GAFF2/AM1-BCC 运行时，从固定 HTTPS
+来源获取单独分发的力场数据和预构建脂质归档，校验 SHA-256，安装 Python 依赖，
+写入用户缓存并启动本地服务。安装过程不要求 GitHub Token、Git LFS 或 root 权限。
+默认命令全程无人值守并使用安全的本机设置；
 运行 `./install-local.sh --help` 可查看地址、端口、CPU、队列和可选交互配置。
 
 浏览器访问 <http://127.0.0.1:7788/>。请保存页面显示的 Task ID；它用于恢复
@@ -82,9 +83,10 @@ gmxbuilder --help
 
 ## 文档
 
-- [用户手册 V1.0.3](docs/GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md)
-  （[PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.pdf)）
+- [用户手册 V1.0.4](docs/GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.md)
+  （[PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.pdf)）
 - [科学兼容性与能力边界](docs/SCIENTIFIC_COMPATIBILITY.zh-CN.md)
+- [许可证说明](LICENSING.zh-CN.md)
 - [第三方声明](THIRD_PARTY_NOTICES.zh-CN.md)
 
 ## 引用与许可证
@@ -92,5 +94,7 @@ gmxbuilder --help
 如果 GMXBUILDER 支持了公开研究，请引用本软件以及导出 `CITATIONS.json` 中列出的
 方法、力场、水模型和参数化文献。仓库引用元数据见 [`CITATION.cff`](CITATION.cff)。
 
-GMXBUILDER 原创代码与文档使用 MIT License。科学数据、力场、生成参数和外部
-程序保留各自上游许可证与引用要求；再分发前请阅读第三方声明。
+GMXBUILDER 原创代码与文档使用 GNU General Public License v3.0 或更高版本。
+公开分发的修改版本必须继续使用 GPL 并提供对应源代码，不允许闭源衍生。
+科学数据、力场、生成参数和外部程序仍保留各自上游许可证与引用要求；再分发前
+请阅读许可证说明与第三方声明。

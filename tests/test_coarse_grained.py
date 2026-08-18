@@ -163,19 +163,11 @@ def test_composition_and_protocol_reject_silent_scientific_drift():
     assert sum(item["ratio"] for item in composition) == pytest.approx(1.0)
     with pytest.raises(ModuleConfigError, match="unavailable"):
         normalize_composition([{"name": "NOT_A_LIPID", "ratio": 1}], label="Upper")
-    with pytest.raises(ModuleConfigError, match="integers"):
-        normalize_protocol({"threads": 8.5}, has_membrane=True)
-    with pytest.raises(ModuleConfigError, match="duplicates"):
-        normalize_protocol(
-            {"threads": 8, "mpi_ranks": 2, "gpu_ids": "0,0"},
-            has_membrane=True,
-        )
     protocol = normalize_protocol(
-        {"threads": 8, "mpi_ranks": 2, "gpu_ids": "0,1"},
+        {},
         has_membrane=True,
     )
     assert protocol["has_membrane"] is True
-    assert protocol["threads"] // protocol["mpi_ranks"] == 4
     assert normalize_protocol(protocol, has_membrane=True) == protocol
     assert protocol["eq1_timestep_fs"] == 10.0
     assert protocol["production_timestep_fs"] == 20.0
@@ -810,13 +802,18 @@ def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
             "output_interval_ps": 100,
             "equilibration_1": True,
             "equilibration_2": True,
-            "use_gpu": False,
-            "gpu_ids": "0",
-            "threads": 2,
-            "mpi_ranks": 1,
-            "system_name": "cg_acceptance",
         },
-        export_config={"write_mdp": True, "system_name": "cg_acceptance"},
+        export_config={
+            "write_mdp": True,
+            "system_name": "cg_acceptance",
+            "execution_hardware": {
+                "cpu_threads": 2,
+                "mpi_ranks": 1,
+                "use_gpu": False,
+                "gpu_count": 0,
+                "gpu_ids": "",
+            },
+        },
     )
     assert result["status"] == "ok", result
     archive_path = Path(result["zip_path"])

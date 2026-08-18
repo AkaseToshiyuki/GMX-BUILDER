@@ -771,11 +771,6 @@ function collectCoarseGrainedSimulationParams() {
     comm_interval: Number(document.getElementById('cg-comm-interval')?.value || 100),
     equilibration_1: document.getElementById('cg-eq1')?.checked !== false,
     equilibration_2: document.getElementById('cg-eq2')?.checked !== false,
-    use_gpu: document.getElementById('cg-use-gpu')?.checked !== false,
-    gpu_ids: String(document.getElementById('cg-gpu-ids')?.value || '0').trim(),
-    threads: Number(document.getElementById('cg-threads')?.value || 8),
-    mpi_ranks: Number(document.getElementById('cg-mpi-ranks')?.value || 1),
-    system_name: document.getElementById('system-name')?.value || 'martini3_system',
   };
   var ranges = [
     ['Minimization steps', config.minimization_steps, 100, 1000000],
@@ -810,21 +805,38 @@ function collectCoarseGrainedSimulationParams() {
   if (!Number.isInteger(config.minimization_steps) || !Number.isInteger(config.comm_interval)) {
     throw new Error('CG minimization steps and COM interval must be integers.');
   }
-  if (!Number.isInteger(config.threads) || config.threads < 1 ||
-      !Number.isInteger(config.mpi_ranks) || config.mpi_ranks < 1 ||
-      config.threads % config.mpi_ranks !== 0) {
+  return config;
+}
+
+function collectCoarseGrainedExecutionHardware() {
+  var threads = Number(document.getElementById('cg-threads')?.value || 8);
+  var mpiRanks = Number(document.getElementById('cg-mpi-ranks')?.value || 1);
+  var useGpu = document.getElementById('cg-use-gpu')?.checked !== false;
+  var gpuIds = String(document.getElementById('cg-gpu-ids')?.value || '0').trim();
+  if (!Number.isInteger(threads) || threads < 1 ||
+      !Number.isInteger(mpiRanks) || mpiRanks < 1 || threads % mpiRanks !== 0) {
     throw new Error('CG CPU threads must be positive integers and exactly divisible by thread-MPI ranks.');
   }
-  if (config.use_gpu) {
-    if (!/^\d+(?:,\d+)*$/.test(config.gpu_ids)) {
+  if (useGpu) {
+    if (!/^\d+(?:,\d+)*$/.test(gpuIds)) {
       throw new Error('CG GPU IDs must be unique comma-separated integers, for example 0 or 0,1.');
     }
-    var gpuIds = config.gpu_ids.split(',');
-    if (new Set(gpuIds).size !== gpuIds.length || gpuIds.length > config.mpi_ranks) {
+    var selected = gpuIds.split(',');
+    if (new Set(selected).size !== selected.length || selected.length > mpiRanks) {
       throw new Error('CG GPU IDs must be unique and their count cannot exceed thread-MPI ranks.');
     }
   }
-  return config;
+  return {
+    mode: 'thread-mpi',
+    cpu_threads: threads,
+    mpi_ranks: mpiRanks,
+    use_gpu: useGpu,
+    gpu_count: useGpu ? gpuIds.split(',').length : 0,
+    gpu_ids: useGpu ? gpuIds : '',
+    gmx_command: 'gmx',
+    mpi_launcher: 'mpirun',
+    pin: 'auto'
+  };
 }
 
 function restoreCoarseGrainedConfig(taskState) {
@@ -907,11 +919,11 @@ function restoreCoarseGrainedConfig(taskState) {
   value('cg-comm-interval', simulation.comm_interval);
   checked('cg-eq1', simulation.equilibration_1);
   checked('cg-eq2', simulation.equilibration_2);
-  checked('cg-use-gpu', simulation.use_gpu);
-  value('cg-gpu-ids', simulation.gpu_ids);
-  value('cg-threads', simulation.threads);
-  value('cg-mpi-ranks', simulation.mpi_ranks);
-  if (simulation.system_name) value('system-name', simulation.system_name);
+  var execution = taskState.step_execution_config || taskState.execution || {};
+  checked('cg-use-gpu', execution.use_gpu);
+  value('cg-gpu-ids', Array.isArray(execution.gpu_ids) ? execution.gpu_ids.join(',') : execution.gpu_ids);
+  value('cg-threads', execution.cpu_threads);
+  value('cg-mpi-ranks', execution.mpi_ranks);
   syncCoarseGrainedInputControls(false);
   updateCgOrientationControlLabels();
   syncCgOrientationMode();
@@ -1918,7 +1930,8 @@ async function resumeTask(taskId, requestedStepIdx) {
     } else {
       initSimParams();
       restoreSimulationParams(
-        taskState.step_simparams_config || taskState.simparams
+        taskState.step_simparams_config || taskState.simparams,
+        taskState.step_execution_config || taskState.execution
       );
     }
 
@@ -5619,13 +5632,13 @@ function mdpOverridesToText(value) {
   }).join("\n");
 }
 
-function restoreSimulationParams(saved) {
+function restoreSimulationParams(saved, execution) {
   if (!saved || typeof saved !== "object") {
     renderSimStages();
     return;
   }
-  if (saved.hardware && typeof saved.hardware === "object") {
-    _simHardware = Object.assign({}, _simHardware, saved.hardware);
+  if (execution && typeof execution === "object") {
+    _simHardware = Object.assign({}, _simHardware, execution);
     if (Array.isArray(_simHardware.gpu_ids)) {
       _simHardware.gpu_ids = _simHardware.gpu_ids.join(",");
     }
@@ -6104,33 +6117,6 @@ function parseMdpOverrides(text, label) {
 
 function collectSimulationParams() {
   readStageParams();
-  if (!Number.isInteger(_simHardware.cpu_threads) || _simHardware.cpu_threads < 1) {
-    throw new Error("Total CPU threads must be a positive integer.");
-  }
-  if (!Number.isInteger(_simHardware.mpi_ranks) || _simHardware.mpi_ranks < 1 ||
-      _simHardware.cpu_threads % _simHardware.mpi_ranks !== 0) {
-    throw new Error("MPI ranks must be a positive exact divisor of total CPU threads.");
-  }
-  if (_simHardware.use_gpu &&
-      !/^[0-9]+(,[0-9]+)*$/.test(String(_simHardware.gpu_ids).trim())) {
-    throw new Error("GPU IDs must be comma-separated logical integers, for example 0 or 0,1.");
-  }
-  if (_simHardware.use_gpu) {
-    var gpuIds = String(_simHardware.gpu_ids).trim().split(",");
-    if (!Number.isInteger(_simHardware.gpu_count) || _simHardware.gpu_count < 1 ||
-        _simHardware.gpu_count !== gpuIds.length) {
-      throw new Error("GPU count must equal the number of selected GPU IDs.");
-    }
-    if (new Set(gpuIds).size !== gpuIds.length) {
-      throw new Error("GPU IDs must be unique.");
-    }
-    if (_simHardware.gpu_count > _simHardware.mpi_ranks) {
-      throw new Error("MPI ranks must be at least the selected GPU count.");
-    }
-  }
-  if (!/^[A-Za-z0-9_./+-]+$/.test(String(_simHardware.gmx_command).trim())) {
-    throw new Error("GROMACS command must be one executable name or path without shell syntax.");
-  }
   var eq = _simStages.map(function(stage, index) {
     var copy = Object.assign({}, stage);
     copy.dt_unit = "fs";
@@ -6178,18 +6164,49 @@ function collectSimulationParams() {
       mdp_overrides: parseMdpOverrides(_DEFAULT_EM.mdp_overrides_text, "Minimization overrides")
     },
     eq_stages: eq,
-    prod_iters: prod,
-    hardware: {
-      mode: _simHardware.mode,
-      cpu_threads: _simHardware.cpu_threads,
-      mpi_ranks: _simHardware.mpi_ranks,
-      use_gpu: _simHardware.use_gpu,
-      gpu_count: _simHardware.use_gpu ? _simHardware.gpu_count : 0,
-      gpu_ids: _simHardware.use_gpu ? String(_simHardware.gpu_ids).trim() : "",
-      gmx_command: String(_simHardware.gmx_command).trim(),
-      mpi_launcher: _simHardware.mpi_launcher,
-      pin: _simHardware.pin
+    prod_iters: prod
+  };
+}
+
+function collectExecutionHardware() {
+  readStageParams();
+  if (!Number.isInteger(_simHardware.cpu_threads) || _simHardware.cpu_threads < 1) {
+    throw new Error("Total CPU threads must be a positive integer.");
+  }
+  if (!Number.isInteger(_simHardware.mpi_ranks) || _simHardware.mpi_ranks < 1 ||
+      _simHardware.cpu_threads % _simHardware.mpi_ranks !== 0) {
+    throw new Error("MPI ranks must be a positive exact divisor of total CPU threads.");
+  }
+  if (_simHardware.use_gpu &&
+      !/^[0-9]+(,[0-9]+)*$/.test(String(_simHardware.gpu_ids).trim())) {
+    throw new Error("GPU IDs must be comma-separated logical integers, for example 0 or 0,1.");
+  }
+  if (_simHardware.use_gpu) {
+    var gpuIds = String(_simHardware.gpu_ids).trim().split(",");
+    if (!Number.isInteger(_simHardware.gpu_count) || _simHardware.gpu_count < 1 ||
+        _simHardware.gpu_count !== gpuIds.length) {
+      throw new Error("GPU count must equal the number of selected GPU IDs.");
     }
+    if (new Set(gpuIds).size !== gpuIds.length) {
+      throw new Error("GPU IDs must be unique.");
+    }
+    if (_simHardware.gpu_count > _simHardware.mpi_ranks) {
+      throw new Error("MPI ranks must be at least the selected GPU count.");
+    }
+  }
+  if (!/^[A-Za-z0-9_./+-]+$/.test(String(_simHardware.gmx_command).trim())) {
+    throw new Error("GROMACS command must be one executable name or path without shell syntax.");
+  }
+  return {
+    mode: _simHardware.mode,
+    cpu_threads: _simHardware.cpu_threads,
+    mpi_ranks: _simHardware.mpi_ranks,
+    use_gpu: _simHardware.use_gpu,
+    gpu_count: _simHardware.use_gpu ? _simHardware.gpu_count : 0,
+    gpu_ids: _simHardware.use_gpu ? String(_simHardware.gpu_ids).trim() : "",
+    gmx_command: String(_simHardware.gmx_command).trim(),
+    mpi_launcher: _simHardware.mpi_launcher,
+    pin: _simHardware.pin
   };
 }
 
@@ -6587,6 +6604,45 @@ var _membraneViewer = null;
 var _membraneCheckpointPdb = null;  // set by checkComposition for WYSIWYG refresh
 var _membraneActualBox = null;       // [box_x, box_y, box_z] in nm from checkpoint
 
+function weightedLeafletAPL(mix, lipids) {
+  var weighted = 0;
+  var totalRatio = 0;
+  mix.forEach(function(m) {
+    var lipid = lipids.find(function(candidate) { return candidate.name === m.name; });
+    if (lipid && m.ratio > 0) {
+      weighted += lipid.area_per_lipid * m.ratio;
+      totalRatio += m.ratio;
+    }
+  });
+  return totalRatio > 0 ? weighted / totalRatio : 0.65;
+}
+
+function previewBilayerAPL(lipids) {
+  var upperAPL = weightedLeafletAPL(_mixUpper, lipids);
+  if (!_asymmetric) return upperAPL;
+  return Math.max(upperAPL, weightedLeafletAPL(_mixLower, lipids));
+}
+
+// Mirror MembraneBuilder._assign_lipids for the pre-Check count preview.
+function allocatePreviewLipidCounts(nLipids, mix) {
+  var requested = mix.filter(function(m) { return m.ratio > 0; }).map(function(m) {
+    return {name: m.name, ratio: m.ratio, count: Math.max(1, Math.round(nLipids * m.ratio / 100))};
+  });
+  var remaining = nLipids;
+  requested.forEach(function(item) {
+    item.count = Math.min(item.count, remaining);
+    remaining -= item.count;
+  });
+  if (remaining > 0 && requested.length) {
+    var dominant = requested[0];
+    requested.forEach(function(item) {
+      if (item.ratio > dominant.ratio) dominant = item;
+    });
+    dominant.count += remaining;
+  }
+  return requested;
+}
+
 async function renderMembraneViewer() {
   var el = document.getElementById('membrane-3d-viewer');
   if (!el) return;
@@ -6614,15 +6670,8 @@ async function renderMembraneViewer() {
     var nLipids = 150;
     var nLipidsEl = document.getElementById('n-lipids-per-leaflet');
     if (nLipidsEl) { var nv = parseInt(nLipidsEl.value); if (!isNaN(nv) && nv >= 64) nLipids = nv; }
-    // Weighted average APL
     var lipids = _lipidPickerData.lipids || [];
-    var avgAPL = 0, totalRatio = 0;
-    _mixUpper.forEach(function(m) {
-      var ll = lipids.find(function(lll){return lll.name===m.name;});
-      if (ll) { avgAPL += ll.area_per_lipid * m.ratio; totalRatio += m.ratio; }
-    });
-    if (totalRatio > 0) avgAPL /= totalRatio;
-    if (avgAPL <= 0) avgAPL = 0.65;
+    var avgAPL = previewBilayerAPL(lipids);
     // Protein XY extent
     var xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     var lines = pdbContent.split('\n');
@@ -6638,8 +6687,8 @@ async function renderMembraneViewer() {
       }
     }
     var protXY = isFinite(xMin) ? Math.max(xMax - xMin, yMax - yMin) : (isPureMembrane ? 0.0 : 3.0);
-    // Reverse builder formula: n_lipids = boxXY² / APL * 1.30
-    var lipidArea = nLipids * avgAPL / 1.30;
+    // Mirror the backend construction fill factor (1.00).
+    var lipidArea = nLipids * avgAPL;
     var protArea = protXY * protXY;
     boxXY = Math.max(Math.sqrt(lipidArea + protArea), 4.0);
     var protExt = isPureMembrane ? {z: 0.0} : _proteinExtent(pdbContent);
@@ -6926,7 +6975,8 @@ function updateLipidCounts() {
       if(!isNaN(px)&&!isNaN(py)){if(px<xMin)xMin=px;if(px>xMax)xMax=px;if(py<yMin)yMin=py;if(py>yMax)yMax=py;}
     }
   }
-  var protXY=isFinite(xMin)?Math.max(xMax-xMin,yMax-yMin):3.0;
+  var isPureMembrane = state.taskType && state.taskType.pipeline === 'pure_membrane';
+  var protXY=isFinite(xMin)?Math.max(xMax-xMin,yMax-yMin):(isPureMembrane?0.0:3.0);
   var protArea=protXY*protXY;
 
   var nLipidsEl=document.getElementById('n-lipids-per-leaflet');
@@ -6936,20 +6986,11 @@ function updateLipidCounts() {
   var lipids=_lipidPickerData.lipids||[];
 
   function computeCounts(mix){
-    var avgAPL=0,totalRatio=0;
-    mix.forEach(function(m){
-      var l=lipids.find(function(ll){return ll.name===m.name;});
-      if(l){avgAPL+=l.area_per_lipid*m.ratio;totalRatio+=m.ratio;}
-    });
-    if(totalRatio>0)avgAPL/=totalRatio;
-    if(avgAPL<=0)avgAPL=0.65;
-    var counts=mix.map(function(m){return{name:m.name,ratio:m.ratio,count:Math.floor(nLipids*m.ratio/100)};});
-    return{avgAPL:avgAPL,counts:counts};
+    return{avgAPL:weightedLeafletAPL(mix,lipids),counts:allocatePreviewLipidCounts(nLipids,mix)};
   }
 
-  // boxXY from n_lipids: reverse of builder formula n_lipids = boxXY²/APL*1.30
-  var avgAPL2=computeCounts(_mixUpper).avgAPL;
-  var lipidArea=nLipids*avgAPL2/1.30;
+  var avgAPL2=previewBilayerAPL(lipids);
+  var lipidArea=nLipids*avgAPL2;
   var boxXY=Math.max(Math.sqrt(lipidArea+protArea),4.0);
   var memArea=boxXY*boxXY;
 
@@ -7694,7 +7735,10 @@ function buildModuleConfig(focusStep) {
       };
     }
     if (wants('topology')) config.topology = {};
-    if (wants('simparams')) config.simparams = collectCoarseGrainedSimulationParams();
+    if (wants('simparams')) {
+      config.simparams = collectCoarseGrainedSimulationParams();
+      config.execution = collectCoarseGrainedExecutionHardware();
+    }
     if (wants('export')) config.export = {write_mdp: includeSolvent};
     return mergeCheckedModuleConfig(config);
   }
@@ -7813,6 +7857,7 @@ function buildModuleConfig(focusStep) {
   // Collect per-stage simulation parameters
   if (taskModules.includes('forcefield') || taskModules.includes('topology')) {
     config.simparams = collectSimulationParams();
+    config.execution = collectExecutionHardware();
 
     config.export = {
       write_mdp: pureMembraneIncludesSolvent(),

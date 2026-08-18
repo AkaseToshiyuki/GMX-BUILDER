@@ -180,13 +180,13 @@ def test_build_accepts_stage_owned_default_simulation_payload(tmp_path, monkeypa
                 },
                 "eq_stages": [stage],
                 "prod_iters": [stage],
-                "hardware": {
-                    "cpu_threads": 1,
-                    "mpi_ranks": 1,
-                    "use_gpu": False,
-                    "gpu_count": 0,
-                    "gpu_ids": "",
-                },
+            },
+            "execution": {
+                "cpu_threads": 1,
+                "mpi_ranks": 1,
+                "use_gpu": False,
+                "gpu_count": 0,
+                "gpu_ids": "",
             },
         },
     }

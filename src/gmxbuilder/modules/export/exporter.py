@@ -42,12 +42,13 @@ class ExportModule(BaseModule):
                 "write_mdp",
                 "mdp_params",
                 "simparams",
+                "execution_hardware",
                 "seed",
             },
         )
         if "write_mdp" in config and not isinstance(config["write_mdp"], bool):
             raise ModuleConfigError("export.write_mdp must be true or false")
-        for key in ("mdp_params", "simparams"):
+        for key in ("mdp_params", "simparams", "execution_hardware"):
             if key in config and not isinstance(config[key], dict):
                 raise ModuleConfigError(f"export.{key} must be an object")
         system_name = config.get("system_name")
@@ -128,7 +129,7 @@ class ExportModule(BaseModule):
             lipid_ff = str(system.metadata.get("lipid_ff", "")).lower()
             has_lipid_dihedral_restraints = has_membrane and lipid_ff not in {"gaff2", "lipid21"}
             # Workflow metadata, execution hardware, and per-stage MDP values
-            # are separate contracts.  The completed system supplies only the
+            # are separate contracts. The completed system supplies only the
             # scientific context that a browser must not be allowed to forge.
             mdp_context = {
                 "force_field": ff_name,
@@ -190,7 +191,9 @@ class ExportModule(BaseModule):
             log.append(f"Wrote {len(written)} .mdp files to mdp/")
             from gmxbuilder.runtime.hardware import normalize_simulation_hardware
 
-            execution_hardware = normalize_simulation_hardware(normalized_sim.get("hardware"))
+            execution_hardware = normalize_simulation_hardware(
+                config.get("execution_hardware")
+            )
 
         # ---- 3.5 Write run script + README (one-click launcher) ----
         readme_path = output_dir / "README.txt"

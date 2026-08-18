@@ -524,11 +524,10 @@ class IonBuilder(BaseModule):
         take(anion_order, total_anions)
 
         if method == "mc" and chosen_indices:
-            # True Metropolis water-site sampling. The initial configuration is
-            # electrostatically favourable; trial moves replace one chosen water
-            # with another eligible water and are accepted with exp(-ΔE/T).
-            # Energy combines normalized solute potential with a weak screened
-            # ion-ion term, while the hard periodic exclusion is always enforced.
+            # Experimental dimensionless Metropolis-style site optimization.
+            # This is not a thermodynamic ion-distribution sampler: the score
+            # combines normalized formal-charge potential with a weak screened
+            # ion-ion penalty.  The hard periodic exclusion is always enforced.
             potential_scale = float(np.std(potentials))
             if potential_scale < 1e-8:
                 potential_scale = 1.0
@@ -768,8 +767,15 @@ class IonBuilder(BaseModule):
             "placement_method": str(config.get("ion_method", "random")),
             "placement_strategy": {
                 "random": "uniform_random_water_replacement",
-                "replace": "periodic_electrostatic_water_replacement",
-                "mc": "metropolis_water_site_sampling",
+                "replace": "experimental_formal_charge_ranked_water_replacement",
+                "mc": "experimental_dimensionless_metropolis_site_optimization",
             }.get(str(config.get("ion_method", "random")).lower(), "unknown"),
+            "placement_validation": (
+                "recommended_seeded_random_replacement"
+                if str(config.get("ion_method", "random")).lower() == "random"
+                else "experimental_heuristic_not_equilibrium_sampling"
+            ),
+            "experimental_placement": str(config.get("ion_method", "random")).lower()
+            != "random",
             "exclusion_radius_nm": float(config.get("exclusion_radius", 0.35)),
         }

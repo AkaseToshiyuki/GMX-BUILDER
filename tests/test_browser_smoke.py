@@ -139,7 +139,7 @@ END
             document.getElementById('sim-hw-gmx').value = 'gmx_mpi';
             document.getElementById('sim-hw-launcher').value = 'srun';
             readStageParams();
-            return collectSimulationParams().hardware;
+            return collectExecutionHardware();
             """
         )
         assert hardware == {
@@ -168,7 +168,7 @@ END
             """
         )
         assert simulation_shape == {
-            "keys": ["eq_stages", "hardware", "minimization", "prod_iters", "schema_version"],
+            "keys": ["eq_stages", "minimization", "prod_iters", "schema_version"],
             "schemaVersion": 2,
             "minimizationOwnsCutoff": True,
             "equilibrationOwnsCutoff": True,

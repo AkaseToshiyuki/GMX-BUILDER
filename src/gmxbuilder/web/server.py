@@ -3434,8 +3434,12 @@ async def api_build(request: Request):
     if not isinstance(modules, dict):
         return JSONResponse({"error": "Build modules must be an object"}, status_code=400)
     simparams = modules.get("simparams", {})
+    execution = modules.get("execution", {})
     runner = _get_step_runner(task_id, persisted_task_type)
     try:
+        from gmxbuilder.runtime.hardware import normalize_simulation_hardware
+
+        execution = normalize_simulation_hardware(execution)
         if _is_martini_task_type(persisted_task_type):
             from gmxbuilder.modules.coarse_grained.protocol import normalize_protocol
 
@@ -3453,6 +3457,7 @@ async def api_build(request: Request):
             if not isinstance(export_config, dict):
                 raise ValueError("export settings must be an object")
             export_config["write_mdp"] = include_solvent
+            export_config["execution_hardware"] = execution
         else:
             forcefield_config = modules.get("forcefield", {})
             if not isinstance(forcefield_config, dict):
@@ -3475,12 +3480,14 @@ async def api_build(request: Request):
                 "has_membrane": persisted_task_type in {"membrane-bilayer", "pure-membrane"},
             }
             simparams = MDPWriter.normalize_simulation_config(simparams, simulation_context)
-            from gmxbuilder.runtime.hardware import normalize_simulation_hardware
-
-            normalize_simulation_hardware(simparams.get("hardware"))
+            export_config = modules.setdefault("export", {})
+            if not isinstance(export_config, dict):
+                raise ValueError("export settings must be an object")
+            export_config["execution_hardware"] = execution
     except (ModuleConfigError, TypeError, ValueError) as exc:
         return JSONResponse({"error": f"Invalid simulation parameters: {exc}"}, status_code=400)
     modules["simparams"] = simparams
+    modules["execution"] = execution
 
     source_step = "cg_system" if _is_martini_task_type(persisted_task_type) else "ions"
     if persisted_task_type == "pure-membrane":
@@ -3510,6 +3517,8 @@ async def api_build(request: Request):
         {
             "simparams": simparams,
             "step_simparams_config": simparams,
+            "execution": execution,
+            "step_execution_config": execution,
             "current_step": "simparams",
         },
     )
@@ -3711,11 +3720,7 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
         runner = _get_step_runner(task_id, task_type_id)
         simparams = dict(modules_config.get("simparams") or {})
         export_config = dict(modules_config.get("export") or {})
-        export_config["system_name"] = (
-            simparams.get("system_name", "martini3_system")
-            if _is_martini_task_type(task_type_id)
-            else data.get("system_name", "system")
-        )
+        export_config["system_name"] = data.get("system_name", "system")
 
         with _tasks_lock:
             _tasks[task_id]["status"] = "running"

@@ -34,13 +34,12 @@ than silently approximated.
 
 ## Quick start
 
-Requirements:
+Bootstrap requirements:
 
 - Linux and Python 3.10 or later;
-- a working GROMACS installation;
+- CMake, a C++17 compiler, and Python's `venv` module;
 - Internet access during first installation;
-- CUDA-capable GROMACS only for GPU execution; and
-- AmberTools/ACPYPE only when generating new GAFF2 parameters.
+- the NVIDIA CUDA toolkit only for a CUDA-accelerated managed GROMACS build.
 
 Clone the public repository and run the installer:
 
@@ -50,10 +49,12 @@ cd GMX-BUILDER
 ./install-local.sh
 ```
 
-The installer retrieves separately distributed force-field data and the
-prebuilt lipid archive from pinned HTTPS sources, verifies SHA-256 digests,
+The installer reuses a compatible GROMACS 2026.0-or-newer executable or builds
+the verified official GROMACS 2026.3 source locally, installs a managed
+GAFF2/AM1-BCC runtime, retrieves separately distributed force-field data and
+the prebuilt lipid archive from pinned HTTPS sources, verifies SHA-256 digests,
 installs Python dependencies, populates the user cache, and starts the local
-service. Git LFS and a GitHub access token are not required by the installer.
+service. Git LFS, root access, and a GitHub access token are not required.
 The default invocation is unattended and uses safe local settings. Use
 `./install-local.sh --help` for explicit address, port, CPU, queue, or optional
 interactive configuration.
@@ -94,9 +95,10 @@ force-field compatibility, and generated citations before simulation.
 
 ## Documentation
 
-- [User Manual V1.0.3](docs/GMXBUILDER_USER_MANUAL_V1.0.3.md)
-  ([PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.3.pdf))
+- [User Manual V1.0.4](docs/GMXBUILDER_USER_MANUAL_V1.0.4.md)
+  ([PDF](docs/GMXBUILDER_USER_MANUAL_V1.0.4.pdf))
 - [Scientific Compatibility and Limitations](docs/SCIENTIFIC_COMPATIBILITY.md)
+- [Licensing](LICENSING.md)
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 
 ## Citation and license
@@ -106,7 +108,9 @@ force-field, water-model, and parameterization references listed in the
 exported `CITATIONS.json`. Repository citation metadata is provided in
 [`CITATION.cff`](CITATION.cff).
 
-Original GMXBUILDER code and documentation are licensed under the MIT License.
-Scientific data, force fields, generated parameters, and external programs
-retain their upstream licenses and citation requirements. See the third-party
-notices before redistribution.
+Original GMXBUILDER code and documentation are licensed under the GNU General
+Public License v3.0 or later. Distributed modified versions must remain under
+the GPL and provide their corresponding source; proprietary derivatives are
+not permitted. Scientific data, force fields, generated parameters, and
+external programs retain their upstream licenses and citation requirements.
+See the licensing guide and third-party notices before redistribution.

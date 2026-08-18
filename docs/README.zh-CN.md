@@ -7,7 +7,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [用户手册 V1.0.3](GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md)（[PDF](GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.pdf)） | 安装、网页、CLI、API、输出包和故障排查 |
+| [用户手册 V1.0.4](GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.md)（[PDF](GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.pdf)） | 安装、网页、CLI、API、输出包和故障排查 |
 | [科学兼容性](SCIENTIFIC_COMPATIBILITY.zh-CN.md) | 力场、脂质、配体、修饰、核酸及科学适用边界 |
 
 简要介绍和快速安装命令见项目[简体中文 README](../README.zh-CN.md)。服务启动后，

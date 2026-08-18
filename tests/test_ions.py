@@ -259,9 +259,15 @@ def test_every_placement_method_replaces_complete_waters(method):
         metrics["placement_strategy"]
         == {
             "random": "uniform_random_water_replacement",
-            "replace": "periodic_electrostatic_water_replacement",
-            "mc": "metropolis_water_site_sampling",
+            "replace": "experimental_formal_charge_ranked_water_replacement",
+            "mc": "experimental_dimensionless_metropolis_site_optimization",
         }[method]
+    )
+    assert metrics["experimental_placement"] is (method != "random")
+    assert metrics["placement_validation"] == (
+        "recommended_seeded_random_replacement"
+        if method == "random"
+        else "experimental_heuristic_not_equilibrium_sampling"
     )
 
 

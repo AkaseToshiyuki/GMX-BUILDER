@@ -50,6 +50,12 @@
     updateNextButtonState();
   }
 
+  function updateIonMethodWarning() {
+    var method = document.getElementById('ion-method')?.value || 'random';
+    var warning = document.getElementById('ion-method-warning');
+    if (warning) warning.classList.toggle('hidden', method === 'random');
+  }
+
   function renderIonCards() {
     var catC = document.getElementById("ion-cation-cards");
     var aniC = document.getElementById("ion-anion-cards");
@@ -347,10 +353,14 @@
     if (confirmSystem) confirmSystem.onclick = confirmSimulationSystem;
     ["ion-method", "ion-exclusion", "ion-neutralize-cation", "ion-neutralize-anion"].forEach(function(id) {
       var element = document.getElementById(id);
-      if (element) element.addEventListener('change', invalidateIonCheck);
+      if (element) element.addEventListener('change', function() {
+        invalidateIonCheck();
+        if (id === 'ion-method') updateIonMethodWarning();
+      });
     });
 
     renderIonCards();
+    updateIonMethodWarning();
 
     window._getIonCations = function() { return _ionCations.map(function(i) { return i.name; }); };
     window._getIonAnions = function() { return _ionAnions.map(function(i) { return i.name; }); };

@@ -40,8 +40,9 @@ def test_ion_check_viewer_is_exact_and_requires_confirmation():
     assert 'id="ion-viewer-label"' in template
     assert 'style="position:relative;width:100%;height:520px;overflow:hidden' in template
     assert "Random Water Replacement (GROMACS-style)" in template
-    assert "Electrostatic Water Replacement (periodic Coulomb)" in template
-    assert "Monte Carlo Water-Site Sampling (Metropolis)" in template
+    assert "Experimental: formal-charge-ranked water replacement" in template
+    assert "not equilibrium ion sampling" in template
+    assert "Experimental: dimensionless Metropolis site optimization" in template
     assert "NGL.Stage" not in ions
     assert "window._isSystemConfirmed()" in app
     assert "Confirm Simulation System before proceeding" in app
@@ -185,6 +186,33 @@ def test_resume_restores_force_field_before_mdp_defaults():
     )
     initialize_mdp = resume_source.index("initSimParams()")
     assert restore_force_field < initialize_mdp
+
+
+def test_membrane_preview_uses_the_checked_explicit_count_contract():
+    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
+
+    # The browser preview must follow the explicit-count backend path:
+    # A_box = N_leaflet * max(APL_upper, APL_lower) + A_protein.
+    assert "function weightedLeafletAPL" in app
+    assert "function previewBilayerAPL" in app
+    assert "return Math.max(upperAPL, weightedLeafletAPL(_mixLower, lipids));" in app
+    assert "var lipidArea = nLipids * avgAPL;" in app
+    assert "var lipidArea=nLipids*avgAPL2;" in app
+    assert "nLipids * avgAPL / 1.30" not in app
+    assert "nLipids*avgAPL2/1.30" not in app
+
+    # Pre-Check composition counts mirror MembraneBuilder._assign_lipids:
+    # round each positive fraction, trim in input order, then pad the dominant
+    # component so that the displayed total is exactly N_leaflet.
+    assert "function allocatePreviewLipidCounts" in app
+    assert "Math.max(1, Math.round(nLipids * m.ratio / 100))" in app
+    assert "dominant.count += remaining;" in app
+    assert "Math.floor(nLipids*m.ratio/100)" not in app
+
+    assert "Minimum supported construction size: 64 per leaflet." in template
+    assert "stability must be assessed by equilibration" in template
+    assert "Li et al., JCIM 2025" not in template
 
 
 def test_task_scoped_custom_lipid_and_history_route_contracts():

@@ -261,7 +261,7 @@ class MDPWriter:
         """Return the version-2, stage-owned simulation configuration.
 
         Workflow controls and execution hardware are deliberately kept out of
-        the MDP context.  Legacy version-1 task state is migrated by copying
+        this scientific protocol object. Legacy version-1 task state is migrated by copying
         former global MDP values into each stage only when that stage did not
         already provide an explicit value.
         """
@@ -355,7 +355,6 @@ class MDPWriter:
             "minimization": minim,
             "eq_stages": eq_stages,
             "prod_iters": prod_iters,
-            "hardware": copy.deepcopy(raw.get("hardware", {})),
         }
 
     # ------------------------------------------------------------------
@@ -501,7 +500,6 @@ _SIMULATION_CONFIG_KEYS = (
             "minimization",
             "eq_stages",
             "prod_iters",
-            "hardware",
             "system_name",
             "mdp_overrides_text",
         }
@@ -829,8 +827,8 @@ def _stage_defaults(params: dict, ensemble: str) -> dict[str, object]:
         "temperature": params.get("temperature", 310.15),
         "comm_mode": "linear",
         # Keep the embedded solute and membrane in one COM-removal group while
-        # treating solvent separately.  Non-membrane systems use solute and
-        # solvent groups.  See internal_docs/MDP_PROTOCOL_DECISIONS.md.
+        # treating solvent separately.  Non-membrane systems use distinct
+        # solute and solvent groups.
         "comm_grps": default_comm_groups,
         "nstcomm": 100,
         "constraints": "h-bonds",

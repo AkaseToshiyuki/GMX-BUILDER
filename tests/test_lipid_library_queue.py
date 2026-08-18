@@ -1,5 +1,9 @@
+import json
 from pathlib import Path
 
+from click.testing import CliRunner
+
+from gmxbuilder.app import main
 from gmxbuilder.modules.membrane import library_queue
 
 
@@ -214,3 +218,46 @@ def test_worker_invokes_one_exact_backend_and_uses_distinct_log_name(
         "1000.0",
     ]
     assert Path(log_path).name == "amber14sb-POPS-amber-gaff2-gpu2.log"
+
+
+def test_status_json_distinguishes_terminal_unavailable_from_pending(monkeypatch):
+    jobs = [
+        {
+            "force_field": "amber14sb",
+            "lipid_name": "POPC",
+            "ready": True,
+            "unavailable": False,
+            "parameter_family": "amber-lipid21",
+        },
+        {
+            "force_field": "amber14sb",
+            "lipid_name": "POPS",
+            "ready": False,
+            "unavailable": True,
+            "parameter_family": "amber-gaff2",
+        },
+    ]
+
+    class Library:
+        def coverage(self, _force_fields):
+            return jobs
+
+    monkeypatch.setattr(
+        "gmxbuilder.modules.membrane.equilibrated_library.EquilibratedLipidLibrary",
+        Library,
+    )
+    result = CliRunner().invoke(
+        main,
+        ["lipid-library", "status", "--force-field", "amber14sb", "--json-output"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "schema_version": 1,
+        "force_fields": ["amber14sb"],
+        "total": 2,
+        "ready": 1,
+        "unavailable": 1,
+        "pending": 0,
+        "complete": True,
+    }

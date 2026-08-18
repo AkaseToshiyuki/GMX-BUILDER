@@ -1,4 +1,4 @@
 """GMXBUILDER version."""
 
-__version__ = "0.9.9"
+__version__ = "0.9.18"
 VERSION = __version__

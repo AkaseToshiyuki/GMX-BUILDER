@@ -3,8 +3,9 @@
 <p><strong>English</strong> · <a href="THIRD_PARTY_NOTICES.zh-CN.md">简体中文</a></p>
 
 GMXBUILDER combines original orchestration code with scientific data formats,
-force-field ports and optional external programs. The project-level MIT
-license applies only to original GMXBUILDER code and documentation. It does
+force-field ports and optional external programs. The project-level
+GPL-3.0-or-later license applies only to original GMXBUILDER code and
+documentation. It does
 not replace upstream licenses, citation requirements or usage conditions.
 
 ## Force-field data
@@ -46,16 +47,22 @@ The payload contains:
 - GROMACS topology/cache files generated through GAFF2 and AM1-BCC tooling.
 
 The archive contains no AmberTools, ACPYPE or GROMACS executable code. These
-programs remain external dependencies. Generated parameters still require the
-appropriate force-field citations and scientific validation for the intended
-system.
+programs remain external dependencies. The Amber project identifies its force
+fields as public-domain material; the cached topology and coordinate files are
+GMXBUILDER-generated outputs rather than copies of AmberTools program source.
+Generated parameters still require the appropriate force-field citations and
+scientific validation for the intended system.
 
 AmberTools is described by its authors as mostly GPL-licensed, with component-
-specific terms. Consult the official Amber distribution and license files:
-<https://ambermd.org/AmberTools.php>.
+specific terms, while the Amber force fields are described as public domain.
+Consult the official Amber pages and distribution license files:
+<https://ambermd.org/AmberTools.php> and <https://ambermd.org/>.
 
-GROMACS is not bundled. Its license and citation guidance are available from:
-<https://www.gromacs.org/>.
+The GROMACS executable is installed separately. Force-field files copied from
+the GROMACS distribution remain under the upstream LGPL-2.1-or-later terms;
+the retained license text is stored at
+`src/gmxbuilder/data/forcefields/LICENSE-GROMACS-LGPL-2.1.txt`. GROMACS license
+and citation guidance are available from <https://www.gromacs.org/>.
 
 ## Martini 3 coarse-grained workflow
 
@@ -74,7 +81,7 @@ packages rather than vendoring their source:
 
 Their respective licenses and citation requirements remain upstream. Generated
 packages include `CITATIONS.json` with the model and tool references. The
-project MIT license does not replace Martini model citation requirements.
+project GPL license does not replace Martini model citation requirements.
 
 ## Installed Python dependencies
 

@@ -39,17 +39,17 @@ from reportlab.platypus.tableofcontents import TableOfContents
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.md"
-DEFAULT_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.pdf"
-ZH_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md"
-ZH_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.pdf"
+DEFAULT_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.md"
+DEFAULT_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.pdf"
+ZH_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.md"
+ZH_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.pdf"
 FONT_PATH = Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf")
 LATIN_FONT_PATH = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 TITLE = "GMXBUILDER User Manual"
-DOC_VERSION = "V1.0.3"
+DOC_VERSION = "V1.0.4"
 AUTHOR = "Haochen Yang"
-DATE = "2026-08-14"
-SOFTWARE = "GMXBUILDER v0.9.0 or later"
+DATE = "2026-08-17"
+SOFTWARE = "GMXBUILDER v0.9.18 or later"
 LANGUAGE = "en"
 
 

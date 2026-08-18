@@ -552,7 +552,7 @@
         <div class="field">
           <label for="n-lipids-per-leaflet">Lipids per leaflet</label>
           <input type="number" id="n-lipids-per-leaflet" value="150" step="10" min="64">
-          <span class="hint">Minimum 64 per leaflet; recommended ≥100 for stable bilayers (Li et al., JCIM 2025)</span>
+          <span class="hint">Minimum supported construction size: 64 per leaflet. Larger systems reduce finite-size effects, but stability must be assessed by equilibration.</span>
         </div>
         <!-- Asymmetry toggle -->
         <div class="field checkbox-field">
@@ -676,10 +676,11 @@
           <label for="ion-method">Placement Method</label>
           <select id="ion-method">
             <option value="random" selected>Random Water Replacement (GROMACS-style) — recommended</option>
-            <option value="replace">Electrostatic Water Replacement (periodic Coulomb)</option>
-            <option value="mc">Monte Carlo Water-Site Sampling (Metropolis)</option>
+            <option value="replace">Experimental: formal-charge-ranked water replacement</option>
+            <option value="mc">Experimental: dimensionless Metropolis site optimization</option>
           </select>
-          <span class="hint">All methods replace complete waters at their oxygen coordinates. Random is unbiased; Electrostatic favours counter-charge regions; Monte Carlo samples solute and screened ion-ion energies.</span>
+          <span class="hint">All methods replace complete waters at oxygen coordinates. Seeded random replacement is the validated default. Experimental modes optimize heuristic formal-charge scores; they are not equilibrium ion sampling and should not be interpreted as a physical ion distribution.</span>
+          <span class="warning hidden" id="ion-method-warning">Experimental placement selected. The resulting sites are heuristic starting coordinates only; validate and equilibrate the ion distribution for the intended scientific use.</span>
         </div>
 
         <div class="field checkbox-field">
@@ -753,8 +754,8 @@
 <script src="/static/vendor/3dmol-2.5.5/3Dmol-min.js"></script>
 <script src="/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js"></script>
 <script src="/static/constants.js?v=1"></script>
-<script src="/static/ions.js?v=10"></script>
-<script src="/static/app.js?v=70"></script>
+<script src="/static/ions.js?v=11"></script>
+<script src="/static/app.js?v=71"></script>
 
 <!-- Custom Lipid Modal -->
 <div class="modal-overlay hidden" id="custom-lipid-modal">

@@ -1,19 +1,20 @@
 # GMXBUILDER 用户手册
 
-<p><a href="GMXBUILDER_USER_MANUAL_V1.0.3.md">English</a> · <strong>简体中文</strong></p>
+<p><a href="GMXBUILDER_USER_MANUAL_V1.0.4.md">English</a> · <strong>简体中文</strong></p>
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | V1.0.3 |
-| 适用软件 | GMXBUILDER v0.9.9 或更高版本 |
+| 文档版本 | V1.0.4 |
+| 适用软件 | GMXBUILDER v0.9.18 或更高版本 |
 | 编写人 | Haochen Yang |
-| 发布日期 | 2026-08-15 |
+| 发布日期 | 2026-08-17 |
 | 文档状态 | 正式发布 |
 
 ## 变更日志
 
 | 文档版本 | 日期 | 变更内容 | 编写人 |
 |---|---|---|---|
+| V1.0.4 | 2026-08-17 | 记录自动管理的 GROMACS 与 GAFF2 运行时，修正执行硬件、离子放置和显式脂质数膜预览契约，并使安装、网页、CLI、API 和故障排查说明与 GMXBUILDER v0.9.18 同步 | Haochen Yang |
 | V1.0.3 | 2026-08-15 | 更新经校验的 V3 脂质资产、外部资产自动获取、安装契约、公开文档边界及当前 Martini 3 工作流 | Haochen Yang |
 | V1.0.2 | 2026-08-14 | 补充严格脂质发布资产校验、当前脂质库状态查询、Martini 3 膜蛋白自动定向与盒尺寸推导，并修正粗粒化任务入口导航 | Haochen Yang |
 | V1.0.1 | 2026-08-11 | 更新无 Task ID 路由、Task ID 复制、Martini 3 工作流、CLI/API、输出结构及部署边界 | Haochen Yang |
@@ -56,12 +57,18 @@ MDP、运行脚本和 ZIP 打包。因此 Check 后 Viewer 和下载包共享同
 
 ## 2. 安装与启动
 
-### 2.1 环境要求
+### 2.1 引导环境要求
 
-- Linux，Python 3.10 或更高版本；
-- 可执行的 GROMACS；只有需要 GPU 时才要求 CUDA 版 GROMACS；
-- 新 GAFF2 分子参数化需要单独安装 AmberTools/ACPYPE，项目不包含这些程序。
-- 首次安装时能够访问网络。
+- x86-64 或 AArch64 Linux，Python 3.10 或更高版本；
+- Git、CMake、C++17 编译器及 Python `venv` 模块；
+- 首次安装时能够访问网络；
+- 仅当自动构建的 GROMACS 需要 CUDA 加速时，才需要包含 `nvcc` 的 NVIDIA CUDA
+  Toolkit。
+
+安装脚本会管理必需的 GROMACS 运行时、Python 环境、GAFF2/AM1-BCC 工具、力场
+数据和已验证的预构建脂质资产。因此用户不需要另行安装 GROMACS、AmberTools、
+ACPYPE、Open Babel、Martini 3 数据或 Python 包。上述引导工具已存在时不需要管理员
+权限。
 
 ### 2.2 一键安装本地服务
 
@@ -72,18 +79,37 @@ MDP、运行脚本和 ZIP 打包。因此 Check 后 Viewer 和下载包共享同
 ```
 
 不带参数时脚本全程无人值守：缺省监听回环地址的 7788 端口，分配检测到的 CPU
-核心数的一半，推导可整除的并发队列数并启动用户级服务。脚本先下载
-`scripts/external_assets.json` 列出的全部单独分发力场，以及清单固定的 V3 脂质
-归档并校验 SHA-256，再建立锁定的 Python 环境并写入用户缓存。安装不要求 Git
-LFS 或 GitHub Token。运行 `./install-local.sh --help` 可查看命令行覆盖项，运行
-`./install-local.sh --interactive` 才会逐项询问。非回环地址只能用于明确选择的
-`trusted-lan` 模式。
+核心数的一半，推导可整除的并发队列数并启动用户级服务。脚本优先复用用户明确
+指定或 PATH 中可见的 GROMACS 2026.0 及以上版本；否则下载官方 GROMACS 2026.3
+源码归档，校验固定的 SHA-256 后，在用户的 GMXBUILDER 数据目录内构建私有运行时。
+检测到 `nvcc` 时启用 CUDA，否则构建功能完整的 CPU 版本。
+
+脚本同时建立私有 GAFF2/AM1-BCC 环境，从 conda-forge 安装固定版本的 AmberTools、
+ACPYPE 和 Open Babel；随后下载 `scripts/external_assets.json` 列出的单独分发力场及
+清单固定的 V3 脂质归档并校验摘要，再建立锁定的 Python 环境并写入用户缓存。
+安装不要求 Git LFS、GitHub Token 或 root 权限。运行 `./install-local.sh --help`
+可查看命令行覆盖项，运行 `./install-local.sh --interactive` 才会逐项询问。非回环
+地址只能用于明确选择的 `trusted-lan` 模式。
+
+如需复用现有兼容版本，可显式指定：
+
+```bash
+./install-local.sh --gmx-bin /opt/gromacs/bin/gmx
+```
+
+即使本机存在 CUDA，也可强制构建 CPU 版本：
+
+```bash
+GMXBUILDER_GROMACS_FORCE_CPU=1 ./install-local.sh
+```
 
 ### 2.3 手动安装
 
 ```bash
 git clone https://github.com/AkaseToshiyuki/GMX-BUILDER.git
 cd GMX-BUILDER
+python3 scripts/install_gromacs.py
+python3 scripts/install_gaff_runtime.py
 python3 scripts/install_external_assets.py
 python3 scripts/fetch_prebuilt_assets.py
 uv sync --frozen --no-dev
@@ -92,6 +118,13 @@ source .venv/bin/activate
 gmxbuilder --version
 gmxbuilder prebuilt-assets status
 gmxbuilder prebuilt-assets install
+```
+
+手动安装后，在当前 shell 中导出受管理运行时路径：
+
+```bash
+export GMX_BIN="$HOME/.local/share/gmxbuilder/runtime/gromacs-2026.3/bin/gmx"
+export GMXBUILDER_GAFF_ENV="$HOME/.local/share/gmxbuilder/gaff-env"
 ```
 
 下载引导与 `prebuilt-assets install` 会依次校验归档 SHA-256、严格库 schema，并确认归档内
@@ -203,6 +236,11 @@ Z offset、tilt 和 rotation。
 每个叶片都必须形成完整比例。不可用脂质仍可显示，但会标明当前力场下的原因和
 可用替代力场。
 
+Check 前的数量预览与后端采用同一套逐组分四舍五入、按输入顺序截断及由优势
+组分补足的整数分配规则；非对称膜的 XY 面积估算使用上下叶中较大的组成加权
+APL。该数值仅用于初始构建，不是平衡态 APL。Check 后以保存的检查点及其 Viewer
+为准。
+
 Check 后检查 Viewer 和质量报告：所有头部应朝溶剂、上下叶尾部相对、疏水核心
 贴合、蛋白周围无严重冲突、XY 周期边界密封且没有大面积空隙。
 
@@ -221,9 +259,10 @@ X/Y 由 Membrane Check 锁定。
 
 #### Step 7 — Ions
 
-设置盐浓度、中和选项和离子种类。三种算法都替换完整水分子：均匀随机、周期
-静电势和 Metropolis Monte Carlo。离子使用被替换水氧坐标，不应在盒角形成非物理
-堆积。
+设置盐浓度、中和选项和离子种类。固定种子的均匀随机替换是已验证且推荐的缺省
+方法，离子使用被替换完整水分子的氧坐标。形式电荷排序和无量纲 Metropolis
+位点优化也替换完整水分子，但属于明确标记的实验性启发式方法；它们不是平衡态
+离子采样，不能解释为预测的离子氛围。离子不应在盒角或溶质局部形成非物理堆积。
 
 点击 Check Ion Counts 后，在页面指定位置查看 Complete Simulation System。
 Viewer 应同时显示蛋白/其他溶质、膜、水、离子和盒。确认组分、电中性和空间
@@ -368,7 +407,9 @@ modules:
 
   simparams:
     schema_version: 2
-    hardware:
+  export:
+    write_mdp: true
+    execution_hardware:
       mode: thread-mpi
       cpu_threads: 8
       mpi_ranks: 2
@@ -376,9 +417,6 @@ modules:
       gpu_count: 1
       gpu_ids: [0]
       gmx_command: gmx
-
-  export:
-    write_mdp: true
 ```
 
 执行：
@@ -389,6 +427,10 @@ gmxbuilder build --config build.yaml --output ./other-output
 ```
 
 `--output` 覆盖 YAML 的 `output_dir`，不修改源文件。
+
+YAML/CLI 构建中的执行硬件位于 `export.execution_hardware`，而不是
+`simparams`。它只改变生成的运行脚本，不会改变已确认的分子坐标或 MDP 物理设置。
+HTTP Build 请求使用已安装 OpenAPI schema 中单独的 `modules.execution` 对象。
 
 ### 4.3 Bilayer 差异
 
@@ -415,11 +457,12 @@ gmxbuilder build --config build.yaml --output ./other-output
 ### 4.4 Simulation Parameters 契约
 
 `simparams` 顶层只接受当前 schema 声明的 `minimization`、`eq_stages`、
-`prod_iters`、`hardware` 和 `schema_version`。MDP 物理参数写在对应阶段中，
+`prod_iters` 和 `schema_version`。MDP 物理参数写在对应阶段中，
 不能使用旧的 global override。
 
-显式 `dt` 必须同时写 `dt_unit: fs` 或 `dt_unit: ps`。`hardware` 只配置运行脚本。
-省略阶段配置时，程序按体系和力场生成缺省协议；用户仍需在正式模拟前复核。
+显式 `dt` 必须同时写 `dt_unit: fs` 或 `dt_unit: ps`。执行硬件只配置运行脚本，
+不能再放入 `simparams`。省略阶段配置时，程序按体系和力场生成缺省协议；用户仍需
+在正式模拟前复核。
 
 ## 5. HTTP API
 
@@ -600,6 +643,13 @@ Build 不重建坐标，但拓扑一致性、索引/MDP/脚本生成和压缩仍
 
 Task 可能已过保留期或 ID 输入错误。任务私有自定义脂质也随任务清理，不能转移
 到另一 Task。
+
+### 7.9 自动安装无法构建 GROMACS
+
+确认已安装 CMake、C++17 编译器和 Python `venv`，并有足够磁盘空间及网络访问。
+如本机 CUDA 工具链导致失败，可用 `GMXBUILDER_GROMACS_FORCE_CPU=1` 重试。若使用
+管理员提供的兼容版本，通过 `--gmx-bin` 指定其 `gmx`。不要指定早于 2026.0 的
+GROMACS，因为随附的 Amber ff14SB 移植需要较新的预处理行为。
 
 ## 8. 获取帮助与准确能力
 

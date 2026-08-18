@@ -431,16 +431,23 @@ def _run_martini3(
             "output_interval_ps": 100.0,
             "equilibration_1": True,
             "equilibration_2": True,
-            "use_gpu": use_gpu,
-            "gpu_ids": gpu_ids or "0",
-            "threads": threads,
+        }
+        execution_hardware = {
+            "mode": "thread-mpi",
+            "cpu_threads": threads,
             "mpi_ranks": mpi_ranks,
-            "system_name": system_name,
+            "use_gpu": use_gpu,
+            "gpu_count": len(gpu_ids.split(",")) if use_gpu else 0,
+            "gpu_ids": gpu_ids if use_gpu else "",
         }
         result = runner.finalize_from_checkpoint(
             "cg_system",
             topology_config={},
-            export_config={"write_mdp": not dry, "system_name": system_name},
+            export_config={
+                "write_mdp": not dry,
+                "system_name": system_name,
+                "execution_hardware": execution_hardware,
+            },
             simparams=simparams,
         )
         if result.get("status") != "ok":
@@ -586,8 +593,16 @@ def lipid_library():
 
 @lipid_library.command("status")
 @click.option("--force-field", multiple=True, help="Limit coverage to a force field")
-def lipid_library_status(force_field: tuple[str, ...]):
+@click.option(
+    "--json-output",
+    "json_output",
+    is_flag=True,
+    help="Emit a machine-readable coverage summary instead of the entry table",
+)
+def lipid_library_status(force_field: tuple[str, ...], json_output: bool):
     """Print offline coverage; this command never generates coordinates."""
+    import json
+
     from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
 
     library = EquilibratedLipidLibrary()
@@ -595,6 +610,22 @@ def lipid_library_status(force_field: tuple[str, ...]):
     ready = sum(bool(job["ready"]) for job in jobs)
     unavailable = sum(bool(job.get("unavailable")) for job in jobs)
     pending = len(jobs) - ready - unavailable
+    if json_output:
+        click.echo(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "force_fields": list(force_field),
+                    "total": len(jobs),
+                    "ready": ready,
+                    "unavailable": unavailable,
+                    "pending": pending,
+                    "complete": pending == 0,
+                },
+                sort_keys=True,
+            )
+        )
+        return
     click.echo(
         f"Validated entries: {ready}/{len(jobs)} compatible force-field jobs; "
         f"unavailable: {unavailable}; pending: {pending}"

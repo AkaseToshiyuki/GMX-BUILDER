@@ -11,6 +11,7 @@ CLI_DEPLOYMENT_MODE=""
 CLI_PORT=""
 CLI_CPU_CORES=""
 CLI_QUEUE_SLOTS=""
+CLI_GMX_BIN=""
 
 fail() {
   printf 'Error: %s\n' "$*" >&2
@@ -30,6 +31,7 @@ accepted. Command-line options take precedence over environment variables.
   --port PORT               Web port (default: 7788)
   --cpu-cores COUNT         CPU cores exposed to GMXBUILDER (default: half)
   --queue-slots COUNT       Concurrent task slots (default: divisor near cores/4)
+  --gmx-bin PATH            GROMACS executable (default: GMX_BIN or PATH lookup)
   --interactive             Ask for each deployment value
   -h, --help                Show this help
 EOF
@@ -62,6 +64,11 @@ while (($#)); do
       CLI_QUEUE_SLOTS="$2"
       shift 2
       ;;
+    --gmx-bin)
+      (($# >= 2)) || fail "--gmx-bin requires a value."
+      CLI_GMX_BIN="$2"
+      shift 2
+      ;;
     --interactive)
       INTERACTIVE=1
       shift
@@ -82,6 +89,63 @@ import sys
 raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
 
+AVAILABLE_CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1')"
+[[ "$AVAILABLE_CORES" =~ ^[1-9][0-9]*$ ]] || AVAILABLE_CORES=1
+
+gmx_version() {
+  "$1" --version 2>&1 | sed -n 's/^GROMACS version:[[:space:]]*//p' | head -n 1
+}
+
+gmx_is_compatible() {
+  local version
+  [[ -n "$1" && -x "$1" ]] || return 1
+  version="$(gmx_version "$1")"
+  "$PYTHON_BIN" - "$version" <<'PY'
+import re
+import sys
+
+match = re.search(r"\d+(?:\.\d+)+", sys.argv[1])
+if not match:
+    raise SystemExit(1)
+parts = tuple(int(part) for part in match.group(0).split("."))
+raise SystemExit(0 if parts >= (2026, 0) else 1)
+PY
+}
+
+REQUESTED_GMX_BIN="${CLI_GMX_BIN:-${GMX_BIN:-}}"
+if [[ -n "$REQUESTED_GMX_BIN" ]]; then
+  gmx_is_compatible "$REQUESTED_GMX_BIN" || \
+    fail "The explicitly selected GROMACS must be version 2026.0 or newer."
+  GMX_BIN="$REQUESTED_GMX_BIN"
+else
+  GMX_BIN="$(command -v gmx || true)"
+  if ! gmx_is_compatible "$GMX_BIN"; then
+    printf '\nInstalling the required GROMACS runtime from the verified official source\n'
+    BUILD_JOBS=$((AVAILABLE_CORES / 2))
+    (( BUILD_JOBS >= 1 )) || BUILD_JOBS=1
+    GROMACS_ARGS=(
+      --target-root "${GMXBUILDER_RUNTIME_DIR:-$HOME/.local/share/gmxbuilder/runtime}"
+      --jobs "$BUILD_JOBS"
+    )
+    if [[ "${GMXBUILDER_GROMACS_FORCE_CPU:-0}" == "1" ]]; then
+      GROMACS_ARGS+=(--force-cpu)
+    fi
+    "$PYTHON_BIN" "$ROOT_DIR/scripts/install_gromacs.py" "${GROMACS_ARGS[@]}" || \
+      fail "The required GROMACS runtime could not be installed automatically."
+    GMX_BIN="${GMXBUILDER_RUNTIME_DIR:-$HOME/.local/share/gmxbuilder/runtime}/gromacs-2026.3/bin/gmx"
+  fi
+fi
+gmx_is_compatible "$GMX_BIN" || \
+  fail "GROMACS 2026.0 or newer is required by the bundled Amber ff14SB port."
+GMX_VERSION="$(gmx_version "$GMX_BIN")"
+GMX_BIN="$(cd -- "$(dirname -- "$GMX_BIN")" && pwd)/$(basename -- "$GMX_BIN")"
+printf 'Using GROMACS %s at %s\n' "$GMX_VERSION" "$GMX_BIN"
+
+GAFF_ENV="${GMXBUILDER_GAFF_ENV:-$HOME/.local/share/gmxbuilder/gaff-env}"
+printf '\nInstalling the GAFF2/AM1-BCC runtime from conda-forge\n'
+"$PYTHON_BIN" "$ROOT_DIR/scripts/install_gaff_runtime.py" --prefix "$GAFF_ENV" || \
+  fail "The GAFF2/AM1-BCC runtime could not be installed automatically."
+
 printf '\nInstalling separately distributed force-field assets from official sources\n'
 "$PYTHON_BIN" "$ROOT_DIR/scripts/install_external_assets.py" \
   --target "$ROOT_DIR/src/gmxbuilder/data/forcefields" || \
@@ -91,8 +155,6 @@ printf '\nHydrating the verified prebuilt lipid library\n'
 "$PYTHON_BIN" "$ROOT_DIR/scripts/fetch_prebuilt_assets.py" || \
   fail "The prebuilt lipid library could not be downloaded or verified."
 
-AVAILABLE_CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '1')"
-[[ "$AVAILABLE_CORES" =~ ^[1-9][0-9]*$ ]] || AVAILABLE_CORES=1
 DEFAULT_CPU_CORES=$((AVAILABLE_CORES / 2))
 (( DEFAULT_CPU_CORES >= 1 )) || DEFAULT_CPU_CORES=1
 
@@ -182,6 +244,9 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gmxbuilder"
 TASK_DIR="${GMXBUILDER_TASK_DIR:-$HOME/.local/share/gmxbuilder/tasks}"
 mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$TASK_DIR" "$HOME/.config/systemd/user"
 chmod 700 "$CONFIG_DIR" "$STATE_DIR" "$TASK_DIR"
+LIPID_LOG_DIR="$STATE_DIR/lipid-library"
+mkdir -p "$LIPID_LOG_DIR"
+chmod 700 "$LIPID_LOG_DIR"
 
 ADMIN_TOKEN="$($VENV_DIR/bin/python - <<'PY'
 import secrets
@@ -195,10 +260,38 @@ RUNNER="$CONFIG_DIR/run-local.sh"
   printf 'export GMXBUILDER_TASK_TTL_HOURS=%q\n' "168"
   printf 'export GMXBUILDER_ADMIN_TOKEN=%q\n' "$ADMIN_TOKEN"
   printf 'export GMXBUILDER_DEPLOYMENT_MODE=%q\n' "$DEPLOYMENT_MODE"
+  printf 'export GMX_BIN=%q\n' "$GMX_BIN"
+  printf 'export GMXBUILDER_GAFF_ENV=%q\n' "$GAFF_ENV"
   printf 'exec %q serve --host %q --port %q --cpu-cores %q --task-threads %q --max-builds %q\n' \
     "$VENV_DIR/bin/gmxbuilder" "$BIND_HOST" "$PORT" "$CPU_CORES" "$TASK_THREADS" "$QUEUE_SLOTS"
 } > "$RUNNER"
 chmod 700 "$RUNNER"
+
+LIPID_RUNNER="$CONFIG_DIR/run-lipid-library.sh"
+{
+  printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n'
+  printf 'export GMXBUILDER_LIPID_LIBRARY=%q\n' "$HOME/.cache/gmxbuilder/lipid_equilibrated"
+  printf 'export GMXBUILDER_GAFF_CACHE=%q\n' "$HOME/.cache/gmxbuilder/gaff2"
+  printf 'export GMX_BIN=%q\n' "$GMX_BIN"
+  printf 'export GMXBUILDER_GAFF_ENV=%q\n' "$GAFF_ENV"
+  printf 'exec %q lipid-library queue --force-field amber14sb --force-field charmm36m --force-field charmm36 --npt-ps 1000 --log-dir %q\n' \
+    "$VENV_DIR/bin/gmxbuilder" "$LIPID_LOG_DIR"
+} > "$LIPID_RUNNER"
+chmod 700 "$LIPID_RUNNER"
+
+LIPID_WATCHDOG="$CONFIG_DIR/watch-lipid-library.sh"
+{
+  printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n'
+  printf 'SERVICE=gmxbuilder-lipid-library.service\n'
+  printf 'CLI=%q\n' "$VENV_DIR/bin/gmxbuilder"
+  printf 'if systemctl --user is-active --quiet "$SERVICE"; then exit 0; fi\n'
+  printf 'STATUS="$($CLI lipid-library status --force-field amber14sb --force-field charmm36m --force-field charmm36 --json-output)"\n'
+  printf 'PENDING="$(%q -c '\''import json,sys; print(json.load(sys.stdin)["pending"])'\'' <<<"$STATUS")"\n' "$VENV_DIR/bin/python"
+  printf 'if [[ "$PENDING" -eq 0 ]]; then exit 0; fi\n'
+  printf 'systemctl --user reset-failed "$SERVICE" >/dev/null 2>&1 || true\n'
+  printf 'systemctl --user start "$SERVICE"\n'
+} > "$LIPID_WATCHDOG"
+chmod 700 "$LIPID_WATCHDOG"
 
 SERVICE_FILE="$HOME/.config/systemd/user/gmxbuilder.service"
 {
@@ -214,9 +307,34 @@ SERVICE_FILE="$HOME/.config/systemd/user/gmxbuilder.service"
   printf '\n[Install]\nWantedBy=default.target\n'
 } > "$SERVICE_FILE"
 
+LIPID_SERVICE_FILE="$HOME/.config/systemd/user/gmxbuilder-lipid-library.service"
+{
+  printf '[Unit]\nDescription=GMXBUILDER force-field-specific lipid pre-equilibration queue\nAfter=network.target gmxbuilder.service\n\n'
+  printf '[Service]\nType=oneshot\nNice=5\nExecStart=/usr/bin/env bash %%h/.config/gmxbuilder/run-lipid-library.sh\n'
+  printf 'StandardOutput=journal\nStandardError=journal\nUMask=0077\n'
+  printf 'NoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=read-only\n'
+  printf 'ReadWritePaths=%s %s %s\n' "$STATE_DIR" "$HOME/.cache/gmxbuilder" "$HOME/.local/share/gmxbuilder"
+  printf 'RestrictSUIDSGID=true\nLockPersonality=true\nRestrictRealtime=true\n'
+  printf '\n[Install]\nWantedBy=default.target\n'
+} > "$LIPID_SERVICE_FILE"
+
+LIPID_WATCHDOG_SERVICE="$HOME/.config/systemd/user/gmxbuilder-lipid-library-watchdog.service"
+{
+  printf '[Unit]\nDescription=Check for pending GMXBUILDER lipid-library jobs\nAfter=gmxbuilder.service\n\n'
+  printf '[Service]\nType=oneshot\nExecStart=/usr/bin/env bash %%h/.config/gmxbuilder/watch-lipid-library.sh\n'
+} > "$LIPID_WATCHDOG_SERVICE"
+
+LIPID_WATCHDOG_TIMER="$HOME/.config/systemd/user/gmxbuilder-lipid-library-watchdog.timer"
+{
+  printf '[Unit]\nDescription=Check the GMXBUILDER lipid-library queue once per hour\n\n'
+  printf '[Timer]\nOnBootSec=5min\nOnUnitActiveSec=1h\nRandomizedDelaySec=2min\nPersistent=true\n\n'
+  printf '[Install]\nWantedBy=timers.target\n'
+} > "$LIPID_WATCHDOG_TIMER"
+
 if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user daemon-reload
   systemctl --user enable --now gmxbuilder.service
+  systemctl --user enable --now gmxbuilder-lipid-library-watchdog.timer
   systemctl --user restart gmxbuilder.service
   printf '\nGMXBUILDER is running as the user service gmxbuilder.service.\n'
   printf 'Status: systemctl --user status gmxbuilder.service\n'

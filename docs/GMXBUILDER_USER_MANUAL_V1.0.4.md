@@ -1,19 +1,20 @@
 # GMXBUILDER User Manual
 
-<p><strong>English</strong> · <a href="GMXBUILDER_USER_MANUAL_V1.0.3.zh-CN.md">简体中文</a></p>
+<p><strong>English</strong> · <a href="GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.md">简体中文</a></p>
 
 | Item | Value |
 |---|---|
-| Document version | V1.0.3 |
-| Software | GMXBUILDER v0.9.9 or later |
+| Document version | V1.0.4 |
+| Software | GMXBUILDER v0.9.18 or later |
 | Author | Haochen Yang |
-| Release date | 2026-08-15 |
+| Release date | 2026-08-17 |
 | Status | Public release |
 
 ## Change log
 
 | Document version | Date | Change | Author |
 |---|---|---|---|
+| V1.0.4 | 2026-08-17 | Documented the managed GROMACS and GAFF2 runtimes, corrected execution-hardware, ion-placement, and explicit-count membrane-preview contracts, and synchronized installation, Web, CLI, API, and troubleshooting guidance with GMXBUILDER v0.9.18 | Haochen Yang |
 | V1.0.3 | 2026-08-15 | Updated the verified V3 lipid assets, automatic external-asset bootstrap, installation contract, public documentation boundary, and current Martini 3 workflows | Haochen Yang |
 | V1.0.2 | 2026-08-14 | Documented strict prebuilt-lipid asset validation, current lipid-library status queries, automatic Martini 3 membrane orientation and box sizing, and corrected coarse-grained task navigation | Haochen Yang |
 | V1.0.1 | 2026-08-11 | Updated task routes, Task ID copy and recovery, Martini 3, DNA/RNA, CLI/API usage, output layout, and deployment boundaries | Haochen Yang |
@@ -59,14 +60,19 @@ before simulation.
 
 ## 2. Installation and service startup
 
-### 2.1 Requirements
+### 2.1 Bootstrap requirements
 
-- Linux and Python 3.10 or later.
-- A working GROMACS installation.
-- CUDA-capable GROMACS only when GPU execution is required.
-- AmberTools/ACPYPE for new GAFF2 parameterization.
-- The pinned Martini 3 dependencies when using the CG workflow.
+- Linux on x86-64 or AArch64 and Python 3.10 or later.
+- Git, CMake, a C++17 compiler, and Python's `venv` module.
 - Internet access during first installation.
+- The NVIDIA CUDA toolkit, including `nvcc`, only when the managed GROMACS
+  runtime should be built with CUDA acceleration.
+
+The installer manages the required GROMACS runtime, Python environment,
+GAFF2/AM1-BCC tools, force-field data, and verified prebuilt lipid assets.
+Users therefore do not need to install GROMACS, AmberTools, ACPYPE, Open
+Babel, Martini 3 data, or Python packages separately. Administrative access is
+not required when the bootstrap tools above are already present.
 
 ### 2.2 Unattended local installation
 
@@ -78,18 +84,40 @@ cd GMX-BUILDER
 
 With no arguments, the installer is unattended: it binds to loopback on port
 7788, assigns half of the detected CPU cores, derives a compatible queue size,
-and starts the user service. Before creating the environment it downloads every
-separately distributed force-field port listed in `scripts/external_assets.json`
-and the V3 lipid archive from manifest-pinned HTTPS locations, verifies
-SHA-256, installs the locked Python environment, and populates the user cache.
-Git LFS and a GitHub token are not required. Run `./install-local.sh --help` for
-command-line overrides or `./install-local.sh --interactive` for prompts. One
-Task remains strictly serial; safe computation inside its current step may use
-multiple threads.
+and starts the user service. It reuses an explicitly selected or PATH-visible
+GROMACS 2026.0-or-newer executable. Otherwise it downloads the official
+GROMACS 2026.3 source archive, verifies its pinned SHA-256 digest, and builds a
+private runtime under the user's GMXBUILDER data directory. CUDA is enabled
+when `nvcc` is available; otherwise a complete CPU runtime is built.
+
+The same installation creates a private GAFF2/AM1-BCC environment containing
+pinned AmberTools, ACPYPE, and Open Babel packages from conda-forge. It also
+downloads every separately distributed force-field port listed in
+`scripts/external_assets.json` and the V3 lipid archive from manifest-pinned
+HTTPS locations, verifies their digests, installs the locked Python
+environment, and populates the user cache. Git LFS, a GitHub token, and root
+access are not required. Run `./install-local.sh --help` for command-line
+overrides or `./install-local.sh --interactive` for prompts. One Task remains
+strictly serial; safe computation inside its current step may use multiple
+threads.
+
+Select a compatible existing executable explicitly when desired:
+
+```bash
+./install-local.sh --gmx-bin /opt/gromacs/bin/gmx
+```
+
+Force a CPU-only managed GROMACS build even when CUDA is installed:
+
+```bash
+GMXBUILDER_GROMACS_FORCE_CPU=1 ./install-local.sh
+```
 
 ### 2.3 Manual installation
 
 ```bash
+python3 scripts/install_gromacs.py
+python3 scripts/install_gaff_runtime.py
 python3 scripts/install_external_assets.py
 python3 scripts/fetch_prebuilt_assets.py
 uv sync --frozen --no-dev
@@ -98,6 +126,14 @@ source .venv/bin/activate
 gmxbuilder --version
 gmxbuilder prebuilt-assets status
 gmxbuilder prebuilt-assets install
+```
+
+Add the managed GROMACS executable to the current shell when using the manual
+sequence, or export its absolute path as `GMX_BIN`:
+
+```bash
+export GMX_BIN="$HOME/.local/share/gmxbuilder/runtime/gromacs-2026.3/bin/gmx"
+export GMXBUILDER_GAFF_ENV="$HOME/.local/share/gmxbuilder/gaff-env"
 ```
 
 The download bootstrap and asset installer verify the archive checksum,
@@ -190,6 +226,11 @@ next step.
 
 Choose upper and lower leaflet compositions and lipid counts. Every lipid must
 be supported by the selected backend and have a valid conformer library entry.
+Before Check, the count preview follows the same round/trim/dominant-component
+padding rule as construction, and the estimated XY area uses the larger
+composition-weighted APL for an asymmetric bilayer. This is a construction
+estimate rather than an equilibrium APL; after Check, the saved checkpoint and
+its Viewer are authoritative.
 Review leaflet orientation, headgroups facing solvent, tails facing the bilayer
 core, packing around the protein, and the quality report.
 
@@ -202,10 +243,13 @@ atom counts, and that the membrane does not cross a periodic boundary.
 #### Step 7 — Ions and complete-system confirmation
 
 Choose ion species, concentration, neutralization, exclusion radius, and
-placement method. Random replacement, electrostatic replacement, and Monte
-Carlo placement all replace water molecules. Check the total system, inspect
-water and ion distributions, then confirm the exact coordinates below the
-Viewer before continuing.
+placement method. Seeded uniform random replacement is the validated and
+recommended default and replaces complete waters at their oxygen coordinates.
+The formal-charge-ranked and dimensionless Metropolis site-optimization modes
+also replace complete waters, but are explicitly experimental heuristics; they
+are not equilibrium ion sampling and must not be interpreted as a predicted
+ion atmosphere. Check the total system, inspect water and ion distributions,
+then confirm the exact coordinates below the Viewer before continuing.
 
 #### Step 8 — Simulation Parameters and Build
 
@@ -306,7 +350,10 @@ modules:
     ion_method: random
   topology: {}
   simparams:
-    hardware:
+    schema_version: 2
+  export:
+    write_mdp: true
+    execution_hardware:
       mode: thread-mpi
       cpu_threads: 8
       mpi_ranks: 2
@@ -314,8 +361,6 @@ modules:
       gpu_count: 1
       gpu_ids: [0]
       gmx_command: gmx
-  export:
-    write_mdp: true
 ```
 
 ```bash
@@ -326,6 +371,12 @@ gmxbuilder build --config build.yaml --output ./another-output
 Every selected lipid and retained molecule must be valid for the complete
 force-field combination. CLI failures use non-zero exit status and do not
 silently ignore unknown keys.
+
+For YAML/CLI builds, execution hardware belongs to
+`export.execution_hardware`, not `simparams`. It changes the generated launcher
+and never changes the accepted molecular coordinates or MDP physics. HTTP Build
+requests use the separate `modules.execution` object shown by the installed
+OpenAPI schema.
 
 ### 4.3 Martini 3 example
 
@@ -501,6 +552,15 @@ confirmed checkpoint.
 
 Check the 32-character ID and the server retention period. Task-private custom
 lipids cannot be moved to another Task.
+
+### 7.8 Automatic installation cannot build GROMACS
+
+Confirm that CMake, a C++17 compiler, Python `venv`, sufficient disk space, and
+network access are available. To bypass a local CUDA-toolchain problem, retry
+with `GMXBUILDER_GROMACS_FORCE_CPU=1`. To use an administrator-provided
+compatible build, pass its `gmx` executable with `--gmx-bin`. Do not point the
+installer to GROMACS older than 2026.0, because the bundled Amber ff14SB port
+requires the newer preprocessing behavior.
 
 ## 8. Getting help
 

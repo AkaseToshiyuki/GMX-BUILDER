@@ -171,8 +171,8 @@ def test_queue_admission_persists_request_and_returns_restorable_task_id(tmp_pat
         "minimization",
         "eq_stages",
         "prod_iters",
-        "hardware",
     }
+    assert saved_request["modules"]["execution"]["cpu_threads"] >= 1
     assert manager.get_state(task_id)["build_status"]["status"] == "queued"
 
 

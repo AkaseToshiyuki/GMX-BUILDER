@@ -6,7 +6,7 @@
 英文许可证和上游原文为准。
 
 GMXBUILDER 将原创调度代码与科学数据格式、力场移植数据及可选外部程序组合使用。
-项目 MIT 许可证只适用于 GMXBUILDER 原创代码和文档，不替代任何上游许可证、
+项目 GPL-3.0-or-later 许可证只适用于 GMXBUILDER 原创代码和文档，不替代任何上游许可证、
 引用要求或使用条件。
 
 ## 力场数据
@@ -38,13 +38,17 @@ CHARMM36/CHARMM36m。安装器会在安装 Python 依赖前，从 MacKerell Lab 
 `src/gmxbuilder/data/prebuilt_assets/` 包含显式溶剂、半各向同性 NPT 脂质构象，
 以及通过 GAFF2/AM1-BCC 工具生成的 GROMACS 拓扑与缓存。安装器可从清单固定的
 公开 HTTPS 媒体地址直接获取 Git LFS 负载，因此用户不需要 Git LFS 或访问令牌。
-归档不包含 AmberTools、
-ACPYPE 或 GROMACS 可执行代码；这些程序仍是外部依赖。生成参数仍需遵守对应
-力场引用要求，并针对目标体系完成科学复核。
+归档不包含 AmberTools、ACPYPE 或 GROMACS 可执行代码；这些程序仍是外部依赖。
+Amber 项目将其力场说明为公有领域材料；缓存中的拓扑与坐标是 GMXBUILDER 生成
+结果，而不是 AmberTools 程序源码的副本。生成参数仍需遵守对应力场引用要求，
+并针对目标体系完成科学复核。
 
-AmberTools 的组件许可证并不完全相同，请查阅官方分发和许可证：
-<https://ambermd.org/AmberTools.php>。GROMACS 不随本项目打包，其许可证与引用
-指南见 <https://www.gromacs.org/>。
+AmberTools 的组件许可证并不完全相同，而 Amber 力场由项目官网说明为公有领域
+材料；请查阅官方分发和许可证：<https://ambermd.org/AmberTools.php> 与
+<https://ambermd.org/>。GROMACS 可执行文件由安装器单独安装；从 GROMACS 分发
+复制的力场文件继续遵循 LGPL-2.1-or-later，保留的许可证正文位于
+`src/gmxbuilder/data/forcefields/LICENSE-GROMACS-LGPL-2.1.txt`。GROMACS 许可证
+与引用指南见 <https://www.gromacs.org/>。
 
 ## Martini 3 粗粒化工作流
 

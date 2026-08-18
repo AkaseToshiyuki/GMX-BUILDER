@@ -105,7 +105,6 @@ def test_simulation_config_keeps_workflow_controls_out_of_mdp_context():
         {
             "eq_stages": [_short_stage()],
             "prod_iters": [_short_stage(ensemble="npt")],
-            "hardware": {"cpu_threads": 1, "mpi_ranks": 1},
             "mdp_overrides_text": "",
             "system_name": "reported_failure_shape",
         },
@@ -117,11 +116,10 @@ def test_simulation_config_keeps_workflow_controls_out_of_mdp_context():
         "minimization",
         "eq_stages",
         "prod_iters",
-        "hardware",
     }
     assert normalized["schema_version"] == 2
     assert "system_name" not in normalized
-    assert "hardware" not in normalized["eq_stages"][0]
+    assert "hardware" not in normalized
 
 
 def test_legacy_global_mdp_values_are_migrated_to_each_stage():
