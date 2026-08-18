@@ -6,7 +6,7 @@ authors:
   - family-names: "Yang"
     given-names: "Haochen"
     affiliation: "Shanghai Institute of Biochemistry and Cell Biology, Chinese Academy of Sciences"
-version: 0.9.18
+version: 0.9.19
 date-released: 2026-08-18
 license: GPL-3.0-or-later
 repository-code: "https://github.com/AkaseToshiyuki/GMX-BUILDER"

@@ -5,6 +5,11 @@ from pathlib import Path
 from gmxbuilder.web.task_types import get_all_task_types, get_task_type
 
 
+def test_task_categories_follow_the_public_landing_page_order() -> None:
+    categories = list(dict.fromkeys(item["category"] for item in get_all_task_types()))
+    assert categories == ["Membrane", "Solution", "Coarse Grained"]
+
+
 ROOT = Path(__file__).parents[1]
 
 

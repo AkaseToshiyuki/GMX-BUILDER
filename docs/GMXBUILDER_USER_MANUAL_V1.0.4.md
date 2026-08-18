@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Document version | V1.0.4 |
-| Software | GMXBUILDER v0.9.18 or later |
+| Software | GMXBUILDER v0.9.19 or later |
 | Author | Haochen Yang |
 | Release date | 2026-08-17 |
 | Status | Public release |
@@ -14,7 +14,7 @@
 
 | Document version | Date | Change | Author |
 |---|---|---|---|
-| V1.0.4 | 2026-08-17 | Documented the managed GROMACS and GAFF2 runtimes, corrected execution-hardware, ion-placement, and explicit-count membrane-preview contracts, and synchronized installation, Web, CLI, API, and troubleshooting guidance with GMXBUILDER v0.9.18 | Haochen Yang |
+| V1.0.4 | 2026-08-17 | Documented the managed GROMACS and GAFF2 runtimes, corrected execution-hardware, ion-placement, and explicit-count membrane-preview contracts, and synchronized installation, Web, CLI, API, and troubleshooting guidance with GMXBUILDER v0.9.19 | Haochen Yang |
 | V1.0.3 | 2026-08-15 | Updated the verified V3 lipid assets, automatic external-asset bootstrap, installation contract, public documentation boundary, and current Martini 3 workflows | Haochen Yang |
 | V1.0.2 | 2026-08-14 | Documented strict prebuilt-lipid asset validation, current lipid-library status queries, automatic Martini 3 membrane orientation and box sizing, and corrected coarse-grained task navigation | Haochen Yang |
 | V1.0.1 | 2026-08-11 | Updated task routes, Task ID copy and recovery, Martini 3, DNA/RNA, CLI/API usage, output layout, and deployment boundaries | Haochen Yang |

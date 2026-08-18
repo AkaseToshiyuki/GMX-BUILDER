@@ -324,6 +324,12 @@ _TASK_TYPES: list[TaskType] = [
     # Nanomaterial: no implementation plan — very niche.
 ]
 
+_CATEGORY_ORDER = {
+    "Membrane": 0,
+    "Solution": 1,
+    "Coarse Grained": 2,
+}
+
 
 def get_all_task_types() -> list[dict]:
     """Return all task types as dictionaries for the API."""
@@ -340,6 +346,11 @@ def get_all_task_types() -> list[dict]:
                 "route_slug": t.route_slug,
             }
         )
+    # Keep the public landing page organized by workflow scale while
+    # preserving the registry order within each category.
+    result.sort(
+        key=lambda item: _CATEGORY_ORDER.get(item["category"], len(_CATEGORY_ORDER))
+    )
     return result
 
 

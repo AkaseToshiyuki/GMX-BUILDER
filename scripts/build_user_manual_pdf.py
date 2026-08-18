@@ -49,7 +49,7 @@ TITLE = "GMXBUILDER User Manual"
 DOC_VERSION = "V1.0.4"
 AUTHOR = "Haochen Yang"
 DATE = "2026-08-17"
-SOFTWARE = "GMXBUILDER v0.9.18 or later"
+SOFTWARE = "GMXBUILDER v0.9.19 or later"
 LANGUAGE = "en"
 
 
