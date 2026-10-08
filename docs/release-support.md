@@ -2,12 +2,15 @@
 
 <p><strong>English</strong> · <a href="release-support.zh-CN.md">简体中文</a></p>
 
-GMXBUILDER **1.0.0** ships asset release **v7**, containing 37 accepted
+GMXBUILDER **1.0.0** ships the **V4 lipid library**, containing 37 accepted
 lipid/backend combinations and 134,000 conformers. The corresponding
 [machine-readable matrix](../src/gmxbuilder/data/prebuilt_assets/support-matrix.json)
 records each combination, conformer count, and validation scope. Application and
 asset versions are separate; installation and runtime admission verify their
 compatibility.
+
+V4 names the lipid-library generation. The distribution manifest uses
+`asset_version: 7` for bundle revision 7; this does not denote a V7 library.
 
 ## Distributed combinations
 

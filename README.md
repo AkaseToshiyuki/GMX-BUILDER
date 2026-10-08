@@ -38,7 +38,7 @@ than silently approximated.
 
 ### Lipid asset scope
 
-Asset release **v7** distributes **37 accepted lipid/backend combinations** and
+The **V4 lipid library** distributes **37 accepted lipid/backend combinations** and
 134,000 initialization conformers. Its 67 GAFF2 parameter caches are separate
 from conformer acceptance: a fitted cache does not make a lipid available for
 membrane construction. See the [supported combinations and validation scope](docs/release-support.md).

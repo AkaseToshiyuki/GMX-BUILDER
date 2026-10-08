@@ -24,7 +24,7 @@ currently targets Linux x86-64. Managed Web storage also requires FUSE support.
 
 | Download | Purpose |
 | --- | --- |
-| `gmxbuilder-1.0.0-py3-none-any.whl` | Python package and bundled asset v7 |
+| `gmxbuilder-1.0.0-py3-none-any.whl` | Python package and bundled V4 lipid library |
 | `gmxbuilder-1.0.0.tar.gz` | Source distribution with installer, scripts and user documentation |
 | `USER_MANUAL.pdf`, `USER_MANUAL.zh-CN.pdf` | Versioned release manuals |
 | `RELEASE_NOTES_1.0.0.md`, `RELEASE_NOTES_1.0.0.zh-CN.md` | Features and scientific limits |

@@ -11,7 +11,7 @@ Martini 3 bilayer/protein–membrane systems and Martini 3 solvated proteins.
 - Managed Web execution supports asynchronous operations, task recovery,
   bounded queues and configurable resource limits. Local, authenticated public
   and anonymous public deployments have explicit access policies.
-- Asset v7 distributes 37 accepted lipid/backend initialization libraries,
+- The V4 lipid library distributes 37 accepted lipid/backend initialization libraries,
   134,000 conformers and 67 prepared GAFF2/AM1-BCC parameter caches.
 - Exact Lipid21, GAFF2, local CHARMM/CGenFF and Martini routes enforce their
   molecular identity, parameter and force-field compatibility contracts.

@@ -51,7 +51,7 @@ AUTHOR = "Haochen Yang"
 DATE = "2026-10-08"
 SOFTWARE = "GMXBUILDER 1.0.0"
 LANGUAGE = "en"
-PUBLIC_DOC_BASE = f"https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/v{DOC_VERSION}/docs/"
+PUBLIC_DOC_BASE = "https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/main/docs/"
 
 
 def register_fonts() -> None:
@@ -64,16 +64,22 @@ def register_fonts() -> None:
 
 
 def apply_font_fallback(markup: str) -> str:
-    """Use the embedded Latin font for ASCII and the CJK font otherwise."""
+    """Keep Latin punctuation visible and use the CJK font for Chinese glyphs."""
+    latin_glyphs = pdfmetrics.getFont("GMXLatin").face.charToGlyph
     parts = re.split(r"(<[^>]+>)", markup)
     converted = []
     for part in parts:
         if part.startswith("<") and part.endswith(">"):
             converted.append(part)
         else:
-            for run in re.findall(r"[\x00-\x7f]+|[^\x00-\x7f]+", part):
-                font = "GMXLatin" if all(ord(char) < 128 for char in run) else "GMXCJK"
-                converted.append(f'<font name="{font}">{run}</font>')
+            runs: list[tuple[str, str]] = []
+            for char in part:
+                font = "GMXLatin" if ord(char) in latin_glyphs else "GMXCJK"
+                if runs and runs[-1][0] == font:
+                    runs[-1] = (font, runs[-1][1] + char)
+                else:
+                    runs.append((font, char))
+            converted.extend(f'<font name="{font}">{run}</font>' for font, run in runs)
     return "".join(converted)
 
 
@@ -351,23 +357,40 @@ def make_table(rows: list[list[str]], styles, page_width: float) -> Table:
     return table
 
 
+def join_prose_lines(lines: list[str]) -> str:
+    """Join soft wraps without introducing spaces inside Chinese prose."""
+    text = ""
+    cjk = r"[\u3400-\u9fff\uf900-\ufaff]"
+    punctuation = "，。；：！？、（）【】《》“”‘’"
+    for line in lines:
+        part = line.strip()
+        if not part:
+            continue
+        separator = " " if text else ""
+        if text and (
+            (re.fullmatch(cjk, text[-1]) and re.fullmatch(cjk, part[0]))
+            or text[-1] in punctuation
+            or part[0] in punctuation
+        ):
+            separator = ""
+        text += separator + part
+    return text
+
+
 def parse_markdown(source: str, styles, page_width: float):
     lines = source.splitlines()
     story = []
     paragraph: list[str] = []
     list_items: list[str] = []
     list_kind = "bullet"
+    list_start = 1
     code_lines: list[str] = []
     in_code = False
     table_rows: list[list[str]] = []
 
     def flush_paragraph():
         if paragraph:
-            story.append(
-                Paragraph(
-                    inline_markup(" ".join(part.strip() for part in paragraph)), styles["body"]
-                )
-            )
+            story.append(Paragraph(inline_markup(join_prose_lines(paragraph)), styles["body"]))
             paragraph.clear()
 
     def flush_list():
@@ -376,7 +399,6 @@ def parse_markdown(source: str, styles, page_width: float):
             items = [
                 ListItem(
                     Paragraph(inline_markup(item), styles["body"]),
-                    leftIndent=4 * mm,
                 )
                 for item in list_items
             ]
@@ -384,10 +406,13 @@ def parse_markdown(source: str, styles, page_width: float):
                 ListFlowable(
                     items,
                     bulletType="1" if list_kind == "number" else "bullet",
-                    start="1",
+                    start=list_start if list_kind == "number" else "bulletchar",
                     leftIndent=7 * mm,
-                    bulletFontName="GMXCJK",
+                    bulletFontName="GMXLatin",
                     bulletFontSize=8,
+                    bulletFormat="%s." if list_kind == "number" else None,
+                    bulletAlign="right",
+                    bulletDedent=2 * mm,
                     spaceAfter=5,
                 )
             )
@@ -457,8 +482,13 @@ def parse_markdown(source: str, styles, page_width: float):
             new_kind = "number" if number else "bullet"
             if list_items and new_kind != list_kind:
                 flush_list()
+            if number and not list_items:
+                list_start = int(re.match(r"\s*(\d+)", line).group(1))
             list_kind = new_kind
             list_items.append((number or bullet).group(1))
+            continue
+        if list_items and line.startswith(("  ", "\t")) and line.strip():
+            list_items[-1] = join_prose_lines([list_items[-1], line])
             continue
         flush_list()
 

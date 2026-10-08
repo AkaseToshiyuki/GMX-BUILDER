@@ -14,9 +14,9 @@
 
 | Version | Date | Contents |
 |---|---|---|
-| 1.0.0 | 2026-10-08 | Stable release; asset v7, five workflows, asynchronous API, final review, installation requirements and output layout |
+| 1.0.0 | 2026-10-08 | Stable release; the V4 lipid library, five workflows, asynchronous API, final review, installation requirements and output layout |
 
-This manual applies to software 1.0.0. Asset v7 supplies 37 accepted combinations,
+This manual applies to software 1.0.0. The V4 lipid library supplies 37 accepted combinations,
 134,000 initialization conformers and 67 GAFF2/AM1-BCC parameter caches. Prepared
 parameters do not imply conformer acceptance; initialization acceptance does not
 certify membrane equilibrium. See the [release support matrix](release-support.md).
@@ -62,7 +62,9 @@ before simulation.
 Two boundaries are reported during a build rather than left to be discovered
 afterwards.
 
-**Free protein termini.** Uncapped termini are built as the canonical charged
+#### 1.3.1 Free protein termini
+
+Uncapped termini are built as the canonical charged
 templates, NH3+ and COO-; no neutral terminal microstate is implemented. The
 bounds follow from the model pKa values rather than being chosen. Between pH
 4.45 and 7.05 both canonical states are at least 90% populated and the build is
@@ -78,7 +80,9 @@ Select them only when the experimental construct or modeling objective calls
 for that chemistry; they are not a general workaround for unsupported pH or
 neutral free-terminal states.
 
-**Water models.** A force-field and water-model pair is classified before use.
+#### 1.3.2 Water models
+
+A force-field and water-model pair is classified before use.
 A pair that is merely bundled, rather than being the force field's default or
 covered by regression tests, is reported as expert-unvalidated and requires
 `allow_unvalidated_water_model: true` to proceed. The classification and its
@@ -107,10 +111,10 @@ below the minimum is treated the same way.
 
 ### 2.1 Bootstrap requirements
 
-- Linux x86-64 and Python 3.10 or later.
-- Git, CMake, a C++17 compiler, and Python's `venv` module.
-- Internet access during first installation.
-- The NVIDIA CUDA toolkit, including `nvcc`, only when the managed GROMACS
+1. Linux x86-64 and Python 3.10 or later.
+2. Git, CMake, a C++17 compiler, and Python's `venv` module.
+3. Internet access during first installation.
+4. The NVIDIA CUDA toolkit, including `nvcc`, only when the managed GROMACS
   runtime should be built with CUDA acceleration.
 
 The installer manages the required GROMACS runtime, Python environment,
@@ -123,6 +127,7 @@ systemd user manager, cgroup v2, Landlock ABI 3+, FUSE3, `fusermount3`, `/dev/fu
 `libfuse3-dev` and `pkg-config`. Once the system prerequisites are installed,
 the application and scientific runtimes can be installed under the user account.
 See the [resource setup guide](anonymous-resources.md).
+
 
 ### 2.2 Unattended local installation
 
@@ -143,7 +148,7 @@ when `nvcc` is available; otherwise a complete CPU runtime is built.
 The same installation creates a private GAFF2/AM1-BCC environment containing
 pinned AmberTools, ACPYPE, and Open Babel packages from conda-forge. It also
 downloads every separately distributed force-field port listed in
-`scripts/external_assets.json` and the v7 lipid archive (schema 4) from manifest-pinned
+`scripts/external_assets.json` and the V4 lipid archive (bundle revision 7, schema 4) from manifest-pinned
 HTTPS locations, verifies their digests, installs the locked Python
 environment, and populates the user cache. Git LFS, a GitHub token, and root
 access are not required. Run `./install-local.sh --help` for command-line
@@ -165,6 +170,8 @@ GMXBUILDER_GROMACS_FORCE_CPU=1 ./install-local.sh
 
 ### 2.3 Manual installation
 
+#### 2.3.1 Install runtimes, software, and assets
+
 ```bash
 python3 scripts/install_gromacs.py
 python3 scripts/install_gaff_runtime.py
@@ -177,6 +184,8 @@ gmxbuilder --version
 gmxbuilder prebuilt-assets status
 gmxbuilder prebuilt-assets install
 ```
+
+#### 2.3.2 Configure runtime paths for the current shell
 
 Add the managed GROMACS executable to the current shell when using the manual
 sequence, or export its absolute path as `GMX_BIN`:
@@ -581,7 +590,7 @@ curl -sS -X POST "$API/api/step/$TASK_ID/ions" \
 Bilayer clients also execute `orient` and `membrane` before solvation. Inspect
 saved checkpoints with `GET /api/steps/{task_id}`.
 
-#### Final structure confirmation
+#### 5.2.1 Final structure confirmation
 
 After the ion step succeeds, retrieve and inspect the complete final system.
 The JSON contains displayed coordinates, components, box, `source_step` and
@@ -774,14 +783,14 @@ it in a public issue or screenshot.
 
 ## Appendix A. Deployment configuration
 
-- Use a non-root service account. The default installation listens on `127.0.0.1:7788`.
-- Unauthenticated non-loopback `local` / `trusted-lan` listeners require explicit unsafe opt-in and a protected private network.
-- Authenticated public hosting uses `GMXBUILDER_DEPLOYMENT_MODE=public` with strong Basic or Bearer credentials.
-- Anonymous public hosting uses `GMXBUILDER_DEPLOYMENT_MODE=public-anonymous`, requires managed storage and computation isolation, and keeps `GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT=0`.
-- Both public modes require explicit HTTPS `GMXBUILDER_CORS_ORIGINS` and exact `GMXBUILDER_TRUSTED_PROXIES`. The proxy must replace untrusted forwarding headers. Set `FORWARDED_ALLOW_IPS=` empty so the application can validate the actual socket peer.
-- Configure a separate strong `GMXBUILDER_ADMIN_TOKEN`. Keep Task IDs, operation IDs and credentials out of public logs.
-- Monitor `GET /health/ready`; a reachable home page or successful `/health/live` does not establish writable quota storage.
-- Managed defaults are 16 GiB memory per operation, 2 GiB storage per task, 100 GiB total storage and 24 hours from task creation. Inspect `/api/resource-policy` for actual values. A plain development server does not claim production isolation.
+1. Use a non-root service account. The default installation listens on `127.0.0.1:7788`.
+2. Unauthenticated non-loopback `local` / `trusted-lan` listeners require explicit unsafe opt-in and a protected private network.
+3. Authenticated public hosting uses `GMXBUILDER_DEPLOYMENT_MODE=public` with strong Basic or Bearer credentials.
+4. Anonymous public hosting uses `GMXBUILDER_DEPLOYMENT_MODE=public-anonymous`, requires managed storage and computation isolation, and keeps `GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT=0`.
+5. Both public modes require explicit HTTPS `GMXBUILDER_CORS_ORIGINS` and exact `GMXBUILDER_TRUSTED_PROXIES`. The proxy must replace untrusted forwarding headers. Set `FORWARDED_ALLOW_IPS=` empty so the application can validate the actual socket peer.
+6. Configure a separate strong `GMXBUILDER_ADMIN_TOKEN`. Keep Task IDs, operation IDs and credentials out of public logs.
+7. Monitor `GET /health/ready`; a reachable home page or successful `/health/live` does not establish writable quota storage.
+8. Managed defaults are 16 GiB memory per operation, 2 GiB storage per task, 100 GiB total storage and 24 hours from task creation. Inspect `/api/resource-policy` for actual values. A plain development server does not claim production isolation.
 
 See [anonymous resource setup](anonymous-resources.md) and
 [Web readiness and recovery](WEB_RELIABILITY.md) for installation, migration and

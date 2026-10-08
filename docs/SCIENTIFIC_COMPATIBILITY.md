@@ -76,7 +76,7 @@ its shared type names must never override ordinary lipid torsions globally.
 
 Schema 4 requires a content fingerprint of parameter sources, relevant exporter
 code and the sampling host. Missing or changed fingerprints invalidate historical
-conformations and forbid continuation under new parameters. Release 1.0.0 distributes asset v7: 37 accepted initialization libraries and
+conformations and forbid continuation under new parameters. Release 1.0.0 distributes the V4 lipid library: 37 accepted initialization libraries and
 134,000 conformers. See the [release support matrix](release-support.md) for
 exact combinations and evidence limits. Incompatible historical assets remain
 unavailable.
