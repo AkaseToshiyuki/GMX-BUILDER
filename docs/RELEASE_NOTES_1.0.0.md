@@ -1,6 +1,6 @@
 # GMXBUILDER 1.0.0
 
-<p><strong>English</strong> · <a href="RELEASE_NOTES_1.0.0.zh-CN.md">简体中文</a></p>
+<p><strong>English</strong> · <a href="https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/v1.0.0/docs/RELEASE_NOTES_1.0.0.zh-CN.md">简体中文</a></p>
 
 Released 2026-10-08. GMXBUILDER provides five guided GROMACS construction
 workflows: atomistic protein–membrane systems, pure bilayers, solvated systems,
@@ -18,14 +18,14 @@ Martini 3 bilayer/protein–membrane systems and Martini 3 solvated proteins.
 - English and Chinese manuals document installation prerequisites, current API
   behavior, generated files and scientific limitations.
 
-This release supports the combinations listed in the [support matrix](release-support.md).
+This release supports the combinations listed in the [support matrix](https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/v1.0.0/docs/release-support.md).
 The other 299 registered lipid/source combinations are not distributed as accepted
 libraries. Initialization conformers do not establish membrane equilibrium,
 physical validity of a new mixture or production convergence. Protein, nucleic
 acid, ligand, custom-lipid and research-model limitations remain explicit in the
-[scientific guide](SCIENTIFIC_COMPATIBILITY.md). GROMACS preprocessing and software
+[scientific guide](https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/v1.0.0/docs/SCIENTIFIC_COMPATIBILITY.md). GROMACS preprocessing and software
 regression results do not replace system-specific physical validation.
 
-Use the [download and installation guide](RELEASE.md). Upgrades preserve newer
+Use the [download and installation guide](https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/v1.0.0/docs/RELEASE.md). Upgrades preserve newer
 valid library caches; check actual installed availability after upgrading.
 Installation starts no molecular dynamics or offline library-production queue.

@@ -13,6 +13,7 @@ import html
 import re
 import textwrap
 from pathlib import Path
+from urllib.parse import urljoin
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -50,6 +51,7 @@ AUTHOR = "Haochen Yang"
 DATE = "2026-10-08"
 SOFTWARE = "GMXBUILDER 1.0.0"
 LANGUAGE = "en"
+PUBLIC_DOC_BASE = f"https://github.com/AkaseToshiyuki/GMX-BUILDER/blob/v{DOC_VERSION}/docs/"
 
 
 def register_fonts() -> None:
@@ -88,7 +90,22 @@ def inline_markup(text: str) -> str:
     text = re.sub(r"`([^`]+)`", stash_code, text)
     text = html.escape(text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<link href="\2" color="#1d4ed8">\1</link>', text)
+    text = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)",
+        lambda match: (
+            '<link href="'
+            + html.escape(urljoin(PUBLIC_DOC_BASE, html.unescape(match.group(2))))
+            + '" color="#1d4ed8">'
+            + match.group(1)
+            + "</link>"
+        ),
+        text,
+    )
+    text = re.sub(
+        r"&lt;(https?://[^\s]+?)&gt;",
+        r'<link href="\1" color="#1d4ed8">\1</link>',
+        text,
+    )
     for index, replacement in enumerate(placeholders):
         text = text.replace(f"\x00{index}\x00", replacement)
     return apply_font_fallback(text)
@@ -407,14 +424,14 @@ def parse_markdown(source: str, styles, page_width: float):
             code_lines.append(line.expandtabs(4))
             continue
 
-        heading = re.match(r"^(#{1,3})\s+(.+)$", line)
+        heading = re.match(r"^(#{1,4})\s+(.+)$", line)
         if heading:
             flush_paragraph()
             flush_list()
             flush_table()
             markdown_level = len(heading.group(1))
             # The Markdown H1 is rendered as the dedicated PDF cover. Promote
-            # the remaining H2/H3 sections so bookmarks start at level zero.
+            # the remaining H2/H3/H4 sections so bookmarks start at level zero.
             level = max(1, markdown_level - 1)
             if level == 1 and story and not isinstance(story[-1], PageBreak):
                 story.append(PageBreak())
