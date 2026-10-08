@@ -1,8 +1,7 @@
 """Brand asset and public-document integration checks."""
 
-from pathlib import Path
 import struct
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGO_RELATIVE = "src/gmxbuilder/web/static/assets/gmxbuilder-logo.png"
@@ -21,13 +20,21 @@ def test_logo_is_transparent_high_resolution_png() -> None:
 def test_web_header_uses_versioned_accessible_logo() -> None:
     template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
     assert 'class="brand-logo"' in template
-    assert 'src="/static/assets/gmxbuilder-logo.png?v={{ version }}"' in template
+    assert 'src="/static/assets/gmxbuilder-logo.webp?v={{ version }}"' in template
     assert 'alt="GMXBUILDER"' in template
-    assert 'href="/static/assets/gmxbuilder-mark.png?v={{ version }}"' in template
-    assert 'class="release-badge">Beta Test v{{ version }}' in template
+    assert 'href="/static/assets/gmxbuilder-mark.webp?v={{ version }}"' in template
+    assert 'class="release-badge">v{{ version }}' in template
     assert 'src="/static/constants.js?v={{ version }}"' in template
     assert 'src="/static/ions.js?v={{ version }}"' in template
-    assert 'src="/static/app.js?v={{ version }}"' in template
+    application_scripts = (
+        'src="/static/app.js?v={{ version }}"',
+        'src="/static/app_parts/custom_lipids.js?v={{ version }}"',
+        'src="/static/app_parts/structure_processing.js?v={{ version }}"',
+        'src="/static/app_parts/simulation.js?v={{ version }}"',
+        'src="/static/app_parts/system_verification.js?v={{ version }}"',
+    )
+    positions = [template.index(script) for script in application_scripts]
+    assert positions == sorted(positions)
     assert "Alpha Test" not in template
 
 
@@ -38,7 +45,7 @@ def test_both_readmes_use_the_canonical_logo_asset() -> None:
 
 
 def test_public_documentation_points_to_current_user_manual() -> None:
-    manual_stem = "GMXBUILDER_USER_MANUAL_V1.0.4"
+    manual_stem = "USER_MANUAL"
     for suffix in (".md", ".pdf", ".zh-CN.md", ".zh-CN.pdf"):
         assert (ROOT / "docs" / f"{manual_stem}{suffix}").is_file()
     for name in ("README.md", "README.zh-CN.md", "docs/README.md", "docs/README.zh-CN.md"):
@@ -48,12 +55,11 @@ def test_public_documentation_points_to_current_user_manual() -> None:
 
     source = (ROOT / "docs" / f"{manual_stem}.md").read_text()
     chinese = (ROOT / "docs" / f"{manual_stem}.zh-CN.md").read_text()
-    assert "| Document version | V1.0.4 |" in source
-    assert "| Software | GMXBUILDER v0.9.19 or later |" in source
-    assert "| V1.0.4 | 2026-08-17 |" in source
-    assert "| V1.0.0 | 2026-07-26 | Initial release |" in source
-    assert "| 文档版本 | V1.0.4 |" in chinese
-    assert "| 适用软件 | GMXBUILDER v0.9.19 或更高版本 |" in chinese
+    assert "| Document version | 1.0.0 |" in source
+    assert "| Software | GMXBUILDER 1.0.0 |" in source
+    assert "| 1.0.0 | 2026-10-08 |" in source
+    assert "| 文档版本 | 1.0.0 |" in chinese
+    assert "| 适用软件 | GMXBUILDER 1.0.0 |" in chinese
     assert "## 附录 B：文档维护要求" not in chinese
 
 
@@ -85,8 +91,8 @@ def test_each_public_user_document_has_a_language_switch() -> None:
         ("README.md", "README.zh-CN.md"),
         ("docs/README.md", "docs/README.zh-CN.md"),
         (
-            "docs/GMXBUILDER_USER_MANUAL_V1.0.4.md",
-            "docs/GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.md",
+            "docs/USER_MANUAL.md",
+            "docs/USER_MANUAL.zh-CN.md",
         ),
         (
             "docs/SCIENTIFIC_COMPATIBILITY.md",
@@ -116,7 +122,8 @@ def test_completed_build_resume_renders_existing_result() -> None:
     ions = (ROOT / "src/gmxbuilder/web/static/ions.js").read_text()
     assert 'resumedBuild.status === "completed"' in script
     assert "_showBuildResult(resumedBuild.result)" in script
-    assert "window._setSystemConfirmed(canRestoreSystemConfirmation)" in script
+    assert "window._setSystemConfirmed(false)" in script
+    assert "invalidateFinalReview" in script
     assert "window._setSystemConfirmed = function(v)" in ions
 
 

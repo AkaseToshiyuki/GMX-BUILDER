@@ -1,7 +1,7 @@
 """External GROMACS smoke tests for complete protein-membrane systems."""
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +11,17 @@ from gmxbuilder.io.mdp import MDPWriter
 from gmxbuilder.io.top import TopologyWriter
 from gmxbuilder.modules.membrane.builder import MembraneBuilder
 from gmxbuilder.modules.modifications.processor import StructureProcessor
+from tests.prerequisites import require_v4_entries, requires_lfs_assets
 from tests.test_gromacs_smoke import _find_gmx, _two_residue_system
+
+# Every test here drives a real external tool, so the whole module is slow;
+# `--fast` deselects it. See the note at the top of tests/conftest.py.
+# Every case here builds a real membrane, so it needs the equilibrated
+# conformer library as well as GROMACS. Declaring only GROMACS left a latent
+# failure: CI skips these for want of GROMACS, so the missing asset gate would
+# have surfaced the day CI gained one. Found by scripts/reproduce_ci.sh, which
+# strips the two independently.
+pytestmark = [pytest.mark.slow, requires_lfs_assets]
 
 
 def _write_smoke_mdp(path: Path) -> None:
@@ -65,13 +75,24 @@ def _coordinate_lipid_sequence(system) -> list[str]:
     ],
     ids=["single", "mixed", "asymmetric"],
 )
-def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
+def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower, require_simulation):
+    require_v4_entries(sorted({e["name"] for e in upper + (lower or [])}), "charmm36m")
     gmx = _find_gmx()
-    protein = (
-        StructureProcessor()
-        .run(_two_residue_system("charmm36m"), {"skip_protonation": True})
-        .system
-    )
+    from gmxbuilder.io.pdb import PDBWriter
+    from gmxbuilder.modules.input.pdb_input import PDBInputModule
+    from tests.structure_fixtures import peptide_structure
+    from tests.test_atom_provenance import assert_surviving_heavy_sources
+
+    input_path = tmp_path / "protein.pdb"
+    PDBWriter.write(peptide_structure("AG"), input_path)
+    parsed = PDBInputModule().run(System(peptide_structure("AG")), {"pdb": str(input_path)})
+    assert parsed.success, parsed.log
+    original = parsed.system.structure.copy()
+    parsed.system.metadata["force_field"] = "charmm36m"
+    processed = StructureProcessor().run(parsed.system, {"skip_protonation": True})
+    assert processed.success, processed.log
+    protein = processed.system
+    assert_surviving_heavy_sources(original, protein.structure)
     # `_oriented` is a scientific contract: membrane-normal placement has
     # already centered the transmembrane span around Z=0.  Keep this generated
     # smoke fixture consistent with the real OrientModule output.
@@ -87,6 +108,10 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
     )
     assert result.success, "\n".join(result.log)
     system = result.system
+    assert_surviving_heavy_sources(original, system.structure)
+    checkpoint = tmp_path / "checkpoint"
+    system.save_checkpoint(checkpoint)
+    assert_surviving_heavy_sources(original, System.load_checkpoint(checkpoint).structure)
 
     gro_path = tmp_path / "input.gro"
     top_path = tmp_path / "topol.top"
@@ -154,6 +179,7 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
     assert (tmp_path / "smoke.tpr").stat().st_size > 0
 
+    require_simulation()
     mdrun = subprocess.run(
         [gmx, "mdrun", "-s", "smoke.tpr", "-deffnm", "smoke-em", "-ntmpi", "1"],
         cwd=tmp_path,
@@ -168,6 +194,23 @@ def test_complete_membrane_system_passes_grompp(tmp_path, upper, lower):
 
 def test_modular_charmm_lipid_mixture_passes_grompp(tmp_path):
     """Curated head/tail compositions must link to real CHARMM parameters."""
+    require_v4_entries(
+        [
+            "PAPC",
+            "PAPI",
+            "LPC16",
+            "LYSPG",
+            "DOPGD",
+            "PPCPL",
+            "PAPE",
+            "SOPI",
+            "SMPC",
+            "LPE16",
+            "DPPGD",
+            "PPEPL",
+        ],
+        "charmm36m",
+    )
     gmx = _find_gmx()
     protein = (
         StructureProcessor()
@@ -238,6 +281,7 @@ def test_modular_charmm_lipid_mixture_passes_grompp(tmp_path):
 
 
 def test_plasmalogen_bilayer_passes_old_charmm_grompp(tmp_path):
+    require_v4_entries(["PPCPL", "PPEPL"], "charmm36")
     """The West vinyl-ether additions must also work with CHARMM36 protein terms."""
     gmx = _find_gmx()
     protein = (
@@ -288,6 +332,7 @@ def test_plasmalogen_bilayer_passes_old_charmm_grompp(tmp_path):
 
 def test_current_lipid_stream_passes_classic_charmm_grompp(tmp_path):
     """Newer CHARMM36 lipids must remain usable with classic protein terms."""
+    require_v4_entries(["DLIPA", "DLIPC", "DLIPE", "DLIPG", "DLIPS", "ERG", "PUPC"], "charmm36")
     gmx = _find_gmx()
     protein = (
         StructureProcessor().run(_two_residue_system("charmm36"), {"skip_protonation": True}).system
@@ -350,8 +395,9 @@ def test_current_lipid_stream_passes_classic_charmm_grompp(tmp_path):
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
 
 
-def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path):
+def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path, require_simulation):
     """Generated glycolipids/plant sterols must resolve in both releases."""
+    require_v4_entries(["MGDG", "DGDG", "CAMP", "GM1"], "charmm36m")
     gmx = _find_gmx()
     protein = (
         StructureProcessor()
@@ -411,6 +457,9 @@ def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path):
             timeout=120,
         )
         assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
+    require_simulation()
+    for force_field in ("charmm36m", "charmm36"):
+        ff_dir = tmp_path / force_field
         mdrun = subprocess.run(
             [
                 gmx,
@@ -432,9 +481,14 @@ def test_generated_glyco_and_plant_sterols_pass_both_charmm_releases(tmp_path):
         assert mdrun.returncode == 0, mdrun.stdout + "\n" + mdrun.stderr
 
 
-def test_mixed_gaff2_membrane_passes_grompp_and_mdrun(tmp_path, monkeypatch):
-    """A mixed RTP/non-RTP selection is one coherent Amber/GAFF2 system."""
+def test_mixed_gaff2_membrane_passes_grompp_and_mdrun(tmp_path, monkeypatch, require_simulation):
+    """An explicit whole-GAFF2 comparison retains that model for all species.
+
+    Automatic routing now prefers Lipid21 per species; this probe deliberately
+    selects the independently supported whole-GAFF2 alternative.
+    """
     monkeypatch.setenv("GMXBUILDER_GAFF_CHARGE_METHOD", "gas")
+    require_v4_entries(["DPPC", "CER16"], "amber99sb-ildn", "gaff2")
     gmx = _find_gmx()
     protein = (
         StructureProcessor()
@@ -443,12 +497,13 @@ def test_mixed_gaff2_membrane_passes_grompp_and_mdrun(tmp_path, monkeypatch):
     )
     protein.metadata["_oriented"] = True
     protein.metadata["force_field"] = "amber99sb-ildn"
+    protein.metadata["lipid_ff"] = "gaff2"
     result = MembraneBuilder().run(
         protein,
         {
             "lipid_composition": {
-                "upper": [{"name": "POPC", "ratio": 75}, {"name": "POPI", "ratio": 25}],
-                "lower": [{"name": "POPC", "ratio": 50}, {"name": "POPI", "ratio": 50}],
+                "upper": [{"name": "DPPC", "ratio": 75}, {"name": "CER16", "ratio": 25}],
+                "lower": [{"name": "DPPC", "ratio": 50}, {"name": "CER16", "ratio": 50}],
             },
             "n_lipids_per_leaflet": 64,
             "seed": 20260712,
@@ -485,6 +540,7 @@ def test_mixed_gaff2_membrane_passes_grompp_and_mdrun(tmp_path, monkeypatch):
         timeout=120,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
+    require_simulation()
     mdrun = subprocess.run(
         [gmx, "mdrun", "-s", "smoke.tpr", "-deffnm", "smoke-em", "-ntmpi", "1"],
         cwd=tmp_path,

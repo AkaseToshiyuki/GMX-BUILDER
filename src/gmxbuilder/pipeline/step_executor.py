@@ -12,19 +12,27 @@ import logging
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from gmxbuilder.core.system import System
-from gmxbuilder.core.structure import Structure
-from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
+from gmxbuilder.core.step_metrics import compute_step_metrics as _compute_step_metrics
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
+from gmxbuilder.modules.export.layout import STRUCTURE_DIR, TOPOLOGY_DIR
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
+from gmxbuilder.pipeline.progress import module_progress_scope
+from gmxbuilder.pipeline.provenance import adopt_task_context, record_step
 
 logger = logging.getLogger(__name__)
+
+#: Called as ``(fraction, phase)`` while a step runs, so a Check that takes
+#: minutes can show where it is rather than only a spinner.
+ProgressCallback = Callable[[float, str], None]
 
 
 def _serialized_task_operation(method):
@@ -258,6 +266,14 @@ def get_pipeline_steps(pipeline_type: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+# The share of a step that `module.execute()` occupies. Everything else the
+# runner does -- loading a checkpoint, saving one, rendering the viewer -- is
+# bounded work on data already in memory, while the module is the part that can
+# run for minutes, so it gets the widest slice of the bar.
+MODULE_PHASE_START = 0.20
+MODULE_PHASE_END = 0.75
+
+
 class StepRunner:
     """Execute one pipeline step: load checkpoint → run module → save checkpoint."""
 
@@ -292,7 +308,32 @@ class StepRunner:
     def has_checkpoint(self, step_name: str) -> bool:
         """Check if a checkpoint exists for this step (both npz and json)."""
         d = self.step_dir(step_name)
-        return d.exists() and (d / "system.npz").exists() and (d / "system.json").exists()
+        return (
+            d.exists()
+            and (d / "system.npz").exists()
+            and (d / "system.json").exists()
+            and self.input_validation_current()
+        )
+
+    def input_validation_current(self) -> bool:
+        """Old passes cannot authorize work under a newer input policy."""
+        if self.pipeline_type not in {"membrane-bilayer", "solvator"}:
+            return True
+        if not (self.step_dir("input") / "system.npz").is_file():
+            return False
+        from gmxbuilder.core.checkpoint_status import read_status
+        from gmxbuilder.modules.input.validation import INPUT_VALIDATION_VERSION
+
+        try:
+            data = read_status(self.step_dir("input")) or {}
+            report = data.get("input_validation", {})
+            return (
+                report.get("policy_version") == INPUT_VALIDATION_VERSION
+                and report.get("can_proceed") is True
+                and not report.get("has_errors", True)
+            )
+        except (OSError, ValueError, TypeError, AttributeError):
+            return False
 
     def load_system(self, step_name: str) -> System | None:
         """Load the system from *step_name* checkpoint, or None."""
@@ -301,11 +342,11 @@ class StepRunner:
             return None
         return System.load_checkpoint(d)
 
-    def invalidate_downstream(self, step_name: str) -> list[str]:
+    def invalidate_downstream(self, step_name: str, *, include_current: bool = False) -> list[str]:
         """Remove checkpoints that were derived from an older upstream state."""
         steps = get_pipeline_steps(self.pipeline_type)
         try:
-            start = steps.index(step_name) + 1
+            start = steps.index(step_name) + (0 if include_current else 1)
         except ValueError:
             return []
 
@@ -336,6 +377,7 @@ class StepRunner:
         *,
         initial_system: System | None = None,
         pdb_path: str | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> dict:
         """Execute a single pipeline step.
 
@@ -349,6 +391,11 @@ class StepRunner:
             Only used for the FIRST step ("input") — provides the empty seed system.
         pdb_path : str or None
             Only used for the "input" step — path to the input PDB file.
+        on_progress : callable or None
+            Called as ``on_progress(fraction, phase)`` as the step advances.
+            A Check can run for minutes with no feedback beyond a spinner, so
+            the caller is given something to show. Failures inside the callback
+            are swallowed: reporting progress must never fail the build.
 
         Returns
         -------
@@ -361,6 +408,36 @@ class StepRunner:
             error : str (if status=="error")
         """
         t0 = time.time()
+
+        def report(fraction: float, phase: str) -> None:
+            if on_progress is None:
+                return
+            try:
+                on_progress(max(0.0, min(1.0, float(fraction))), phase)
+            except Exception:  # noqa: BLE001 - progress must never break a build
+                logger.debug("Progress callback failed", exc_info=True)
+
+        report(0.02, "Loading the previous checkpoint")
+        if step_name != "input" and not self.input_validation_current():
+            return {
+                "status": "error",
+                "step": step_name,
+                "error": "Run Check Upload again: the input has not passed the current "
+                "structure validation policy.",
+                "input_check_required": True,
+            }
+
+        def failure(message: str, log=None, validation=None) -> dict:
+            # A failed recheck must revoke both this pass and dependent passes.
+            invalidated = self.invalidate_downstream(step_name, include_current=True)
+            return {
+                "status": "error",
+                "step": step_name,
+                "error": message,
+                "log": log or [],
+                "input_validation": validation,
+                "invalidated_steps": invalidated,
+            }
 
         # ---- 1. Load previous system ----
         # Steps MUST run in order.  Each step reads exactly the previous
@@ -398,12 +475,14 @@ class StepRunner:
             try:
                 system = System.load_checkpoint(prev_dir)
             except (OSError, KeyError, ValueError) as exc:
-                logger.error("Failed to load checkpoint from %s: %s", prev_dir, exc)
+                logger.error("Failed to load the %s prerequisite checkpoint", step_name)
                 return {
                     "status": "error",
                     "step": step_name,
                     "error": f"Failed to load checkpoint: {exc}",
                 }
+
+        report(0.1, "Preparing the module configuration")
 
         # ---- 2. Inject config needed by the module ----
         # Always shallow-copy to avoid mutating the caller's config dict
@@ -414,6 +493,8 @@ class StepRunner:
         if is_martini_pipeline(self.pipeline_type):
             config["_task_dir"] = str(self.task_dir.resolve())
             config["_step_dir"] = str(self.step_dir(step_name).resolve())
+        elif step_name == "forcefield":
+            config["_task_dir"] = str(self.task_dir.resolve())
         if step_name == "input" and pdb_path:
             config["pdb"] = pdb_path
         if step_name == "export":
@@ -426,40 +507,39 @@ class StepRunner:
         if "seed" not in config:
             config["seed"] = system.metadata.get("seed", 42)
 
+        report(MODULE_PHASE_START, "Running the scientific module")
+
         # ---- 3. Run module ----
         module = _get_module(step_name, self.pipeline_type)
         try:
             module.validate_config(config)
         except Exception as exc:
-            return {
-                "status": "error",
-                "step": step_name,
-                "error": f"Config validation failed: {exc}",
-            }
+            return failure(f"Config validation failed: {exc}")
+
+        def module_report(fraction: float, phase: str) -> None:
+            """Map a module's own 0..1 progress into the slice it occupies.
+
+            The module does not know what share of the step it is, and should
+            not: this is the only place that knows both.
+            """
+            span = MODULE_PHASE_END - MODULE_PHASE_START
+            report(MODULE_PHASE_START + span * fraction, phase)
 
         try:
-            result: ModuleResult = module.execute(system, config)
+            with module_progress_scope(module_report):
+                result: ModuleResult = module.execute(system, config)
         except ModuleConfigError as exc:
             logger.warning("Step %s rejected invalid configuration: %s", step_name, exc)
-            return {
-                "status": "error",
-                "step": step_name,
-                "error": str(exc),
-            }
+            return failure(str(exc))
         except Exception as exc:
             logger.exception("Unhandled failure while running step %s", step_name)
-            return {
-                "status": "error",
-                "step": step_name,
-                "error": f"Step execution failed: {exc}",
-            }
+            return failure(f"Step execution failed: {exc}")
         if not result.success:
-            return {
-                "status": "error",
-                "step": step_name,
-                "error": "Module reported failure",
-                "log": result.log,
-            }
+            return failure(
+                "\n".join(result.log) or "Module reported failure",
+                result.log,
+                result.system.metadata.get("input_validation"),
+            )
 
         system = result.system
 
@@ -476,7 +556,16 @@ class StepRunner:
                 "error": f"Could not invalidate stale downstream checkpoints: {exc}",
             }
 
-        # ---- 4. Save checkpoint ----
+        report(MODULE_PHASE_END, "Saving the checkpoint")
+
+        # ---- 4. Record what produced this checkpoint, then save it ----
+        # The record has to be written *before* the save: it rides in the
+        # checkpoint metadata, which is how it survives a browser refresh and
+        # how it reaches the exporter attached to the system it describes.
+        metrics = _compute_step_metrics(system, step_name)
+        adopt_task_context(system, self.task_dir)
+        record_step(system, step_name, config, metrics, time.time() - t0)
+
         out_dir = self.step_dir(step_name)
         system.save_checkpoint(out_dir)
 
@@ -500,27 +589,28 @@ class StepRunner:
                     "error": f"Could not write the validated index groups: {exc}",
                 }
 
-        # ---- 5. Write viewer PDB ----
+        report(0.88, "Rendering the viewer structure")
+
+        # ---- 5. Viewer PDB: produced when it is asked for ----
+        # This is a full-system PDB -- 13.9 MB after the topology step of a
+        # 176048-atom build -- and it was written after every step whether or
+        # not anyone looked. The interface never shows one for `topology` or
+        # `export`, so most of that work was thrown away. The endpoint renders
+        # it from this checkpoint on first request and keeps the file, so a
+        # step that is viewed costs the same as before and one that is not
+        # costs nothing.
         viewer_path = out_dir / "viewer.pdb"
-        try:
-            if is_martini_pipeline(self.pipeline_type):
-                from gmxbuilder.modules.coarse_grained.common import write_cg_viewer_pdb
 
-                write_cg_viewer_pdb(system, viewer_path, task_dir=self.task_dir)
-            else:
-                system.write_viewer_pdb(viewer_path)
-        except Exception:
-            pass  # Non-critical — frontend falls back to previous viewer
-
-        # ---- 6. Compute metrics ----
-        metrics = _compute_step_metrics(system, step_name)
+        report(1.0, "Complete")
 
         return {
             "status": "ok",
             "step": step_name,
             "log": result.log,
             "metrics": metrics,
-            "viewer_pdb_path": str(viewer_path) if viewer_path.exists() else None,
+            # The path the viewer will be rendered at, not a file that
+            # necessarily exists yet; the step succeeded, so one can be made.
+            "viewer_pdb_path": str(viewer_path),
             "index_path": str(index_path) if index_path and index_path.exists() else None,
             "invalidated_steps": invalidated_steps,
             "elapsed_s": round(time.time() - t0, 1),
@@ -534,6 +624,7 @@ class StepRunner:
         topology_config: dict[str, Any] | None = None,
         export_config: dict[str, Any] | None = None,
         simparams: dict[str, Any] | None = None,
+        structure_config: dict[str, Any] | None = None,
     ) -> dict:
         """Create a package from an already-confirmed coordinate checkpoint.
 
@@ -543,6 +634,15 @@ class StepRunner:
         """
         import numpy as np
 
+        t0 = time.time()
+        if not self.input_validation_current():
+            return {
+                "status": "error",
+                "step": "export",
+                "error": "Run Check Upload again before building: the input has not passed "
+                "the current structure validation policy.",
+                "input_check_required": True,
+            }
         if source_step not in {"membrane", "ions", "cg_system"}:
             return {
                 "status": "error",
@@ -560,6 +660,46 @@ class StepRunner:
             }
 
         source = System.load_checkpoint(self.step_dir(source_step))
+        if self.pipeline_type in {"membrane-bilayer", "pure-membrane"}:
+            from gmxbuilder.core.enums import ComponentKind
+            from gmxbuilder.core.exceptions import ModuleConfigError
+            from gmxbuilder.modules.membrane.v4_availability import require_v4_lipids
+
+            names = {
+                str(source.structure.resnames[index]).strip().upper()
+                for component in source.component_by_kind(ComponentKind.MEMBRANE)
+                for index in component.atom_indices
+            }
+            try:
+                require_v4_lipids(
+                    names,
+                    str(source.metadata.get("force_field", "amber14sb")),
+                    str(
+                        source.metadata.get(
+                            "lipid_ff", source.metadata.get("force_field", "amber14sb")
+                        )
+                    ),
+                )
+            except ModuleConfigError as exc:
+                return {"status": "error", "step": "membrane", "error": str(exc)}
+        if structure_config is not None:
+            from gmxbuilder.modules.modifications.selection import (
+                CHEMISTRY_POLICY_VERSION,
+                chemistry_fingerprint,
+            )
+
+            chemistry = source.metadata.get("structure_chemistry", {})
+            if chemistry.get("policy_version") != CHEMISTRY_POLICY_VERSION or chemistry.get(
+                "config_sha256"
+            ) != chemistry_fingerprint(structure_config):
+                return {
+                    "status": "error",
+                    "step": "structure",
+                    "error": (
+                        "Chemistry does not match the checked system. "
+                        "Run Structure Check and downstream checks again."
+                    ),
+                }
         source_coordinates = np.array(source.structure.coordinates, copy=True)
         source_box = np.array(source.structure.box_vectors, copy=True)
         source_atom_names = tuple(source.structure.atom_names)
@@ -607,6 +747,14 @@ class StepRunner:
 
         topology_dir = self.step_dir("topology")
         shutil.rmtree(topology_dir, ignore_errors=True)
+        adopt_task_context(system, self.task_dir)
+        record_step(
+            system,
+            "topology",
+            topology_cfg,
+            _compute_step_metrics(system, "topology"),
+            time.time() - t0,
+        )
         system.save_checkpoint(topology_dir)
 
         export_dir = self.step_dir("export").resolve()
@@ -627,7 +775,7 @@ class StepRunner:
 
         from gmxbuilder.io.gro import GROReader
 
-        exported = GROReader().read(export_dir / "input.gro")
+        exported = GROReader().read(export_dir / STRUCTURE_DIR / "input.gro")
         if exported.num_atoms != source.num_atoms:
             raise RuntimeError(
                 "Export integrity check failed: GRO atom count differs from the "
@@ -653,7 +801,15 @@ class StepRunner:
 
         with zipfile.ZipFile(zip_path) as archive:
             members = set(archive.namelist())
-            common_required = {"input.gro", "topol.top", "index.ndx", "README.txt"}
+            common_required = {
+                f"{STRUCTURE_DIR}/input.gro",
+                f"{STRUCTURE_DIR}/index.ndx",
+                f"{TOPOLOGY_DIR}/topol.top",
+                "README.txt",
+                # The record of how this system was built travels with it, or
+                # the package cannot be replayed or reviewed.
+                "manifest.json",
+            }
             missing_common = sorted(common_required - members)
             if missing_common:
                 raise RuntimeError(
@@ -730,131 +886,3 @@ class StepRunner:
 # ---------------------------------------------------------------------------
 # Metrics helpers
 # ---------------------------------------------------------------------------
-
-
-def _compute_step_metrics(system: System, step_name: str) -> dict:
-    """Compute frontend-relevant metrics for this step."""
-    metrics: dict[str, Any] = {
-        "num_atoms": system.num_atoms,
-        "box_dimensions_nm": [round(v, 3) for v in system.structure.dimensions().tolist()],
-        "components": [],
-    }
-
-    for comp in system.components:
-        info = {
-            "name": comp.name,
-            "kind": comp.kind.name,
-            "n_atoms": len(comp.atom_indices),
-        }
-        n_mol = comp.metadata.get("n_molecules")
-        if n_mol is not None:
-            info["n_molecules"] = n_mol
-        for key in ("water_model", "volume_nm3"):
-            if key in comp.metadata:
-                info[key] = comp.metadata[key]
-        metrics["components"].append(info)
-
-    if step_name == "solvation":
-        metrics["water_model"] = system.metadata.get("water_model")
-        metrics["solvation"] = system.metadata.get("solvation", {})
-
-    if step_name == "ions":
-        metrics["ions"] = system.metadata.get("ions", {})
-
-    if step_name == "cg_mapping":
-        metrics["cg_mapping"] = system.metadata.get("cg_mapping", {})
-
-    if step_name == "input":
-        metrics["input_repair"] = system.metadata.get(
-            "input_repair",
-            {
-                "status": "not_needed",
-                "residues_repaired": 0,
-                "atoms_added": 0,
-                "residues": [],
-                "validation": "No missing standard protein heavy atoms detected.",
-            },
-        )
-        metrics["input_modifications"] = system.metadata.get(
-            "input_modifications",
-            {"detected": 0, "recognized": 0, "records": [], "warnings": []},
-        )
-        protein_atoms = {
-            int(index)
-            for component in system.component_by_kind(ComponentKind.PROTEIN)
-            for index in component.atom_indices
-        }
-        chains: dict[str, list[dict]] = {}
-        seen_residues: set[tuple[str, int]] = set()
-        for index in range(system.structure.num_atoms):
-            if index not in protein_atoms:
-                continue
-            chain = str(system.structure.chain_ids[index]).strip() or "A"
-            resid = int(system.structure.resids[index])
-            key = (chain, resid)
-            if key in seen_residues:
-                continue
-            seen_residues.add(key)
-            chains.setdefault(chain, []).append(
-                {
-                    "resname": str(system.structure.resnames[index]).strip().upper(),
-                    "resid": resid,
-                    "is_protein": True,
-                }
-            )
-        metrics["input_sequences"] = [
-            {"chain_id": chain, "length": len(residues), "residues": residues}
-            for chain, residues in chains.items()
-        ]
-        metrics["input_nucleic_acids"] = [
-            {
-                "name": component.name,
-                "chain_id": component.metadata.get("chain_id", ""),
-                "polymer_type": component.metadata.get("polymer_type", "unknown"),
-                "n_residues": component.metadata.get("n_residues", 0),
-                "unsupported_residues": component.metadata.get("unsupported_residues", []),
-            }
-            for component in system.component_by_kind(ComponentKind.NUCLEIC_ACID)
-        ]
-
-    if step_name == "forcefield":
-        metrics["forcefield_resolution"] = {
-            "requested_protein_ff": system.metadata.get("requested_force_field"),
-            "effective_protein_ff": system.metadata.get("force_field"),
-            "effective_lipid_ff": system.metadata.get("lipid_ff"),
-            "effective_ligand_ff": system.metadata.get("ligand_ff"),
-            "water_model": system.metadata.get("water_model"),
-            "gaff_lipids": system.metadata.get("gaff_lipids", []),
-            "ligand_parameters": system.metadata.get("ligand_parameters", {}),
-            "nucleic_acid_backend": (
-                "gromacs-pdb2gmx-charmm36"
-                if system.component_by_kind(ComponentKind.NUCLEIC_ACID)
-                else "none"
-            ),
-        }
-
-    if step_name == "structure":
-        metrics["modification_geometry"] = system.metadata.get("modification_geometry", [])
-        metrics["crosslinks"] = system.metadata.get("crosslinks", [])
-        metrics["nucleic_acids"] = [
-            {
-                key: record.get(key)
-                for key in (
-                    "molecule_type",
-                    "polymer_type",
-                    "chain_id",
-                    "net_charge",
-                    "atom_count",
-                    "residue_count",
-                    "backend",
-                )
-            }
-            for record in system.metadata.get("native_nucleic_topologies", [])
-        ]
-
-    if step_name == "orient":
-        metrics["orientation"] = system.metadata.get("_orient_params", {})
-        metrics["orientation_method"] = system.metadata.get("_orientation_method")
-        metrics["orientation_quality"] = system.metadata.get("_orientation_quality", {})
-
-    return metrics

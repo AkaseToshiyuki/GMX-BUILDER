@@ -1,14 +1,88 @@
-"""Independent Martini 3 bilayer workflow modules."""
+"""Martini 3 bilayer workflow.
 
-from gmxbuilder.modules.martini3_bilayer.environment import CGEnvironmentModule
-from gmxbuilder.modules.martini3_bilayer.export import CGExportModule
-from gmxbuilder.modules.martini3_bilayer.input import CGInputModule
-from gmxbuilder.modules.martini3_bilayer.mapping import CGMappingModule
-from gmxbuilder.modules.martini3_bilayer.model import CGModelModule
+The construction code lives in :mod:`gmxbuilder.modules.coarse_grained`; this
+package supplies only the admission rules that make it the bilayer builder. The two
+Martini workflows were once separate near-verbatim copies, which drifted far
+enough that a fix applied to one was absent from the other.
+"""
+
+from __future__ import annotations
+
+from gmxbuilder.modules.coarse_grained.environment import (
+    CGEnvironmentModule as _CGEnvironmentModule,
+)
+from gmxbuilder.modules.coarse_grained.export import CGExportModule as _CGExportModule
+from gmxbuilder.modules.coarse_grained.input import CGInputModule as _CGInputModule
+from gmxbuilder.modules.coarse_grained.mapping import CGMappingModule as _CGMappingModule
+from gmxbuilder.modules.coarse_grained.model import CGModelModule as _CGModelModule
+from gmxbuilder.modules.coarse_grained.solvation import (
+    CGSolvationModule as _CGSolvationModule,
+)
+from gmxbuilder.modules.coarse_grained.system_check import (
+    CGSystemCheckModule as _CGSystemCheckModule,
+)
+from gmxbuilder.modules.coarse_grained.topology import (
+    CGTopologyModule as _CGTopologyModule,
+)
 from gmxbuilder.modules.martini3_bilayer.orientation import CGOrientationModule
-from gmxbuilder.modules.martini3_bilayer.solvation import CGSolvationModule
-from gmxbuilder.modules.martini3_bilayer.system_check import CGSystemCheckModule
-from gmxbuilder.modules.martini3_bilayer.topology import CGTopologyModule
+
+_LABEL = "Martini 3 Bilayer Builder"
+
+
+class _Workflow:
+    """Admission rules shared by every module in this workflow."""
+
+    cg_environment = "bilayer"
+    workflow_label = _LABEL
+
+
+class CGInputModule(_Workflow, _CGInputModule):
+    pinned_config = {"environment": "bilayer"}  # noqa: RUF012
+    pin_refusals = {"environment": f"{_LABEL} cannot switch to solution mode"}  # noqa: RUF012
+
+
+class CGModelModule(_Workflow, _CGModelModule):
+    pass
+
+
+class CGMappingModule(_Workflow, _CGMappingModule):
+    pass
+
+
+class CGEnvironmentModule(_Workflow, _CGEnvironmentModule):
+    checks_task_environment = True
+    # This workflow has a dedicated cg_orientation step that owns z_offset,
+    # tilt and phi, so accepting rotation or offset here as well would let the
+    # protein's placement be set in two places.
+    _allowed = _CGEnvironmentModule._allowed - {  # noqa: RUF012
+        "rotate_x",
+        "rotate_y",
+        "rotate_z",
+        "z_offset",
+    }
+    forbidden_config_keys = frozenset(())  # noqa: RUF012
+    forbidden_config_subject = "setting(s)"
+    pinned_config = {"environment": "bilayer"}  # noqa: RUF012
+    pin_refusals = {"environment": f"{_LABEL} cannot switch to solution mode"}  # noqa: RUF012
+
+
+class CGSolvationModule(_Workflow, _CGSolvationModule):
+    checks_task_environment = True
+    pinned_config = {}  # noqa: RUF012
+    pin_refusals = {}  # noqa: RUF012
+
+
+class CGSystemCheckModule(_Workflow, _CGSystemCheckModule):
+    checks_task_environment = True
+
+
+class CGTopologyModule(_Workflow, _CGTopologyModule):
+    pass
+
+
+class CGExportModule(_Workflow, _CGExportModule):
+    pass
+
 
 MODULES = {
     "input": CGInputModule,
@@ -21,3 +95,16 @@ MODULES = {
     "topology": CGTopologyModule,
     "export": CGExportModule,
 }
+
+__all__ = [
+    "MODULES",
+    "CGEnvironmentModule",
+    "CGExportModule",
+    "CGInputModule",
+    "CGMappingModule",
+    "CGModelModule",
+    "CGOrientationModule",
+    "CGSolvationModule",
+    "CGSystemCheckModule",
+    "CGTopologyModule",
+]

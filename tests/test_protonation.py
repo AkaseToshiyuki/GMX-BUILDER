@@ -50,29 +50,42 @@ def test_propka_input_normalizes_legacy_left_aligned_atom_names(tmp_path, monkey
 
 
 @pytest.mark.parametrize(
-    "residue,pH,assigned,charge",
+    "force_field,residue,pH,assigned,charge",
     [
-        ("ASP", 3.8, "ASH", 0),
-        ("ASP", 4.0, "ASP", -1),
-        ("LYS", 10.4, "LYS", 1),
-        ("LYS", 10.6, "LYN", 0),
-        ("TYR", 10.0, "TYR", 0),
-        ("TYR", 10.2, "TYM", -1),
-        ("HIS", 5.9, "HSP", 1),
-        ("HIS", 6.1, "HSE", 0),
+        # Amber and CHARMM name these differently, so the expectation has to
+        # say which force field it is for. The list this replaced mixed the
+        # two, which is the defect: it asked Amber for HSP and CHARMM for ASH.
+        ("amber14sb", "ASP", 3.8, "ASH", 0),
+        ("charmm36m", "ASP", 3.8, "ASPP", 0),
+        ("amber14sb", "ASP", 4.0, "ASP", -1),
+        ("charmm36m", "ASP", 4.0, "ASP", -1),
+        ("amber14sb", "LYS", 10.4, "LYS", 1),
+        ("amber14sb", "LYS", 10.6, "LYN", 0),
+        ("charmm36m", "LYS", 10.6, "LSN", 0),
+        ("amber14sb", "TYR", 10.0, "TYR", 0),
+        # Neither force field defines a deprotonated tyrosine, so above its
+        # pKa the residue stays TYR and the limitation is reported instead.
+        ("amber14sb", "TYR", 10.2, "TYR", 0),
+        ("charmm36m", "TYR", 10.2, "TYR", 0),
+        ("amber14sb", "HIS", 5.9, "HIP", 1),
+        ("charmm36m", "HIS", 5.9, "HSP", 1),
+        ("amber14sb", "HIS", 6.1, "HIE", 0),
+        ("charmm36m", "HIS", 6.1, "HSE", 0),
     ],
 )
-def test_model_pka_assignment_branches(residue, pH, assigned, charge):
-    result = assign_protonation(residue, pH)
+def test_model_pka_assignment_branches(force_field, residue, pH, assigned, charge):
+    result = assign_protonation(residue, pH, force_field=force_field)
 
     assert result["assigned_name"] == assigned
     assert result["charge"] == charge
 
 
-def test_exact_model_pka_is_marked_as_ambiguous_microstate():
-    result = assign_protonation("HIS", 6.0, his_tautomer="HSD")
+@pytest.mark.parametrize(("force_field", "expected"), [("amber14sb", "HID"), ("charmm36m", "HSD")])
+def test_exact_model_pka_is_marked_as_ambiguous_microstate(force_field, expected):
+    """ "HSD" selects the Nδ tautomer; the force field decides its spelling."""
+    result = assign_protonation("HIS", 6.0, his_tautomer="HSD", force_field=force_field)
 
-    assert result["assigned_name"] == "HSD"
+    assert result["assigned_name"] == expected
     assert result["ambiguous_at_pka"] is True
 
 

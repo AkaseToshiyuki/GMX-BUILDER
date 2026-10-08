@@ -18,7 +18,7 @@ from gmxbuilder.pipeline.pipeline import Pipeline
 from gmxbuilder.pipeline.step_executor import StepRunner, _get_module, get_pipeline_steps
 from gmxbuilder.web.server import app
 from gmxbuilder.web.task_types import get_all_task_types, get_task_type
-
+from tests.prerequisites import requires_forcefield
 
 ROOT = Path(__file__).parents[1]
 
@@ -34,7 +34,14 @@ def test_removed_and_new_task_cards_are_authoritative():
     assert pure.enabled
     assert pure.pipeline == "pure_membrane"
     assert not pure.requires_input
-    assert pure.visible_modules == ["forcefield", "membrane", "solvation", "ions", "simparams"]
+    assert pure.visible_modules == [
+        "forcefield",
+        "membrane",
+        "solvation",
+        "ions",
+        "final_review",
+        "simparams",
+    ]
 
 
 def test_solvator_and_pure_membrane_use_task_specific_module_classes():
@@ -98,6 +105,7 @@ def test_no_input_task_api_rejects_input_workflow_and_creates_pure_task():
         assert compatibility.json()["family"] == "amber"
 
 
+@requires_forcefield("amber99sb-ildn")
 def test_uploaded_task_persists_solution_pipeline_identity():
     fixture = ROOT / "tests/fixtures/small_molecule_label.pdb"
     with TestClient(app) as client, fixture.open("rb") as handle:

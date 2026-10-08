@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Refuse to push private material to a remote that is not the private one.
+#
+# Enable once per clone:
+#     git config core.hooksPath .githooks
+#
+# The rule itself lives in scripts/check_public_export.py so the hook, a
+# release step and a human all consult one definition.
+#
+# Limits, stated plainly because a guard that is trusted beyond its reach is
+# worse than no guard:
+#   * A hook is a guardrail, not a lock: `git push --no-verify` skips it, and a
+#     fresh clone has none until core.hooksPath is set.
+#   * It inspects new reachable history above the explicitly approved public
+#     baseline; already published historical exceptions are not rewritten.
+set -euo pipefail
+export GIT_NO_REPLACE_OBJECTS=1
+
+remote_name="${1:-}"
+remote_url="${2:-}"
+
+repo_root="$(git rev-parse --show-toplevel)"
+checker="$repo_root/scripts/check_public_export.py"
+if [[ ! -f "$checker" ]]; then
+    echo "pre-push: $checker is missing; refusing to guess what is private." >&2
+    exit 1
+fi
+
+python_bin="$(command -v python3 || command -v python || true)"
+if [[ -z "$python_bin" ]]; then
+    echo "pre-push: no python interpreter found; cannot verify the push." >&2
+    exit 1
+fi
+
+if "$python_bin" "$checker" --private-remote "$remote_url"; then
+    exit 0
+fi
+
+status=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    # All-zero local sha means a branch deletion, which publishes nothing.
+    if [[ "$local_sha" =~ ^0+$ ]]; then
+        continue
+    fi
+    if ! "$python_bin" "$checker" "$local_sha" --history --quiet; then
+        echo >&2
+        echo "pre-push: refusing to push to '${remote_name}' (${remote_url})." >&2
+        "$python_bin" "$checker" "$local_sha" --history >&2 || true
+        echo >&2
+        echo "This remote is not the private repository, and the commit being" >&2
+        echo "pushed contains material that must not be published." >&2
+        status=1
+    fi
+done
+
+exit "$status"

@@ -7,13 +7,13 @@ the process-wide lipid registry.
 
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import re
-from typing import Iterator
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 
 from gmxbuilder.modules.forcefield.gaff_backend import task_gaff_cache
 from gmxbuilder.modules.membrane.equilibrated_library import (
@@ -21,7 +21,6 @@ from gmxbuilder.modules.membrane.equilibrated_library import (
     task_equilibrated_library,
 )
 from gmxbuilder.modules.membrane.lipids import LipidRegistry, LipidTemplate
-
 
 _NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,4}$")
 _TERMINAL_STATES = {"ready", "failed"}
@@ -100,6 +99,7 @@ class CustomLipidStore:
                 raise ValueError(
                     f"This molecule is already submitted to this task as {existing['name']}"
                 )
+        _refuse_if_the_force_field_already_provides_it(canonical, force_field)
         if self.definition_path(name).exists():
             raise ValueError(f"Custom lipid name {name} is already used in this task")
 
@@ -197,6 +197,40 @@ class CustomLipidStore:
             except KeyError:
                 continue
         return names
+
+
+def _refuse_if_the_force_field_already_provides_it(canonical: str, force_field: str) -> None:
+    """A lipid the force field defines must not be rebuilt from our own SMILES.
+
+    Custom lipids are parameterised with GAFF2, which builds the molecule from
+    the submitted SMILES. That is the right answer only for chemistry no force
+    field covers. CHARMM36 ships 412 lipid residues and Lipid21 39 templates,
+    against 84 in this project's registry, so a user could upload a lipid the
+    installed release already defines and receive home-made parameters in place
+    of the official ones -- without either side noticing.
+
+    Matched on the element-labelled connectivity graph rather than the name,
+    because the two sides name lipids differently (cholesterol is CHL1 to
+    CHARMM and CHOL to Lipid21) and an RTP residue has no SMILES to compare.
+    """
+    from gmxbuilder.modules.forcefield.native_lipids import find_native_lipid
+
+    try:
+        matches = find_native_lipid(canonical, force_field)
+    except Exception as exc:
+        raise ValueError(
+            "Native lipid definitions could not be checked; custom parameterization "
+            "cannot proceed until the installed force-field data can be read."
+        ) from exc
+    if not matches:
+        return
+    named = ", ".join(sorted({f"{m.residue} ({m.force_field})" for m in matches}))
+    raise ValueError(
+        "This upload shares element-labelled connectivity with native lipid definitions: "
+        f"{named}. This check does not establish bond-order or stereochemical identity. "
+        "Confirm the exact chemical identity before selecting a native lipid; "
+        "automatic custom parameterization is blocked for this ambiguous match."
+    )
 
 
 @contextmanager

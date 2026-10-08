@@ -25,7 +25,17 @@ CHARMM36/CHARMM36m。安装器会在安装 Python 依赖前，从 MacKerell Lab 
 - `src/gmxbuilder/data/forcefields/amber99sb.ff`
 - `src/gmxbuilder/data/forcefields/charmm36m`（本地安装）
 - `src/gmxbuilder/data/forcefields/charmm36`（本地安装）
+- `src/gmxbuilder/data/forcefields/amber14sb_ol24`（本地组装）
 - `src/gmxbuilder/data/forcefields/oplsaa.ff`
+
+### Amber 核酸（`amber14sb_ol24`）
+
+该力场在用户机器组装，不从本项目再分发。安装器从 Olomouc 官方来源
+<https://fch.upol.cz/ff_ol/> 下载并校验固定的 `amber14sb_OL24.ff.tar.gz`，
+只将核酸部分合并到内置 ff14SB；蛋白、水、离子和磷酸化残基保持原有 GROMACS 移植数据。
+社区 GROMACS 移植包未附许可证，因此本项目只提供合并逻辑，不据 Amber 参数公有领域
+声明推断移植包的再分发许可。请引用 OL24（Zgarbova 等，JCTC 21, 833–846, 2025）
+及组装后 `forcefield.doc` 列出的相关工作。
 
 必须保留 `forcefield.itp`、`forcefield.doc` 及相关源文件头中的来源和科学引用。
 再次分发前，分发者必须核实每个力场文件的上游再分发条款。
@@ -72,6 +82,7 @@ AmberTools 的组件许可证并不完全相同，而 Amber 力场由项目官�
 | RDKit | BSD-3-Clause |
 | OpenMM | BSD-like |
 | PDBFixer | MIT |
+| Gemmi 0.7.5 | MPL-2.0 |
 | Vermouth / Martinize2 | Apache-2.0 |
 | COBY | Apache-2.0 |
 | MDTraj | LGPL-2.1-or-later |

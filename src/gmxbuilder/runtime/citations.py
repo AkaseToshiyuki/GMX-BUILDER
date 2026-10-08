@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from importlib import resources
 import json
+from importlib import resources
 
 
 def _registry() -> dict[str, dict]:
@@ -22,26 +22,42 @@ def atomistic_citations(metadata: dict) -> dict:
     ligand_ff = str(metadata.get("ligand_ff", "")).lower()
     water = str(metadata.get("water_model", "")).lower()
     selected = ["gmxbuilder", "gromacs", "v-rescale", "c-rescale"]
-    if force_field == "amber14sb":
+    if force_field in {"amber14sb", "amber14sb_ol24"}:
         selected.append("ff14sb")
     elif force_field in {"amber99sb", "amber99sb-ildn"}:
         selected.append("amber99sb")
+        if force_field == "amber99sb-ildn":
+            selected.append("amber99sb-ildn")
     elif force_field == "charmm36m":
         selected.extend(["charmm36m", "charmm-gromacs"])
     elif force_field == "charmm36":
         selected.extend(["charmm36-protein", "charmm-gromacs"])
     elif force_field.startswith("opls"):
         selected.append("oplsaa")
+    if force_field == "amber14sb_ol24":
+        selected.append("ol24")
+    if "PROPKA" in metadata.get("protonation_sources", []):
+        selected.append("propka")
     if lipid_ff == "lipid21":
         selected.append("lipid21")
+    elif lipid_ff == "amber-mixed":
+        selected.extend(["lipid21", "gaff", "acpype"])
     elif lipid_ff == "gaff2":
         selected.extend(["gaff", "acpype"])
     elif lipid_ff.startswith("charmm"):
         selected.append("charmm36-lipid")
+    lipid_names = set(metadata.get("selected_lipid_names", []))
+    if lipid_ff.startswith("charmm"):
+        if lipid_names & {"PPCPL", "PPEPL"}:
+            selected.append("west2020-plasmalogen")
+        if lipid_names & {"DOPGD", "DPPGD"}:
+            selected.append("wu2014-lipids")
     if ligand_ff == "gaff2":
         selected.extend(["gaff", "acpype", "rdkit"])
     elif ligand_ff == "cgenff":
         selected.append("cgenff")
+    elif ligand_ff == "charmm_compat":
+        selected.extend(["cgenff", "rdkit"])
     if water == "tip3p":
         selected.append("tip3p")
     if str(metadata.get("_orientation_method", "")).lower() in {"ppm", "auto"}:
@@ -54,6 +70,9 @@ def atomistic_citations(metadata: dict) -> dict:
     return {
         "schema_version": 1,
         "generated_by": "GMXBUILDER",
-        "notice": "Cite the methods and parameter sets actually used; review this list before publication.",
+        "notice": (
+            "Cite the methods and parameter sets actually used; "
+            "review this list before publication."
+        ),
         "references": [{"id": key, **registry[key]} for key in unique],
     }

@@ -1,8 +1,9 @@
 """Regression coverage for persistent small-molecule display labels."""
 
+from pathlib import Path
+
 import numpy as np
 from fastapi.testclient import TestClient
-from pathlib import Path
 
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
@@ -13,7 +14,6 @@ from gmxbuilder.web.server import (
     app,
     task_manager,
 )
-
 
 _LIGAND_PDB = Path(__file__).parent / "fixtures" / "small_molecule_label.pdb"
 

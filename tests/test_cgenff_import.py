@@ -1,23 +1,26 @@
-from pathlib import Path
 import math
 import subprocess
+from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROWriter
 from gmxbuilder.io.top import TopologyWriter
+from gmxbuilder.modules.forcefield import cgenff_import
 from gmxbuilder.modules.forcefield.cgenff_import import prepare_cgenff_molecule
 from gmxbuilder.modules.forcefield.compatibility import compatibility_report
 from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+from gmxbuilder.web.server import app, task_manager
+from tests.prerequisites import requires_forcefield
 from tests.test_gromacs_smoke import _find_gmx
 from tests.test_membrane_gromacs_smoke import _write_smoke_mdp
-from gmxbuilder.web.server import app, task_manager
-
 
 MOL2 = """@<TRIPOS>MOLECULE
 LIG
@@ -32,7 +35,8 @@ USER_CHARGES
 1 1 2 1
 """
 
-STREAM = """* CGenFF program version 4.6
+STREAM = """* CGenFF program version 3.0
+* For use with CGenFF version 4.6
 read rtf card append
 36 1
 MASS -1 CGX1 12.011
@@ -67,6 +71,28 @@ def _write_package(tmp_path):
     return mol2, stream
 
 
+def test_cgenff_rejects_molecules_above_the_small_molecule_atom_bound(tmp_path):
+    atom_lines = [
+        f"{index} C{index} {index:.4f} 0.0000 0.0000 C.3 1 LIG 0.0"
+        for index in range(1, cgenff_import.MAX_CGENFF_MOLECULE_ATOMS + 2)
+    ]
+    mol2 = tmp_path / "oversized.mol2"
+    mol2.write_text("@<TRIPOS>ATOM\n" + "\n".join(atom_lines) + "\n@<TRIPOS>BOND\n")
+    stream = tmp_path / "LIG.str"
+    stream.write_text(STREAM)
+
+    with pytest.raises(ModuleConfigError, match="2048 atoms"):
+        prepare_cgenff_molecule("LIG", mol2, stream, "charmm36m", tmp_path / "generated")
+
+
+def test_cgenff_enforces_parameter_record_budget_before_conversion(tmp_path, monkeypatch):
+    mol2, stream = _write_package(tmp_path)
+    monkeypatch.setattr(cgenff_import, "_MAX_CGENFF_PARAMETER_RECORDS", 1)
+
+    with pytest.raises(ModuleConfigError, match="parameter record count"):
+        prepare_cgenff_molecule("LIG", mol2, stream, "charmm36m", tmp_path / "generated")
+
+
 def _ligand_system():
     structure = Structure(
         coordinates=np.array([[0.5, 0.5, 0.5]]),
@@ -76,6 +102,8 @@ def _ligand_system():
         resids=[1],
         chain_ids=["L"],
         elements=["C"],
+        source_ids=["ligand:C1"],
+        source_info={"atoms": {"ligand:C1": {"name": "C1"}}},
     )
     return System(
         structure,
@@ -97,6 +125,7 @@ def test_charmm_ligands_offer_external_cgenff_import():
     assert "MOL2" in option["reason"]
 
 
+@requires_forcefield("charmm36m")
 def test_cgenff_package_is_imported_and_hydrogens_are_added(tmp_path):
     mol2, stream = _write_package(tmp_path)
     template = prepare_cgenff_molecule(
@@ -129,12 +158,16 @@ def test_cgenff_package_is_imported_and_hydrogens_are_added(tmp_path):
         .system
     )
     assert result.structure.atom_names == ["C1", "H1"]
+    from tests.test_atom_provenance import assert_surviving_heavy_sources
+
+    assert_surviving_heavy_sources(_ligand_system().structure, result.structure)
     assert result.metadata["ligand_parameters"]["LIG"]["source"] == "cgenff"
     assert result.component_by_kind(ComponentKind.LIGAND)[0].metadata["molecule_charges"] == {
         "LIG": 0
     }
 
 
+@requires_forcefield("charmm36m")
 def test_cgenff_nbfix_uses_pair_rmin_not_atom_rmin_half(tmp_path):
     mol2, stream = _write_package(tmp_path)
     stream.write_text(
@@ -154,6 +187,8 @@ def test_cgenff_nbfix_uses_pair_rmin_not_atom_rmin_half(tmp_path):
     assert math.isclose(float(record[4]), 0.05 * 4.184, rel_tol=1e-9)
 
 
+@requires_forcefield("charmm36m")
+@pytest.mark.slow
 def test_imported_cgenff_topology_passes_grompp(tmp_path):
     mol2, stream = _write_package(tmp_path)
     system = (
@@ -212,6 +247,7 @@ def test_cgenff_frontend_requires_web_output_upload():
     assert "cgenff_parameters: isPureMembrane ? {} : collectCGenFFParameters()" in source
 
 
+@requires_forcefield("charmm36m")
 def test_cgenff_upload_validates_and_persists_package(tmp_path, monkeypatch):
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="ligand.pdb")

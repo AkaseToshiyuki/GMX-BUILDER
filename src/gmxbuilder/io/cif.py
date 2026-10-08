@@ -7,13 +7,17 @@ standard :class:`Structure` container.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
 import numpy as np
 
-from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import ParseError
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.io.cell import classify_cell, display_envelope
+from gmxbuilder.io.residue_identity import clean_identifier, working_residue_ids
+from gmxbuilder.io.source_document import source_bytes, source_text
 
 
 class CIFParser:
@@ -24,7 +28,7 @@ class CIFParser:
         if not path.exists():
             raise ParseError(f"File not found: {path}")
 
-        raw = path.read_text(encoding="utf-8-sig", errors="replace")
+        raw = source_text(path)
         raw = raw.replace("\r\n", "\n").replace("\r", "\n")
 
         # ---- 1. Extract _atom_site loop ----
@@ -72,22 +76,10 @@ class CIFParser:
         else:
             rows = all_rows
 
-        selected: dict[tuple[str, str, str, str], tuple[int, tuple[float, int]]] = {}
+        conformer_records = []
         for row_idx in rows:
             base = row_idx * len(atom_fields)
             insertion = self._str(atom_data, base, col, "pdbx_PDB_ins_code", "").strip()
-            if insertion not in {"", ".", "?"}:
-                chain = self._preferred_str(
-                    atom_data, base, col, ("auth_asym_id", "label_asym_id"), "?"
-                )
-                resid = self._preferred_str(
-                    atom_data, base, col, ("auth_seq_id", "label_seq_id"), "?"
-                )
-                raise ParseError(
-                    "mmCIF insertion codes are not yet representable in the integer "
-                    f"residue model (chain {chain} residue {resid}{insertion}); "
-                    "renumber residues uniquely before upload"
-                )
             atom_name = self._preferred_str(
                 atom_data, base, col, ("auth_atom_id", "label_atom_id"), ""
             )
@@ -100,13 +92,54 @@ class CIFParser:
             if altloc in {".", "?"}:
                 altloc = ""
             occupancy = self._float(atom_data, base, col, "occupancy", 1.0)
-            preference = 2 if not altloc else 1 if altloc == "A" else 0
-            key = (chain, resid, resname, atom_name)
-            rank = (occupancy, preference)
-            previous = selected.get(key)
-            if previous is None or rank > previous[1]:
-                selected[key] = (row_idx, rank)
-        rows = sorted(row_idx for row_idx, _rank in selected.values())
+            conformer_records.append(
+                (
+                    row_idx,
+                    (
+                        chain,
+                        self._str(atom_data, base, col, "label_asym_id", chain),
+                        resid,
+                        insertion,
+                    ),
+                    resname,
+                    atom_name,
+                    altloc,
+                    occupancy,
+                )
+            )
+        from gmxbuilder.io.altloc import select_residue_conformers
+
+        try:
+            rows = select_residue_conformers(conformer_records)
+        except ParseError as exc:
+            for issue in exc.issues:
+                base = issue["record"] * len(atom_fields)
+                issue.update(
+                    {
+                        "chain": self._preferred_str(
+                            atom_data, base, col, ("auth_asym_id", "label_asym_id"), ""
+                        ),
+                        "resid": self._preferred_str(
+                            atom_data, base, col, ("auth_seq_id", "label_seq_id"), ""
+                        ),
+                        "insertion_code": self._str(atom_data, base, col, "pdbx_PDB_ins_code", ""),
+                        "source_atom_id": self._str(atom_data, base, col, "id", ""),
+                    }
+                )
+            raise
+        # Atom-site rows need not be grouped by polymer sequence. Use the
+        # deposited label sequence where available, never author numbering.
+        chain_order = {}
+        ordering = {}
+        for row_idx in rows:
+            base = row_idx * len(atom_fields)
+            chain = self._preferred_str(atom_data, base, col, ("label_asym_id", "auth_asym_id"), "")
+            chain_order.setdefault(chain, len(chain_order))
+            sequence = self._str(atom_data, base, col, "label_seq_id", "")
+            if sequence and (not sequence.isdigit() or int(sequence) <= 0):
+                raise ParseError("label_seq_id must be a positive sequence position or missing")
+            ordering[row_idx] = (chain_order[chain], int(sequence) if sequence else 0, row_idx)
+        rows.sort(key=ordering.__getitem__)
         n_atoms = len(rows)
         if n_atoms == 0:
             raise ParseError("Empty _atom_site loop")
@@ -120,6 +153,8 @@ class CIFParser:
         occupancies: list[float] = []
         tempfactors: list[float] = []
 
+        residue_keys = []
+        unknown_elements = []
         for output_idx, row_idx in enumerate(rows):
             base = row_idx * len(atom_fields)
 
@@ -147,35 +182,109 @@ class CIFParser:
             rid = self._int(atom_data, base, col, "auth_seq_id")
             if rid is None:
                 rid = self._int(atom_data, base, col, "label_seq_id")
-            resids.append(rid if rid is not None else output_idx + 1)
+            if rid is None:
+                raise ParseError("Residue identity requires an integer auth_seq_id or label_seq_id")
+            if not np.iinfo(np.int64).min <= rid <= np.iinfo(np.int64).max:
+                raise ParseError("Residue identifier exceeds the supported signed 64-bit range")
+            residue_keys.append(
+                (
+                    chain_ids[-1],
+                    self._str(atom_data, base, col, "label_asym_id", chain_ids[-1]),
+                    str(rid),
+                    clean_identifier(self._str(atom_data, base, col, "pdbx_PDB_ins_code", "")),
+                )
+            )
 
             # Element
             elem = self._str(atom_data, base, col, "type_symbol", "").strip()
             if not elem:
-                # Guess from atom name
-                an = atom_names[-1].strip()
-                if an:
-                    e = an[0].upper()
-                    if len(an) >= 2 and an[1].islower():
-                        elem = an[:2].title()
-                    else:
-                        elem = e
+                raise ParseError(
+                    "Missing _atom_site.type_symbol: atom names alone cannot establish elements"
+                )
+            from gemmi import Element
+
+            if Element(elem).atomic_number == 0:
+                unknown_elements.append(
+                    {
+                        "code": "unknown_element",
+                        "record": row_idx,
+                        "element": elem,
+                        "chain": chain_ids[-1],
+                        "resid": str(rid),
+                        "insertion_code": residue_keys[-1][-1],
+                        "resname": resnames[-1],
+                        "atom": atom_names[-1],
+                    }
+                )
             elements.append(elem.upper())
+
+        if unknown_elements:
+            first = unknown_elements[0]
+            raise ParseError(
+                f"Unknown element in {len(unknown_elements)} atom(s); first is "
+                f"{first['element']!r} at {first['chain']}:{first['resid']} "
+                f"{first['resname']} {first['atom']}. Identify these sites from an "
+                "authoritative source or explicitly exclude them before re-uploading; "
+                "elements are not guessed.",
+                issues=unknown_elements,
+            )
+        resids, residue_mapping = working_residue_ids(residue_keys)
 
         # ---- 2. Unit cell → box vectors ----
         box_vectors = self._parse_cell(raw)
+        deposited_cell = None if box_vectors is None else box_vectors.tolist()
 
-        # Estimate from coordinates when cell parameters are absent or
-        # physically unreasonable (e.g. placeholder 1.0 Å cell).
-        dims = np.sqrt((box_vectors**2).sum(axis=1)) if box_vectors is not None else np.zeros(3)
-        if box_vectors is None or np.any(dims < 1.0) or np.any(dims > 1000.0):
-            cmin = coords.min(axis=0)
-            cmax = coords.max(axis=0)
-            extent = cmax - cmin
-            box_size = max(extent.max() * 1.3, 3.0)
-            box_vectors = np.eye(3) * box_size
+        cell_status = classify_cell(box_vectors)
+        if cell_status in {"missing", "placeholder"}:
+            box_vectors = display_envelope(coords)
 
+        from gmxbuilder.io.cif_document import category
+
+        digest = hashlib.sha256(source_bytes(path)).hexdigest()
+        records = {}
+        for row_idx in rows:
+            records[f"{digest}:{row_idx}"] = dict(
+                zip(
+                    atom_fields,
+                    atom_data[row_idx * len(atom_fields) : (row_idx + 1) * len(atom_fields)],
+                    strict=True,
+                )
+            )
+        connection_fields, connection_values = category(raw, "_struct_conn.")
+        connections = [
+            dict(
+                zip(
+                    connection_fields,
+                    connection_values[i : i + len(connection_fields)],
+                    strict=True,
+                )
+            )
+            for i in range(0, len(connection_values), len(connection_fields) or 1)
+        ]
         return Structure(
+            source_ids=[f"{digest}:{i}" for i in rows],
+            source_info={
+                "schema": 1,
+                "format": "mmcif",
+                "sha256": digest,
+                "selected_model": first_model if model_col is not None else "1",
+                "selected_model_number": first_model if model_col is not None else "1",
+                "selected_model_ordinal": 1,
+                "model_count": len(
+                    {
+                        self._str(atom_data, r * len(atom_fields), col, "pdbx_PDB_model_num", "1")
+                        for r in all_rows
+                    }
+                ),
+                "input_rows": len(all_rows),
+                "selected_rows": rows,
+                "atoms": records,
+                "connections": connections,
+                "cell_vectors_nm": deposited_cell,
+                "box_source": "deposited" if cell_status == "deposited" else "estimated",
+                "cell_status": cell_status,
+                "residue_mapping": residue_mapping,
+            },
             coordinates=coords,
             box_vectors=box_vectors,
             atom_names=atom_names,
@@ -197,109 +306,26 @@ class CIFParser:
 
         Returns (field_names, values) where values is a flat list.
         """
-        # Find loop headers tolerantly (trailing spaces are legal and common).
-        loop_pattern = re.compile(r"(?m)^loop_[ \t]*\n")
-        loop_match = loop_pattern.search(raw)
-        fields: list[str] = []
-        values_start: int | None = None
-        found = False
+        from gmxbuilder.io.cif_document import category
 
-        while loop_match is not None:
-            # Collect field names after loop_
-            pos = loop_match.end()
-            fields = []
-            while pos < len(raw):
-                line = raw[pos:].split("\n", 1)[0].strip()
-                if not line or line.startswith("#"):
-                    pos += len(raw[pos:].split("\n", 1)[0]) + 1
-                    continue
-                if not line.startswith("_"):
-                    break
-                # Only collect fields matching prefix
-                fields.append(line)
-                pos += len(raw[pos:].split("\n", 1)[0]) + 1
-            if any(f.startswith(prefix) for f in fields):
-                values_start = pos
-                found = True
-                break
-            loop_match = loop_pattern.search(raw, pos)
-
-        if not found or values_start is None:
-            return [], []
-
-        # Parse values until the next CIF control/tag line or loop terminator.
-        terminator = re.search(
-            r"(?m)^(?:loop_|data_|save_|_)[^\n]*$|^#[ \t]*$",
-            raw[values_start:],
-        )
-        end = values_start + terminator.start() if terminator else len(raw)
-        value_text = raw[values_start:end]
-
-        # Tokenize CIF values: handle quoted strings
-        tokens: list[str] = []
-        i = 0
-        while i < len(value_text):
-            # Skip whitespace and comments
-            if value_text[i] in " \t\r\n":
-                i += 1
-                continue
-            if value_text[i] == "#":
-                j = value_text.find("\n", i)
-                i = (j + 1) if j != -1 else len(value_text)
-                continue
-
-            # Quoted values
-            if value_text[i] == "'":
-                j = value_text.find("'", i + 1)
-                if j != -1:
-                    tokens.append(value_text[i + 1 : j])
-                    i = j + 1
-                else:
-                    i += 1
-            elif value_text[i] == '"':
-                j = value_text.find('"', i + 1)
-                if j != -1:
-                    tokens.append(value_text[i + 1 : j])
-                    i = j + 1
-                else:
-                    i += 1
-            elif value_text[i] == ";":
-                # Multi-line quote
-                j = value_text.find("\n;", i + 1)
-                if j != -1:
-                    tokens.append(value_text[i + 1 : j].strip())
-                    i = j + 2
-                else:
-                    i += 1
-            else:
-                # Unquoted token — read until whitespace
-                j = i
-                while j < len(value_text) and value_text[j] not in " \t\r\n":
-                    j += 1
-                token = value_text[i:j].strip()
-                if token and token != ".":
-                    tokens.append(token)
-                elif token == ".":
-                    tokens.append(".")  # missing value placeholder
-                i = j
-
-        # Filter: only keep tokens that correspond to our prefix fields
-        # (there may be other fields we don't care about; keep all tokens
-        #  since they all belong to the loop in order)
-        return fields, tokens
+        return category(raw, prefix)
 
     @staticmethod
     def _parse_cell(raw: str) -> np.ndarray | None:
         """Parse _cell.length_* and _cell.angle_* into a (3,3) box matrix (nm)."""
 
+        from gmxbuilder.io.cif_document import structure_block
+
+        block = structure_block(raw)
+
         def _get(tag: str) -> float | None:
-            m = re.search(rf"^{re.escape(tag)}\s+(\S+)", raw, re.MULTILINE)
-            if m:
-                try:
-                    return CIFParser._number(m.group(1))
-                except ValueError:
-                    return None
-            return None
+            value = block.find_value(tag)
+            if value is None or value in {".", "?"}:
+                return None
+            try:
+                return CIFParser._number(value)
+            except ValueError as exc:
+                raise ParseError(f"Invalid {tag}: {value!r}") from exc
 
         a = _get("_cell.length_a")
         b = _get("_cell.length_b")
@@ -308,8 +334,17 @@ class CIFParser:
         beta = _get("_cell.angle_beta")
         gamma = _get("_cell.angle_gamma")
 
-        if a is None:
+        if all(v is None for v in (a, b, c, alpha, beta, gamma)):
             return None
+        if any(v is None for v in (a, b, c, alpha, beta, gamma)):
+            raise ParseError("Incomplete CIF unit cell: supply all lengths and angles")
+        if not all(np.isfinite(v) for v in (a, b, c, alpha, beta, gamma)) or min(a, b, c) <= 0:
+            raise ParseError("Unit-cell lengths must be finite and positive")
+        if not all(0 < v < 180 for v in (alpha, beta, gamma)):
+            raise ParseError("Unit-cell angles must be between 0 and 180 degrees")
+        cosines = np.cos(np.radians([alpha, beta, gamma]))
+        if 1 - np.dot(cosines, cosines) + 2 * np.prod(cosines) <= 0:
+            raise ParseError("Unit-cell angles do not define a positive-volume cell")
 
         # Convert Å → nm and degrees → radians
         a_nm = a / 10.0
@@ -387,8 +422,8 @@ class CIFParser:
             return default
         try:
             return CIFParser._number(v)
-        except (ValueError, TypeError):
-            return default
+        except (ValueError, TypeError) as exc:
+            raise ParseError(f"Invalid _atom_site.{key} value: {v!r}") from exc
 
     @staticmethod
     def _required_float(data: list[str], base: int, col: dict[str, int], key: str) -> float:

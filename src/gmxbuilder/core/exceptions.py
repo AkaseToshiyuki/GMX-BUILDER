@@ -10,7 +10,9 @@ class GMXBuilderError(Exception):
 class ParseError(GMXBuilderError):
     """Failure to parse an input file."""
 
-    pass
+    def __init__(self, message, *, issues=None):
+        super().__init__(message)
+        self.issues = issues or []
 
 
 class ValidationError(GMXBuilderError):

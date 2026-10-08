@@ -13,48 +13,18 @@ from __future__ import annotations
 
 import numpy as np
 
+from gmxbuilder.core.hydrophobicity import WW_INTERFACE
 from gmxbuilder.core.structure import Structure
+from gmxbuilder.geometry.align import compute_principal_axes, orient_protein_to_membrane
 from gmxbuilder.geometry.transforms import (
     rotation_matrix_from_axis_angle,
     rotation_matrix_from_vectors,
 )
-from gmxbuilder.geometry.align import compute_principal_axes, orient_protein_to_membrane
 
-
-# ---------------------------------------------------------------------------
-# Wimley-White (1996) whole-residue water→POPC transfer free energies
-# (kcal/mol).  Negative = favours the membrane (hydrophobic).
-# Values from Wimley, Hristova & White, Biochemistry 35:5109 (1996) and
-# Jayasinghe, Hristova & White, JMB 312:927 (2001).
-# ---------------------------------------------------------------------------
-_WW_TRANSFER: dict[str, float] = {
-    "ALA": 0.17,
-    "ARG": 0.81,
-    "ASN": 0.42,
-    "ASP": 1.23,
-    "CYS": -0.24,
-    "GLN": 0.58,
-    "GLU": 0.11,
-    "GLY": 0.01,
-    "HIS": 0.96,
-    "ILE": -0.31,
-    "LEU": -0.56,
-    "LYS": 0.99,
-    "MET": -0.22,
-    "PHE": -1.13,
-    "PRO": 0.45,
-    "SER": 0.13,
-    "THR": 0.14,
-    "TRP": -1.85,
-    "TYR": -0.94,
-    "VAL": -0.07,
-    # Protonated variants
-    "ASH": 1.23,
-    "GLH": 0.11,
+# Legacy estimates for residues without measured WW interface values. Keep
+# these separate from the experimental table and disclose them in pose QA.
+_WW_ESTIMATES: dict[str, float] = {
     "CYX": -0.24,
-    "HID": 0.96,
-    "HIE": 0.96,
-    "HIP": 0.96,
     "LYN": 0.99,
     # PTM / modified residues (estimated from parent + group hydrophobicity)
     "SEP": 0.63,
@@ -88,7 +58,7 @@ _WW_TRANSFER: dict[str, float] = {
     "SMC": -0.24,
     "OCS": 1.26,  # anionic cysteinesulfonate is strongly water-facing
     "CIR": 0.81,  # citrulline → similar to ARG
-    "TYS": -1.44,  # sulfated TYR → more hydrophilic than TYR
+    "TYS": -1.44,  # unvalidated legacy estimate; not an experimental WW value
     "SAC": 0.13,
     "OAS": 0.13,
     "TAC": 0.14,
@@ -100,6 +70,8 @@ _WW_TRANSFER: dict[str, float] = {
     "KCX": 1.49,  # anionic N-zeta-carboxylysine
     "NIY": -0.44,  # neutral nitro group reduces TYR membrane preference
 }
+
+_WW_TRANSFER = {**_WW_ESTIMATES, **WW_INTERFACE}
 
 # Default membrane hydrophobic half-thickness for PPM scoring.
 #
@@ -142,6 +114,17 @@ def _get_residue_coords_and_energies(structure: Structure):
             res_groups[key] = []
         res_groups[key].append(i)
 
+    unknown = sorted({name for name, _, _ in res_groups if name not in _WW_TRANSFER})
+    if unknown:
+        import warnings
+
+        warnings.warn(
+            "No Wimley-White transfer energy for residues "
+            + ", ".join(unknown)
+            + "; their score contribution is omitted. Inspect orientation explicitly.",
+            UserWarning,
+            stacklevel=2,
+        )
     coords_list = []
     energies = []
     for (rname, rid, _cid), indices in res_groups.items():
@@ -754,7 +737,7 @@ def _analyze_tm_helix_bundle(
 
     window_axes = np.asarray(axes)
     tensor = np.zeros((3, 3), dtype=float)
-    for axis, weight in zip(window_axes, weights):
+    for axis, weight in zip(window_axes, weights, strict=True):
         tensor += float(weight) * np.outer(axis, axis)
     eigenvalues, eigenvectors = np.linalg.eigh(tensor)
     axis = eigenvectors[:, -1]

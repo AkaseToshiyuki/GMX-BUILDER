@@ -5,32 +5,36 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gmxbuilder.core.structure import Structure
-from gmxbuilder.core.system import System
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import TopologyError
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
 from gmxbuilder.io.top import TopologyWriter
 from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
 from gmxbuilder.modules.forcefield.charmm36 import CHARMM36mForceField
 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 from gmxbuilder.modules.modifications.processor import StructureProcessor
+from tests.prerequisites import requires_forcefield
 from tests.test_structure_processor import _disulfide_system
 
 
 def _ala_gly_structure() -> Structure:
-    atom_names = ["N", "CA", "C", "O", "CB", "N", "CA", "C", "O"]
-    return Structure(
-        coordinates=np.zeros((len(atom_names), 3)),
-        box_vectors=np.eye(3) * 5.0,
-        atom_names=atom_names,
-        resnames=["ALA"] * 5 + ["GLY"] * 4,
-        resids=[1] * 5 + [2] * 4,
-        chain_ids=["A"] * len(atom_names),
-        elements=["N", "C", "C", "O", "C", "N", "C", "C", "O"],
-    )
+    from tests.structure_fixtures import peptide_structure
+
+    return peptide_structure("AG")
 
 
+def test_coincident_peptide_atoms_remain_a_hard_failure(tmp_path):
+    structure = _ala_gly_structure()
+    structure.coordinates[5] = structure.coordinates[2]
+    with pytest.raises(TopologyError, match="is broken"):
+        TopologyWriter("charmm36m")._write_protein_itp_for_indices(
+            structure, tmp_path / "invalid.itp", list(range(structure.num_atoms))
+        )
+
+
+@requires_forcefield("charmm36m")
 def test_charmm_mixed_membrane_blocks_keep_each_lipid_identity():
     structure = Structure(
         coordinates=np.zeros((4, 3)),
@@ -136,11 +140,11 @@ def test_writer_does_not_bridge_a_geometric_chain_break(tmp_path):
     structure = _ala_gly_structure()
     structure.coordinates[5:] += np.array([2.0, 0.0, 0.0])
     path = tmp_path / "chain-break.itp"
-    TopologyWriter("amber99sb")._write_protein_itp_for_indices(
-        structure, path, list(range(structure.num_atoms))
-    )
-    assert (3, 6) not in _bond_pairs(path)
-    assert (6, 3) not in _bond_pairs(path)
+    with pytest.raises(TopologyError, match="is broken"):
+        TopologyWriter("amber99sb")._write_protein_itp_for_indices(
+            structure, path, list(range(structure.num_atoms))
+        )
+    assert not path.exists()
 
 
 def test_charmm36m_loader_includes_its_extended_residue_templates():

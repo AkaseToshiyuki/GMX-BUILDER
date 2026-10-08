@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
 import shutil
 import threading
 import uuid
+import weakref
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
 
 TASK_ROOT = Path(os.environ.get("GMXBUILDER_TASK_DIR", "/tmp/gmxbuilder_tasks"))
-DEFAULT_TASK_TTL_HOURS = 8.0
+DEFAULT_TASK_TTL_HOURS = 24.0
 
 
 def task_ttl_hours() -> float:
@@ -36,16 +38,18 @@ def task_expiry(now: datetime | None = None) -> str:
 
 
 # Per-task locks for atomic read-modify-write on state.json
-_state_locks: dict[str, threading.Lock] = {}
+_state_locks: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 _locks_lock = threading.Lock()
 
 
 def _get_lock(task_id: str) -> threading.Lock:
     """Return (or create) the per-task state lock."""
     with _locks_lock:
-        if task_id not in _state_locks:
-            _state_locks[task_id] = threading.Lock()
-        return _state_locks[task_id]
+        lock = _state_locks.get(task_id)
+        if lock is None:
+            lock = threading.Lock()
+            _state_locks[task_id] = lock
+        return lock
 
 
 class TaskManager:
@@ -57,6 +61,8 @@ class TaskManager:
         self.root.chmod(0o700)
         self._active_counts: dict[str, int] = {}
         self._active_lock = threading.Lock()
+        if os.environ.get("GMXBUILDER_RESOURCE_WORKER") == "1":
+            return
         # Tighten legacy task permissions on upgrade.  Do not follow symlinks.
         for task_dir in self.root.iterdir():
             if not task_dir.is_dir() or task_dir.is_symlink():
@@ -72,6 +78,14 @@ class TaskManager:
 
     def create_task(self, filename: str = "") -> dict:
         """Create a new task directory and return task metadata."""
+        if os.environ.get("GMXBUILDER_RESOURCE_WORKER") == "1":
+            assigned = os.environ.get("GMXBUILDER_WORKER_TASK_ID", "")
+            existing = self.get_state(assigned) if assigned else None
+            if existing and existing.get("resource_pending"):
+                return self.update_state(
+                    assigned, {"filename": filename, "resource_pending": False}
+                )
+            raise RuntimeError("Worker cannot create another task outside its admitted operation")
         # The task ID is also the bearer capability for resume/download.
         # Keep the full UUID entropy rather than the former 48-bit prefix.
         task_id = uuid.uuid4().hex
@@ -106,10 +120,32 @@ class TaskManager:
     def get_state(self, task_id: str) -> dict | None:
         """Read the state.json for a task."""
         state_file = self.root / task_id / "state.json"
-        if not state_file.exists():
+        if state_file.is_symlink() or not state_file.is_file():
             return None
-        with open(state_file) as f:
-            return json.load(f)
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+            created = datetime.fromisoformat(state["created_at"])
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            state["expires_at"] = task_expiry(created)
+            if datetime.now(timezone.utc) >= datetime.fromisoformat(state["expires_at"]):
+                return None
+            return state
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    @contextmanager
+    def _state_lock(self, task_id: str):
+        """Serialize state updates across the Web process and isolated workers."""
+        with _get_lock(task_id):
+            lock_path = self.root / task_id / ".state.lock"
+            with open(lock_path, "a") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
 
     def update_state(self, task_id: str, updates: dict) -> dict | None:
         """Merge updates into the task state and return the new state.
@@ -117,11 +153,19 @@ class TaskManager:
         Uses per-task locking to prevent lost-update races when multiple
         concurrent requests modify the same task's state.json.
         """
-        with _get_lock(task_id):
+        if not (self.root / task_id).is_dir():
+            return None
+        with self._state_lock(task_id):
             state = self.get_state(task_id)
             if state is None:
                 return None
-            state.update(updates)
+            state.update(
+                {
+                    key: value
+                    for key, value in updates.items()
+                    if key not in {"created_at", "expires_at", "task_id"}
+                }
+            )
             state["updated_at"] = datetime.now(timezone.utc).isoformat()
             task_dir = self.root / task_id
             self._write_state(task_dir, state)
@@ -138,7 +182,9 @@ class TaskManager:
             raise ValueError("UI step name must be a non-empty string")
         if not isinstance(step_data, dict):
             raise ValueError("UI step data must be an object")
-        with _get_lock(task_id):
+        if not (self.root / task_id).is_dir():
+            return None
+        with self._state_lock(task_id):
             state = self.get_state(task_id)
             if state is None:
                 return None
@@ -187,6 +233,37 @@ class TaskManager:
         )
         return ent_files[0] if ent_files else None
 
+    def get_filter_source(self, task_id: str) -> Path | None:
+        """Resolve an intact upload, never a previous selection or preview."""
+        task_dir = self.get_task_dir(task_id)
+        derived = {"filtered.pdb", "preview.pdb", "cleaned.pdb", "oriented.pdb"}
+        state = self.get_state(task_id) or {}
+        converted = task_dir / "converted.pdb"
+        for key in ("uploaded_structure_name", "filename"):
+            name = state.get(key)
+            if not isinstance(name, str) or Path(name).name != name or name in derived:
+                continue
+            candidate = task_dir / name
+            if candidate.is_file() and not candidate.is_symlink():
+                if candidate.suffix.lower() in {".cif", ".mmcif"}:
+                    return candidate
+                return candidate
+        if converted.is_file() and not converted.is_symlink():
+            return converted
+        candidates = (
+            sorted(
+                path
+                for path in task_dir.iterdir()
+                if path.suffix.lower() in {".pdb", ".ent"}
+                and path.name not in derived
+                and path.is_file()
+                and not path.is_symlink()
+            )
+            if task_dir.is_dir()
+            else []
+        )
+        return candidates[0] if len(candidates) == 1 else None
+
     def save_uploaded_pdb(self, task_id: str, filename: str, content: bytes) -> Path:
         """Save an uploaded PDB/mmCIF structure using a safe basename."""
         task_dir = self.root / task_id
@@ -194,6 +271,8 @@ class TaskManager:
         task_dir.chmod(0o700)
         # Use original filename or fallback
         safe_name = Path(filename).name if filename else "upload.pdb"
+        if safe_name.lower() in {"filtered.pdb", "converted.pdb", "preview.pdb", "cleaned.pdb"}:
+            safe_name = "uploaded-" + safe_name
         suffix = Path(safe_name).suffix.lower()
         if suffix in {".pdb", ".ent", ".cif", ".mmcif"}:
             safe_name = f"{Path(safe_name).stem}{suffix}"
@@ -253,7 +332,7 @@ class TaskManager:
         """Remove all expired task directories. Returns list of removed IDs."""
         removed = []
         for task_dir in sorted(self.root.iterdir()):
-            if not task_dir.is_dir():
+            if not task_dir.is_dir() or task_dir.is_symlink():
                 continue
             task_id = task_dir.name
             with self._active_lock:
@@ -261,8 +340,8 @@ class TaskManager:
                     continue
             if self.is_expired(task_id):
                 try:
-                    shutil.rmtree(task_dir)
-                    removed.append(task_id)
+                    if self.delete_task(task_id):
+                        removed.append(task_id)
                 except OSError:
                     pass
         return removed
@@ -270,11 +349,18 @@ class TaskManager:
     @contextmanager
     def active_task(self, task_id: str) -> Iterator[None]:
         """Prevent expiration cleanup while task-owned files are being written."""
+        handle = open(self.root / task_id / ".lease", "a")
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        if not (self.root / task_id / "state.json").is_file():
+            handle.close()
+            raise FileNotFoundError("Task was removed before its file lease was acquired")
         with self._active_lock:
             self._active_counts[task_id] = self._active_counts.get(task_id, 0) + 1
         try:
             yield
         finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            handle.close()
             with self._active_lock:
                 remaining = self._active_counts.get(task_id, 1) - 1
                 if remaining > 0:
@@ -285,9 +371,20 @@ class TaskManager:
     def delete_task(self, task_id: str) -> bool:
         """Explicitly delete a task directory."""
         task_dir = self.root / task_id
-        if task_dir.exists():
-            shutil.rmtree(task_dir)
-            return True
+        if task_dir.is_dir() and not task_dir.is_symlink():
+            with self._active_lock:
+                if self._active_counts.get(task_id, 0):
+                    return False
+            try:
+                with open(task_dir / ".lease", "a") as handle:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return False
+                    shutil.rmtree(task_dir)
+                    return True
+            except FileNotFoundError:
+                return False
         return False
 
     # ------------------------------------------------------------------

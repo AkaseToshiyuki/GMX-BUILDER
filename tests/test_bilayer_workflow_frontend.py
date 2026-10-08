@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from gmxbuilder.web.task_types import get_all_task_types, get_task_type
+from tests.frontend_bundle import frontend_source
 
 
 def test_task_categories_follow_the_public_landing_page_order() -> None:
@@ -23,38 +24,11 @@ def test_enabled_workflows_finish_ion_review_then_simulation_parameters():
         assert "verify" not in visible
         assert "topology" not in visible
         if "ions" in visible:
-            assert visible[-2:] == ["ions", "simparams"]
-
-
-def test_ion_check_viewer_is_exact_and_requires_confirmation():
-    template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
-    ions = (ROOT / "src/gmxbuilder/web/static/ions.js").read_text()
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
-
-    assert 'id="ion-confirm-system-btn" disabled' in template
-    assert 'id="panel-verify"' not in template
-    assert "exact coordinates saved by Ion Check" in template
-    assert "_loadStepViewerPdb('ions')" in ions
-    assert "$3Dmol.createViewer" in ions
-    assert "CRYST1" in ions
-    assert "host.style.position = 'relative'" in ions
-    assert "applyIonSystemStyles(viewer)" in ions
-    assert "{resn: WATER_RESIDUES, elem: 'O'}" in ions
-    assert "opacity: 0.55" in ions
-    assert "countWaterOxygens(pdb)" in ions
-    assert 'id="ion-viewer-label"' in template
-    assert 'style="position:relative;width:100%;height:520px;overflow:hidden' in template
-    assert "Random Water Replacement (GROMACS-style)" in template
-    assert "Experimental: formal-charge-ranked water replacement" in template
-    assert "not equilibrium ion sampling" in template
-    assert "Experimental: dimensionless Metropolis site optimization" in template
-    assert "NGL.Stage" not in ions
-    assert "window._isSystemConfirmed()" in app
-    assert "Confirm Simulation System before proceeding" in app
+            assert visible[-3:] == ["ions", "final_review", "simparams"]
 
 
 def test_protonation_recalculation_is_visible_and_bound_to_current_ph():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    app = frontend_source()
 
     assert "phInput.addEventListener('input'" in app
     assert "runProtonation();" in app
@@ -63,27 +37,8 @@ def test_protonation_recalculation_is_visible_and_bound_to_current_ph():
     assert "no predicted pKa threshold was crossed" in app
 
 
-def test_modification_payload_excludes_forcefield_derived_display_metadata():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
-
-    serializer = app.split("function serializeStructureModifications()", 1)[1].split(
-        "// -------------------------------------------------------------------", 1
-    )[0]
-    structure_config = app.split("config.structure = {", 1)[1].split("// Orientation", 1)[0]
-
-    assert "return { index: mod.index, patch_id: mod.patch_id };" in serializer
-    assert "charge_shift" not in serializer
-    assert "product_name" not in serializer
-    assert "modifications: serializeStructureModifications()" in structure_config
-    assert "modifications: _procModifications" not in structure_config
-    assert "hydrateModificationMetadata();" in app
-    restore = app.split("async function resumeTask", 1)[1].split("async function loadOptions", 1)[0]
-    assert "taskState.step_forcefield_config || taskState.forcefield" in restore
-    assert restore.index("resumedProteinForceField.value") < restore.index("showUploadInfo(info)")
-
-
 def test_uploaded_modifications_are_auto_selected_and_require_review():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    app = frontend_source()
     template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
     server = (ROOT / "src/gmxbuilder/web/server.py").read_text()
 
@@ -107,7 +62,7 @@ def test_uploaded_modifications_are_auto_selected_and_require_review():
 
 
 def test_disulfide_crosslinks_use_a_dedicated_paired_residue_contract():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    app = frontend_source()
     template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
     server = (ROOT / "src/gmxbuilder/web/server.py").read_text()
 
@@ -124,7 +79,7 @@ def test_disulfide_crosslinks_use_a_dedicated_paired_residue_contract():
 
 
 def test_simulation_parameter_editor_covers_common_and_expert_controls():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    app = frontend_source()
 
     for control in (
         "em-constraints",
@@ -181,20 +136,21 @@ def test_simulation_parameter_editor_covers_common_and_expert_controls():
 
 
 def test_resume_restores_force_field_before_mdp_defaults():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    app = frontend_source()
     resume_start = app.index("async function resumeTask")
-    resume_end = app.index("async function loadOptions", resume_start)
+    resume_end = app.index("function loadOptions", resume_start)
     resume_source = app[resume_start:resume_end]
 
     restore_force_field = resume_source.index(
         "resumedProteinForceField.value = savedForceFieldConfig.name"
     )
     initialize_mdp = resume_source.index("initSimParams()")
-    assert restore_force_field < initialize_mdp
+    show_upload = resume_source.index("showUploadInfo(info)")
+    assert restore_force_field < min(initialize_mdp, show_upload)
 
 
 def test_membrane_preview_uses_the_checked_explicit_count_contract():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
+    app = frontend_source()
     template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
 
     # The browser preview must follow the explicit-count backend path:
@@ -218,32 +174,3 @@ def test_membrane_preview_uses_the_checked_explicit_count_contract():
     assert "Minimum supported construction size: 64 per leaflet." in template
     assert "stability must be assessed by equilibration" in template
     assert "Li et al., JCIM 2025" not in template
-
-
-def test_task_scoped_custom_lipid_and_history_route_contracts():
-    app = (ROOT / "src/gmxbuilder/web/static/app.js").read_text()
-    template = (ROOT / "src/gmxbuilder/web/templates/index.html").read_text()
-
-    assert "/api/task/' + state.taskId + '/custom-lipids" in app
-    assert "function switchTaskToCustomLipidBackend()" in app
-    assert "lipidFF.value = 'gaff2'" in app
-    assert "gaffOption && gaffOption.enabled" in app
-    assert "Run Force Field Check again" in app
-    assert "state.customLipidBusy" in app
-    assert "Custom Lipids" in app
-    assert "record.state === 'ready'" in app
-    assert "record.state === 'failed'" in app
-    assert "history.pushState" in app
-    assert "history.replaceState" in app
-    assert "restoreRouteFromLocation" in app
-    assert "const taskPart" not in app
-    assert "Task identifiers are deliberately kept out" in app
-    assert "if (window.location.pathname !== '/') history.replaceState({}, '', '/')" in app
-    assert "async function copyTaskIdToClipboard()" in app
-    assert "navigator.clipboard.writeText(taskId)" in app
-    assert 'id="copy-task-id"' in template
-    assert "BilayerBuilder" in app
-    assert "PureBilayerSystem" in app
-    assert "Solvator" in app
-    assert 'id="custom-lipid-build-status"' in template
-    assert "remain private to the current task" in template

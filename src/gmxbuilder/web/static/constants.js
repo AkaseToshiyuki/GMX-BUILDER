@@ -142,3 +142,6 @@
   };
 
 })(window);
+
+window.__gmxbuilderLoaded = window.__gmxbuilderLoaded || [];
+window.__gmxbuilderLoaded.push('constants.js');

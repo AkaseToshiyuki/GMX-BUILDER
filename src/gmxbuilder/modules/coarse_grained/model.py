@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.coarse_grained.assets import load_manifest, validate_toolchain
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGModelModule(BaseModule):
+class CGModelModule(CGWorkflowAdmission, BaseModule):
     name = "cg_model"
     description = "Verify Martini 3 parameters and coarse-graining tools"
 
@@ -29,6 +30,7 @@ class CGModelModule(BaseModule):
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         tools = validate_toolchain()
         manifest = load_manifest()
         output = system.copy()

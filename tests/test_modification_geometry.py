@@ -4,18 +4,18 @@ import numpy as np
 import pytest
 
 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
-from gmxbuilder.modules.modifications.patches import (
-    ALL_PATCHES,
-    _TEMPLATE_PATCH_SUPPORT,
-)
 from gmxbuilder.modules.modifications.geometry import (
     ModificationGeometryError,
     _angle,
     build_modified_heavy_atom_geometry,
 )
+from gmxbuilder.modules.modifications.patches import (
+    _TEMPLATE_PATCH_SUPPORT,
+    ALL_PATCHES,
+)
 from gmxbuilder.modules.modifications.processor import StructureProcessor
+from tests.prerequisites import requires_forcefield
 from tests.test_gromacs_smoke import _three_residue_modification_system
-
 
 _TYR_HEAVY_COORDINATES = {
     "N": [1.1047, 1.0181, -1.3842],
@@ -34,7 +34,11 @@ _TYR_HEAVY_COORDINATES = {
 
 
 _SUPPORTED_NATIVE_CASES = [
-    (force_field, patch_id)
+    pytest.param(
+        force_field,
+        patch_id,
+        marks=requires_forcefield(force_field),
+    )
     for patch_id, force_fields in _TEMPLATE_PATCH_SUPPORT.items()
     for force_field in sorted(force_fields)
 ]
@@ -52,6 +56,7 @@ def _build_ptr(coordinates):
     )
 
 
+@requires_forcefield("charmm36m")
 def test_ptr_uses_force_field_tetrahedral_geometry():
     coordinates, quality = _build_ptr(_TYR_HEAVY_COORDINATES)
 
@@ -73,6 +78,7 @@ def test_ptr_uses_force_field_tetrahedral_geometry():
     assert max(phosphate_angles) < 125.0
 
 
+@requires_forcefield("charmm36m")
 def test_modified_geometry_is_rotation_and_translation_covariant():
     original, original_quality = _build_ptr(_TYR_HEAVY_COORDINATES)
     angle = np.deg2rad(63.0)
@@ -104,6 +110,7 @@ def test_modified_geometry_is_rotation_and_translation_covariant():
     )
 
 
+@requires_forcefield("charmm36m")
 def test_modified_geometry_rejects_an_unavoidable_external_overlap():
     count = 300
     indices = np.arange(count, dtype=float)
@@ -185,6 +192,7 @@ def test_every_enabled_native_template_passes_geometry_validation(force_field, p
         assert constraint.expected_sign * signed_volume > 2.0e-4
 
 
+@requires_forcefield("charmm36m")
 def test_multiple_native_modifications_across_chains_are_independent():
     tyrosine = _three_residue_modification_system("charmm36m", "TYR")
     lysine = _three_residue_modification_system("charmm36m", "LYS")

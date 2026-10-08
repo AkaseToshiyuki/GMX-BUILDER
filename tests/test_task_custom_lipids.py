@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from gmxbuilder.modules.forcefield import gaff_backend
 from gmxbuilder.modules.membrane.lipids import LipidRegistry, parse_custom_lipid
@@ -16,7 +16,7 @@ from gmxbuilder.web.custom_lipids import (
 )
 from gmxbuilder.web.server import app
 from gmxbuilder.web.task_manager import TaskManager, task_manager
-
+from tests.prerequisites import requires_lfs_assets
 
 NEW_SMILES = "CCCCCCCCCCCCCCCCCC(=O)OCC(O)CO"
 
@@ -37,64 +37,85 @@ def _web_task() -> str:
     return task["task_id"]
 
 
-def test_submission_rejects_standard_library_identity(monkeypatch):
+def test_web_lipid_submission_is_retired_before_any_work(monkeypatch):
     task_id = _web_task()
-    monkeypatch.setattr(server, "_schedule_custom_lipid_build", lambda *_: True)
+    paths = {
+        "parse": "/api/custom-lipid",
+        "submit": f"/api/task/{task_id}/custom-lipids",
+        "retry": f"/api/task/{task_id}/custom-lipids/PVA/retry",
+        "build": "/api/build-lipid-library",
+    }
+    monkeypatch.setenv("GMXBUILDER_ADMIN_TOKEN", "test-administrator-token-only")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("A retired Web request must not parse, save or schedule a lipid")
+
+    monkeypatch.setattr("gmxbuilder.web.custom_lipids.run_custom_lipid_build", forbidden)
+    monkeypatch.setattr(CustomLipidStore, "save_submission", forbidden)
+    monkeypatch.setattr("gmxbuilder.modules.membrane.lipids.parse_custom_lipid", forbidden)
+    monkeypatch.setattr(
+        "gmxbuilder.modules.membrane.lipid_equilibration.LipidEquilibrationBuilder.build", forbidden
+    )
     try:
-        popc = LipidRegistry.get("POPC")
         with TestClient(app) as client:
-            response = client.post(
-                f"/api/task/{task_id}/custom-lipids",
-                json={
-                    "name": "DUPL",
-                    "smiles": popc.smiles,
-                    "force_field": "amber14sb",
-                    "lipid_ff": "gaff2",
-                },
-            )
-        assert response.status_code == 409
-        assert response.json()["existing_lipid"] == "POPC"
+            for route, path in paths.items():
+                for body in (b'{"name":"PVA","smiles":"CC","is_custom":true}', b"not-json"):
+                    response = client.post(
+                        path,
+                        content=body,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Admin-Token": "test-administrator-token-only",
+                        },
+                    )
+                    assert response.status_code == 403, route
+                    assert response.json()["code"] == "lipid_submission_offline_only", route
+                    assert "SMILES" in response.json()["error"], route
+                    assert response.json()["contact_url"] == "/", route
         assert not (task_manager.get_task_dir(task_id) / "custom_lipids").exists()
     finally:
         task_manager.delete_task(task_id)
 
 
-def test_task_submission_is_private_and_not_selectable_until_ready(monkeypatch):
+@pytest.mark.parametrize("legacy_state", ["queued", "running", "failed", "ready"])
+def test_legacy_lipids_are_readable_but_never_restarted(monkeypatch, legacy_state):
     task_a = _web_task()
     task_b = _web_task()
-    monkeypatch.setattr(server, "_schedule_custom_lipid_build", lambda *_: True)
+    store = CustomLipidStore(task_manager.get_task_dir(task_a))
+    store.save_submission(parse_custom_lipid(NEW_SMILES, "PVA"), "amber14sb")
+    store.update_status("PVA", state=legacy_state, phase=legacy_state, progress=0, message="legacy")
+    before = store.public_record("PVA")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Web startup must not recover an offline-only lipid calculation")
+
+    monkeypatch.setattr("gmxbuilder.web.custom_lipids.run_custom_lipid_build", forbidden)
+    monkeypatch.setattr(
+        "gmxbuilder.modules.membrane.lipid_equilibration.LipidEquilibrationBuilder.build", forbidden
+    )
+    monkeypatch.setattr("gmxbuilder.modules.forcefield.gaff_backend.prepare_gaff_lipid", forbidden)
     try:
         with TestClient(app) as client:
-            submitted = client.post(
-                f"/api/task/{task_a}/custom-lipids",
-                json={
-                    "name": "PVA",
-                    "smiles": NEW_SMILES,
-                    "force_field": "amber14sb",
-                    "lipid_ff": "gaff2",
-                },
-            )
             own = client.get(f"/api/task/{task_a}/custom-lipids").json()
             other = client.get(f"/api/task/{task_b}/custom-lipids").json()
-        assert submitted.status_code == 202
-        assert own["lipids"][0]["state"] == "queued"
+            detail = client.get(f"/api/task/{task_a}/custom-lipids/PVA").json()
+            retry = client.post(f"/api/task/{task_a}/custom-lipids/PVA/retry")
+        assert own["lipids"] == [before]
+        assert detail == before
         assert other["lipids"] == []
-        assert "PVA" not in LipidRegistry.list()
-        with pytest.raises(ValueError, match="must finish successfully"):
-            server._require_task_custom_lipids_ready(task_a)
-        with task_custom_lipid_scope(task_manager.get_task_dir(task_a)):
-            with pytest.raises(KeyError):
-                LipidRegistry.get("PVA")
-        with task_custom_lipid_scope(task_manager.get_task_dir(task_a), include_unready={"PVA"}):
-            assert LipidRegistry.get("PVA").smiles
-        with task_custom_lipid_scope(task_manager.get_task_dir(task_b)):
-            with pytest.raises(KeyError):
-                LipidRegistry.get("PVA")
+        assert retry.status_code == 403
+        assert store.public_record("PVA") == before
+        if legacy_state == "ready":
+            assert server._require_task_custom_lipids_ready(task_a) == [before]
+        else:
+            with pytest.raises(ValueError, match="Contact the administrator"):
+                server._require_task_custom_lipids_ready(task_a)
     finally:
         task_manager.delete_task(task_a)
         task_manager.delete_task(task_b)
 
 
+@requires_lfs_assets
 def test_ready_task_lipid_uses_task_cache_and_cleanup_removes_all(tmp_path):
     manager = TaskManager(tmp_path / "tasks")
     task = manager.create_task("private.pdb")
@@ -121,7 +142,7 @@ def test_ready_task_lipid_uses_task_cache_and_cleanup_removes_all(tmp_path):
     assert "PVB" not in LipidRegistry.list()
 
     state = manager.get_state(task["task_id"])
-    state["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    state["created_at"] = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
     manager._write_state(task_dir, state)
     assert manager.cleanup_expired() == [task["task_id"]]
     assert not task_dir.exists()
@@ -181,7 +202,7 @@ def test_cleanup_skips_active_task_then_deletes_it(tmp_path):
     task = manager.create_task("active.pdb")
     task_dir = manager.get_task_dir(task["task_id"])
     state = manager.get_state(task["task_id"])
-    state["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    state["created_at"] = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
     manager._write_state(task_dir, state)
 
     with manager.active_task(task["task_id"]):
@@ -204,27 +225,3 @@ def test_workflow_routes_hide_task_ids_and_legacy_links_return_home():
             assert client.get("/UnknownWorkflow/Step1").status_code == 404
     finally:
         task_manager.delete_task(task_id)
-
-
-def test_custom_lipid_gpu_allocator_limits_and_rotates_devices(monkeypatch):
-    monkeypatch.setattr(server, "_CUSTOM_GPU_IDS", (0, 1, 2))
-    monkeypatch.setattr(server, "_CUSTOM_GPU_CONCURRENCY", 2)
-    with server._custom_gpu_condition:
-        server._custom_gpu_in_use.clear()
-        server._custom_gpu_cursor = 0
-    first = server._acquire_custom_gpu()
-    second = server._acquire_custom_gpu()
-    try:
-        assert first == 0
-        assert second == 1
-        server._release_custom_gpu(first)
-        first = None
-        third = server._acquire_custom_gpu()
-        try:
-            assert third == 2
-            assert len(server._custom_gpu_in_use) == 2
-        finally:
-            server._release_custom_gpu(third)
-    finally:
-        server._release_custom_gpu(first)
-        server._release_custom_gpu(second)

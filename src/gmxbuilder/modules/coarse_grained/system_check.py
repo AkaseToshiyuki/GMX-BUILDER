@@ -8,18 +8,19 @@ import numpy as np
 
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.modules.coarse_grained.backend import build_with_coby, normalize_solvation
 from gmxbuilder.modules.coarse_grained.assets import load_manifest
+from gmxbuilder.modules.coarse_grained.backend import build_with_coby, normalize_solvation
 from gmxbuilder.modules.coarse_grained.common import (
     molecule_type_charges,
     molecules_table,
     strict_bool,
     system_from_gro,
 )
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGSystemCheckModule(BaseModule):
+class CGSystemCheckModule(CGWorkflowAdmission, BaseModule):
     name = "cg_system"
     description = "Build and validate the exact Martini 3 system to export"
 
@@ -35,6 +36,7 @@ class CGSystemCheckModule(BaseModule):
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         output = system.copy()
         previous = dict(output.metadata.get("cg_solvation_config") or {})
         normalized = normalize_solvation(
@@ -54,6 +56,10 @@ class CGSystemCheckModule(BaseModule):
         else:
             built = output
             topology_text = str(built.metadata.get("cg_master_topology", ""))
+
+        from gmxbuilder.modules.solvation.membrane_exclusion import assert_membrane_water_free
+
+        assert_membrane_water_free(built)
 
         if built.num_atoms == 0 or not np.isfinite(built.structure.coordinates).all():
             raise ModuleConfigError("Final CG system is empty or contains non-finite coordinates")
@@ -175,7 +181,9 @@ class CGSystemCheckModule(BaseModule):
         molecules: list[list[int]] = []
         current: list[int] = []
         previous = None
-        for index, (name, resid) in enumerate(zip(structure.resnames, structure.resids)):
+        for index, (name, resid) in enumerate(
+            zip(structure.resnames, structure.resids, strict=True)
+        ):
             key = (str(name).upper(), int(resid))
             if key[0] not in lipids:
                 if current:
@@ -230,7 +238,8 @@ class CGSystemCheckModule(BaseModule):
         separation = float(np.mean(upper_heads) - np.mean(lower_heads))
         if fraction < 0.98:
             raise ModuleConfigError(
-                f"Bilayer orientation failed: only {fraction:.1%} of lipids have heads facing solvent"
+                f"Bilayer orientation failed: only {fraction:.1%} of lipids have heads facing "
+                f"solvent"
             )
         if not 2.5 <= separation <= 6.0:
             raise ModuleConfigError(

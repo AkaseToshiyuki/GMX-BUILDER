@@ -3,25 +3,50 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GMXBUILDER — Build Membrane Simulation Systems</title>
-<link rel="icon" type="image/png" href="/static/assets/gmxbuilder-mark.png?v={{ version }}">
+<title>GMXBUILDER — Flexible, Powerful and Effective GROMACS Simulation System Generator</title>
+<link rel="icon" type="image/png" href="/static/assets/gmxbuilder-mark.webp?v={{ version }}">
 <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+<!-- The classic theme is preserved; the dark overlay changes presentation only. -->
+<link id="dark-appearance" rel="stylesheet" href="/static/style-dark.css?v={{ version }}" media="not all" data-default="dark">
+<script src="/static/appearance.js?v={{ version }}"></script>
 </head>
 <body>
 
 <!-- Header -->
 <header class="header">
   <div class="logo">
-    <img class="brand-logo" src="/static/assets/gmxbuilder-logo.png?v={{ version }}" alt="GMXBUILDER">
-    <span class="release-badge">Beta Test v{{ version }}</span>
+    <img class="brand-logo" src="/static/assets/gmxbuilder-logo.webp?v={{ version }}" alt="GMXBUILDER">
+    <span class="release-badge">v{{ version }}</span>
   </div>
   <span class="header-sub" id="header-task-title"></span>
     <span id="header-task-id" class="header-task-id hidden">
       Task: <b id="task-id-display"></b>
       <button type="button" id="copy-task-id" class="copy-task-id" aria-label="Copy Task ID" title="Copy Task ID">Copy</button>
+      <button type="button" id="exit-task" class="exit-task" title="Return home. Background work continues; resume with this Task ID before it expires.">Exit task</button>
       <span id="copy-task-id-status" class="copy-task-id-status" role="status" aria-live="polite"></span>
     </span>
 </header>
+
+<!-- Non-modal status for queued/running operations; existing step controls stay blocked. -->
+<section class="operation-notice hidden" id="compute-queue-status" aria-labelledby="compute-queue-title">
+  <div class="operation-heading">
+    <h3 id="compute-queue-title">Task processing</h3>
+    <span>Task ID: <code id="compute-queue-task-id"></code>
+      <button type="button" class="btn" id="compute-queue-copy">Copy</button>
+    </span>
+  </div>
+  <p id="compute-queue-message" aria-live="polite"></p>
+  <div class="operation-metrics">
+    <span>Queue: <b id="compute-queue-position">—</b></span>
+    <span id="compute-queue-total">—</span>
+    <span>Waited: <b id="compute-queue-waited">—</b></span>
+    <span>Estimated start: <b id="compute-queue-estimate">—</b></span>
+    <span>Expires: <b id="compute-queue-expires">—</b></span>
+  </div>
+  <p class="hint" id="compute-queue-resource"></p>
+  <p class="hint">Copy the Task ID to return through Resume on the homepage. Submitted operations continue if you leave this page.</p>
+</section>
+
 
 <!-- Main container -->
 <div class="container">
@@ -30,22 +55,28 @@
   <nav class="steps" id="step-nav" aria-label="Step navigation"></nav>
 
   <!-- Panels -->
-  <div class="panels">
+  <div class="panels" id="panels">
 
     <!-- ============================================================ -->
     <!-- Step 0: Task Type Selection                                  -->
     <!-- ============================================================ -->
     <section class="panel active" id="panel-task-type">
       <h2>Choose Task Type</h2>
-      <p class="section-desc">Select the type of system you want to build. <span class="hint">Grayed-out cards are planned for future releases.</span></p>
+      <p class="section-desc">Select an available workflow to start building. <span class="hint">Planned workflows are listed separately below.</span></p>
             <div style="margin-bottom:20px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
         <label style="font-size:13px;color:#475569;font-weight:600;">Resume existing task by ID</label>
         <div style="display:flex;gap:8px;margin-top:4px;">
           <input type="text" id="resume-task-id" placeholder="e.g. a1b2c3d4e5f6" style="flex:1;max-width:220px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-family:monospace;font-size:13px;" aria-label="Resume task ID">
           <button type="button" class="btn primary" id="resume-task-btn" aria-label="Resume existing task">Resume</button>
         </div>
-        <p class="hint" style="margin-top:4px;margin-bottom:0;">Tasks expire after 8 hours of inactivity.</p>
+        <p id="task-retention-notice" class="hint" style="margin-top:4px;margin-bottom:0;">Tasks expire 24 hours after creation. Viewing or downloading does not extend this time.</p>
       </div>
+      <!-- Optional homepage announcements. Filled by a deployment extension via
+           gmxbuilder.extensions; substituted with an empty string when none is
+           installed, which is every public build. The content is escaped
+           server-side, so an extension supplies text and never markup. -->
+      {{ announcements }}
+
       <div class="task-grid" id="task-grid">
         <!-- Populated by JS -->
       </div>
@@ -60,18 +91,18 @@
         <!-- Dynamically populated by JS -->
       </div>
       <div id="cg-simparams" class="hidden">
-        <div class="sim-stage-card" style="border-color:#f59e0b"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9673;</span><span class="sim-stage-title">Energy Minimization</span><span class="sim-stage-summary">Steepest descent; Martini 3 non-bonded protocol</span></div><div class="sim-stage-body open"><div class="param-row">
+        <div class="sim-stage-card" style="border-color:#f59e0b"><div class="sim-stage-header open"><button type="button" class="sim-stage-toggle" aria-expanded="true" aria-controls="cg-stage-minimization-body"><span class="sim-stage-icon">&#9673;</span><span class="sim-stage-title">Energy Minimization</span><span class="sim-stage-summary">Steepest descent; Martini 3 non-bonded protocol</span></button></div><div class="sim-stage-body open" id="cg-stage-minimization-body"><div class="param-row">
           <span class="param-item"><label for="cg-mini-steps">Maximum steps</label><input id="cg-mini-steps" type="number" value="20000" min="100" max="1000000" step="1000"></span>
           <span class="param-item"><label for="cg-mini-tolerance">Force tolerance</label><input id="cg-mini-tolerance" type="number" value="200" min="1" max="10000" step="10"></span>
           <span class="param-item"><label for="cg-mini-step">Step size (nm)</label><input id="cg-mini-step" type="number" value="0.005" min="0.0001" max="0.1" step="0.001"></span>
         </div><p class="hint">Reaction-field electrostatics and Martini 3 cutoffs are fixed to prevent incompatible parameter combinations.</p></div></div>
-        <div class="sim-stage-card"><div class="sim-stage-header" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9678;</span><span class="sim-stage-title">NVT Pre-equilibration</span><span class="sim-stage-summary">Optional, conservative 10 fs timestep</span><label class="stage-enabled"><input id="cg-eq1" type="checkbox" checked> Run</label></div><div class="sim-stage-body"><div class="param-row">
+        <div class="sim-stage-card"><div class="sim-stage-header"><button type="button" class="sim-stage-toggle" aria-expanded="false" aria-controls="cg-stage-equilibration-1-body"><span class="sim-stage-icon">&#9678;</span><span class="sim-stage-title">NVT Pre-equilibration</span><span class="sim-stage-summary">Optional, conservative 10 fs timestep</span></button><label class="stage-enabled" for="cg-eq1"><input id="cg-eq1" type="checkbox" checked> Run</label></div><div class="sim-stage-body" id="cg-stage-equilibration-1-body"><div class="param-row">
           <span class="param-item"><label for="cg-eq1-duration">Duration (ns)</label><input id="cg-eq1-duration" type="number" value="1" min="0.001" max="1000" step="0.1"></span>
           <span class="param-item"><label for="cg-eq1-dt">Timestep (fs)</label><input id="cg-eq1-dt" type="number" value="10" min="1" max="20" step="1"></span>
           <span class="param-item"><label for="cg-eq1-temperature">Temperature (K)</label><input id="cg-eq1-temperature" type="number" value="310" min="250" max="370" step="1"></span>
           <span class="param-item"><label for="cg-eq1-tau-t">Thermostat tau (ps)</label><input id="cg-eq1-tau-t" type="number" value="1" min="0.1" max="20" step="0.1"></span>
         </div><p class="hint">V-rescale thermostat; velocities are generated only for the first enabled dynamics stage.</p></div></div>
-        <div class="sim-stage-card"><div class="sim-stage-header" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9674;</span><span class="sim-stage-title">NPT Equilibration</span><span class="sim-stage-summary">Optional, C-rescale pressure coupling</span><label class="stage-enabled"><input id="cg-eq2" type="checkbox" checked> Run</label></div><div class="sim-stage-body"><div class="param-row">
+        <div class="sim-stage-card"><div class="sim-stage-header"><button type="button" class="sim-stage-toggle" aria-expanded="false" aria-controls="cg-stage-equilibration-2-body"><span class="sim-stage-icon">&#9674;</span><span class="sim-stage-title">NPT Equilibration</span><span class="sim-stage-summary">Optional, C-rescale pressure coupling</span></button><label class="stage-enabled" for="cg-eq2"><input id="cg-eq2" type="checkbox" checked> Run</label></div><div class="sim-stage-body" id="cg-stage-equilibration-2-body"><div class="param-row">
           <span class="param-item"><label for="cg-eq2-duration">Duration (ns)</label><input id="cg-eq2-duration" type="number" value="10" min="0.001" max="10000" step="1"></span>
           <span class="param-item"><label for="cg-eq2-dt">Timestep (fs)</label><input id="cg-eq2-dt" type="number" value="20" min="1" max="20" step="1"></span>
           <span class="param-item"><label for="cg-eq2-temperature">Temperature (K)</label><input id="cg-eq2-temperature" type="number" value="310" min="250" max="370" step="1"></span>
@@ -79,7 +110,7 @@
           <span class="param-item"><label for="cg-eq2-pressure">Pressure (bar)</label><input id="cg-eq2-pressure" type="number" value="1" min="0.1" max="100" step="0.1"></span>
           <span class="param-item"><label for="cg-eq2-tau-p">Barostat tau (ps)</label><input id="cg-eq2-tau-p" type="number" value="5" min="0.1" max="50" step="0.1"></span>
         </div><p class="hint">Pressure geometry is automatically semi-isotropic for bilayers and isotropic for solution systems.</p></div></div>
-        <div class="sim-stage-card" style="border-color:#6366f1"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9679;</span><span class="sim-stage-title">Production</span><span class="sim-stage-summary">Required; starts after the last enabled equilibration stage</span></div><div class="sim-stage-body open"><div class="param-row">
+        <div class="sim-stage-card" style="border-color:#6366f1"><div class="sim-stage-header open"><button type="button" class="sim-stage-toggle" aria-expanded="true" aria-controls="cg-stage-production-body"><span class="sim-stage-icon">&#9679;</span><span class="sim-stage-title">Production</span><span class="sim-stage-summary">Required; starts after the last enabled equilibration stage</span></button></div><div class="sim-stage-body open" id="cg-stage-production-body"><div class="param-row">
           <span class="param-item"><label for="cg-production-ns">Duration (ns)</label><input id="cg-production-ns" type="number" value="1000" min="1" max="100000" step="100"></span>
           <span class="param-item"><label for="cg-production-dt">Timestep (fs)</label><input id="cg-production-dt" type="number" value="20" min="1" max="20" step="1"></span>
           <span class="param-item"><label for="cg-production-temperature">Temperature (K)</label><input id="cg-production-temperature" type="number" value="310" min="250" max="370" step="1"></span>
@@ -93,7 +124,7 @@
           <span class="param-item"><label for="cg-comm-mode">COM removal</label><select id="cg-comm-mode"><option value="Linear">Linear translation</option><option value="None">Disabled</option></select></span>
           <span class="param-item"><label for="cg-comm-interval">COM interval (steps)</label><input id="cg-comm-interval" type="number" value="100" min="1" step="1"></span>
         </div></div></div>
-        <div class="sim-stage-card" style="border-color:#2563eb"><div class="sim-stage-header open" onclick="toggleStageCard(this)"><span class="sim-stage-icon">&#9889;</span><span class="sim-stage-title">Execution Hardware</span><span class="sim-stage-summary">Written to run_md.sh; does not change MDP physics</span></div><div class="sim-stage-body open"><div class="param-row">
+        <div class="sim-stage-card" style="border-color:#2563eb"><div class="sim-stage-header open"><button type="button" class="sim-stage-toggle" aria-expanded="true" aria-controls="cg-stage-hardware-body"><span class="sim-stage-icon">&#9889;</span><span class="sim-stage-title">Execution Hardware</span><span class="sim-stage-summary">Written to run_md.sh; does not change MDP physics</span></button></div><div class="sim-stage-body open" id="cg-stage-hardware-body"><div class="param-row">
           <span class="param-item"><label>GPU execution</label><label class="hint"><input id="cg-use-gpu" type="checkbox" checked> Enable</label></span>
           <span class="param-item"><label for="cg-gpu-ids">Logical GPU IDs</label><input id="cg-gpu-ids" value="0" pattern="[0-9]+(,[0-9]+)*"></span>
           <span class="param-item"><label for="cg-threads">Total CPU threads</label><input id="cg-threads" type="number" value="8" min="1" step="1"></span>
@@ -108,16 +139,18 @@
 
       <!-- Progress -->
       <div class="progress-section hidden" id="progress-section">
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-        <p class="progress-text" id="progress-text">Building...</p>
+        <!-- The shared progress widget is inserted above the retained log. -->
+        <details id="build-log-panel" class="hidden">
+        <summary>Build log</summary>
         <div class="build-log" id="build-log" style="margin-top:8px;max-height:400px;overflow-y:auto;background:#1e293b;color:#e2e8f0;font-family:monospace;font-size:12px;padding:8px;border-radius:6px;display:none;">
           <div id="build-log-content"></div>
         </div>
+        </details>
       </div>
 
       <!-- Result -->
       <div class="result-section hidden" id="result-section">
-        <h3>&#10003; Build Complete</h3>
+        <h3 id="result-heading">&#10003; Build Complete</h3>
         <div id="result-details"></div>
         <a class="btn primary" id="download-link" href="#">Download ZIP</a>
       </div>
@@ -156,17 +189,41 @@
         </table>
 
         <h3 class="info-section-title">Chains &amp; Molecules
-          <span class="hint">— select which to include, double-click name to rename</span>
+          <span class="hint" id="input-details-hint">— select which to include, double-click name to rename</span>
         </h3>
+        <button type="button" class="btn hidden" id="edit-input-selection">Reset fragment edits and edit source chains</button>
+        <div id="checked-input-details" class="hidden">
+          <div id="checked-chain-sequences"></div>
+          <h3 class="info-section-title" id="checked-smallmol-header">Small Molecules</h3>
+          <div id="checked-small-molecules"></div>
+        </div>
+        <div id="input-selection-details">
         <div id="chain-sequences"></div>
 
         <h3 class="info-section-title" id="smallmol-header" style="display:none;">Small Molecules</h3>
         <div id="small-molecules"></div>
+        </div>
 
         <h3 class="info-section-title">3D Structure Viewer <span class="hint">— drag to rotate, scroll to zoom</span></h3>
         <div id="pdb-viewer" class="mol-viewer"></div>
       </div>
       <div style="margin-top:12px;">
+        <div id="input-readiness-report" class="input-check-report hidden" aria-live="polite"></div>
+        <fieldset id="input-reconstruction-options">
+          <legend>Protein fragments and residue numbering</legend>
+          <label><input type="checkbox" id="input-allow-incomplete">
+            Accept an approximate model of the observed protein fragments</label>
+          <p class="hint">Accept missing sequence and split geometric breaks into separate chains.
+            No loop is rebuilt and no bond is made across a gap. Each fragment has independent
+            N/C termini; review their chemistry in Structure Processing (or Martini mapping).
+            A coordinate gap does not establish that the source protein was cleaved.
+            For a continuous protein model, rebuild and validate the missing region before upload.
+            Neither charged ends nor caps replace the missing region.</p>
+          <label><input type="checkbox" id="input-renumber-residues">
+            Renumber residues from 1 within each resulting chain</label>
+          <p class="hint">Original identifiers remain in the saved structure mapping.
+            Renumbering alone does not repair a structural break.</p>
+        </fieldset>
         <button type="button" class="btn primary" id="input-check-btn">&#10003; Check Upload</button>
         <span id="input-check-status" style="margin-left:8px;font-size:13px;"></span>
       </div>
@@ -198,7 +255,7 @@
         <div class="field"><label for="cg-elastic-upper">Upper cutoff (nm)</label><input id="cg-elastic-upper" type="number" value="0.9" min="0" max="1.2" step="0.1"></div>
       </div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-mapping-check">&#10003; Map Protein</button><span class="hint" id="cg-mapping-status"></span></div>
-      <div class="viewer-box" id="cg-mapping-viewer" style="height:320px"></div>
+      <div class="viewer-box" id="cg-mapping-viewer"></div>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
@@ -257,7 +314,7 @@
         </div>
 
         <h3 class="info-section-title" style="margin-top:16px;">Membrane Position Preview <span class="hint">— grey planes show membrane</span></h3>
-        <div class="viewer-box" id="cg-orientation-viewer" style="height:380px"></div>
+        <div class="viewer-box" id="cg-orientation-viewer"></div>
         <p id="cg-orient-preview-status" class="hint" aria-live="polite"></p>
         <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-orientation-check">&#10003; Check Orientation</button><span class="hint" id="cg-orientation-status"></span></div>
       </div>
@@ -292,7 +349,7 @@
         </div>
       </div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-environment-check">&#10003; Build Environment</button><span class="hint" id="cg-environment-status"></span></div>
-      <div class="viewer-box" id="cg-environment-viewer" style="height:360px"></div>
+      <div class="viewer-box" id="cg-environment-viewer"></div>
       <p class="hint cg-construction-state-note">This viewer shows the dry COBY construction geometry with topology-defined Martini bead connections. It is not an energy-minimized or equilibrated membrane. Use the exported minimization, NVT, and semi-isotropic NPT stages before interpreting bilayer structure or properties.</p>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
@@ -302,7 +359,7 @@
       <p class="section-desc">Set the solvent padding and add regular Martini water. Target bulk salt is added in the next Ions step.</p>
       <div class="form-grid"><div class="field checkbox-field"><label><input id="cg-include-solvent" type="checkbox" checked> Include Martini water</label></div><div class="field"><label for="cg-padding" id="cg-padding-label">Z padding above and below the bilayer (nm)</label><input id="cg-padding" type="number" value="2.0" min="1.0" max="8" step="0.1"><span class="hint" id="cg-padding-hint">The membrane X/Y area remains fixed by the bilayer composition.</span></div></div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-solvation-check">&#10003; Solvate</button><span class="hint" id="cg-solvation-status"></span></div>
-      <div class="viewer-box" id="cg-solvation-viewer" style="height:360px"></div>
+      <div class="viewer-box" id="cg-solvation-viewer"></div>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
@@ -311,8 +368,8 @@
       <p class="section-desc">Add neutralizing ions and target bulk salt, then enforce charge, box, solvent, and membrane-quality checks on the exact export coordinates.</p>
       <div class="form-grid"><div class="field"><label for="cg-salt">Target NaCl concentration (M)</label><input id="cg-salt" type="number" value="0.15" min="0" max="1" step="0.01"></div></div>
       <div class="cg-check-row"><button type="button" class="btn primary cg-check-button" id="cg-system-check">&#10003; Build &amp; Check Final System</button><span class="hint" id="cg-system-status"></span></div>
-      <div class="viewer-box" id="cg-system-viewer" style="height:420px"></div>
-      <div class="field checkbox-field"><label><input id="cg-confirm-system" type="checkbox"> I inspected and confirm this final coarse-grained system</label></div>
+      <div class="viewer-box" id="cg-system-viewer"></div>
+      <p class="hint">After this Check, continue to Final Structure Review to inspect and confirm the saved system.</p>
       <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
     </section>
 
@@ -325,13 +382,12 @@
       <div class="form-grid">
         <div class="field" id="ff-primary-field">
           <label for="ff-protein" id="ff-primary-label">Protein Force Field</label>
+          <!-- Replaced from /api/options as soon as it answers. The list is
+               here so the control is never empty, and so the default is
+               selected before the first paint; the served list is what
+               decides which entries are greyed out as Coming Soon. -->
           <select id="ff-protein">
             <option value="amber14sb">AMBER ff14SB (GROMACS 2026.3) — project default</option>
-            <option value="charmm36m">CHARMM36m (Jul2022 / CGenFF 4.6)</option>
-            <option value="charmm36">CHARMM36 (Mar2019)</option>
-            <option value="amber99sb-ildn">AMBER ff99SB-ILDN (legacy)</option>
-            <option value="amber99sb">AMBER ff99SB (legacy)</option>
-            <option value="oplsaa">OPLS-AA/L (2001, legacy)</option>
           </select>
           <span class="hint">Amber14SB + GAFF2 is the project default for proteins with organic small molecules. The new native GROMACS Amber14SB port is still validation-pending; production systems require topology and energy QA.</span>
         </div>
@@ -343,8 +399,9 @@
         <div class="field" id="ff-ligand-field">
           <label for="ff-ligand">Ligand / Small Molecule Force Field</label>
           <select id="ff-ligand"></select>
-          <span class="hint">For GAFF2, explicitly enter each molecule's integer net charge. For CHARMM, submit each retained organic molecule to CGenFF/ParamChem, then upload (1) the exact MOL2 submitted to ParamChem and (2) the STR parameter stream returned by ParamChem.</span>
+          <span class="hint">For GAFF2, set the solution pH and review each molecule's suggested integer net charge. For CHARMM, use the local builder with an explicit molecular state, or upload the matched MOL2 and STR from CGenFF/ParamChem.</span>
           <div id="ff-ligand-charges"></div>
+          <p id="ff-ligand-prep" class="ligand-prep hidden" aria-live="polite"></p>
         </div>
         <div class="field">
           <label for="ff-water-model">Water Model</label>
@@ -352,7 +409,7 @@
           <span class="hint">Only models bundled with the selected effective force field are available. This choice is locked for Step 6 and final topology export.</span>
         </div>
       </div>
-      <div id="ff-compatibility-status" class="validation-warnings" style="margin-top:12px;"></div>
+      <div id="ff-compatibility-status" class="validation-warnings" style="margin-top:12px;" role="status" aria-live="polite"></div>
       <div class="form-grid" style="margin-top:12px;">
         <div class="field">
           <label for="system-name">System Name</label>
@@ -406,6 +463,7 @@
           </label>
         </div>
         <div id="proc-chain-tables"><p class="hint" style="margin-top:12px;">Upload a PDB to begin.</p></div>
+        <p class="hint">Side-chain pKa estimation supports pH 1.0–13.0. Free termini are built as the canonical NH₃⁺/COO⁻ templates, whose bounds follow the model pKa values: both states are dominant between pH 4.45 and 7.05, remain the majority species out to pH 3.50–8.00 where the build continues with a warning stating the actual population, and beyond that the build stops because a cap is then the better model. Cap a chain with ACE/FOR and NME in the Termini tab when it is a truncated construct; a full-length protein normally keeps its free charged termini.</p>
         <p class="hint hidden" id="proc-propka-status" style="margin-top:4px;"></p>
       </div>
 
@@ -531,7 +589,7 @@
 
         <!-- Shared 3D viewer — always visible, both Auto and Manual use it -->
         <h3 class="info-section-title" style="margin-top:16px;">Membrane Position Preview <span class="hint">— grey planes show membrane</span></h3>
-        <div id="orient-viewer" class="mol-viewer" style="height:380px;"></div>
+        <div id="orient-viewer" class="mol-viewer"></div>
         <p id="orient-preview-status" class="hint" aria-live="polite"></p>
         <div id="orient-quality-report" class="hidden" aria-live="polite"></div>
 
@@ -550,9 +608,9 @@
       <div class="form-grid">
 
         <div class="field">
-          <label for="n-lipids-per-leaflet">Lipids per leaflet</label>
-          <input type="number" id="n-lipids-per-leaflet" value="150" step="10" min="64">
-          <span class="hint">Minimum supported construction size: 64 per leaflet. Larger systems reduce finite-size effects, but stability must be assessed by equilibration.</span>
+          <label for="n-lipids-per-leaflet">Starting lipids per leaflet</label>
+          <input type="number" id="n-lipids-per-leaflet" value="150" step="10" min="64" max="5000">
+          <span class="hint">Minimum supported construction size: 64 per leaflet. Maximum: 5000. Check automatically adjusts each leaflet to fill the box around the protein and match its composition. Actual upper and lower counts are shown after construction; stability must be assessed by equilibration.</span>
         </div>
         <!-- Asymmetry toggle -->
         <div class="field checkbox-field">
@@ -565,14 +623,15 @@
             <h4 id="leaflet-upper-label">Bilayer <span class="hint">(same composition both leaflets)</span></h4>
             <div class="lipid-mix-list" id="upper-lipid-list"></div>
             <button type="button" class="btn add-lipid-btn" data-leaflet="upper">+ Add Lipid</button>
-            <div class="lipid-count-table hidden" id="upper-lipid-counts"></div>
           </div>
           <div class="leaflet-section hidden" id="lower-leaflet-section">
             <h4>Lower Leaflet <span class="hint">(cytoplasmic / inner)</span></h4>
             <div class="lipid-mix-list" id="lower-lipid-list"></div>
             <button type="button" class="btn add-lipid-btn" data-leaflet="lower">+ Add Lipid</button>
-            <div class="lipid-count-table hidden" id="lower-lipid-counts"></div>
           </div>
+          <div class="leaflet-section lipid-count-table hidden" id="upper-lipid-counts"></div>
+          <div class="leaflet-section lipid-count-table hidden" id="lower-lipid-counts"></div>
+          <p class="hint hidden" id="bilayer-count-total"></p>
         </div>
 
         <!-- Shared card picker dropdown (positioned near clicked row trigger) -->
@@ -585,11 +644,16 @@
       </div>
 
       <!-- 3D viewer: protein + scalable membrane plane -->
-      <div class="viewer-box" id="membrane-3d-viewer" style="width:100%; height:320px; margin-top:12px; border:1px solid var(--border); border-radius:6px; position:relative;"></div>
+      <div class="membrane-preview">
+      <p id="membrane-viewer-status" class="viewer-status" role="status">Select a composition and build the membrane to inspect its coordinates. The initial view is a geometric preview.</p>
+      <div class="viewer-box" id="membrane-3d-viewer" style="width:100%; margin-top:12px; border:1px solid var(--border); border-radius:6px; position:relative;"></div>
       <span class="hint" style="text-align:center;display:block;margin-top:4px;" id="membrane-viewer-label">Membrane plane (grey) shows the bilayer extent.  Adjust Padding to resize.</span>
-      <div style="margin-top:12px;">
+      </div>
+      <p id="membrane-actual-counts" class="hint" role="status"></p>
+      <div class="step-action membrane-action" style="margin-top:12px;">
         <button type="button" class="btn primary" id="check-composition-btn">&#10003; Check &amp; Refresh Composition</button>
         <span id="composition-status" style="margin-left:8px;font-size:13px;"></span>
+        <p id="membrane-count-warning" class="validation-warnings hidden" role="status"></p>
       </div>
       <div class="panel-actions">
         <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
@@ -604,11 +668,11 @@
         <div class="field checkbox-field hidden" id="pure-membrane-solvation-option">
           <label><input type="checkbox" id="pure-membrane-include-solvent" checked>
             Include water and ions
-            <span class="hint">— clear this to export the relaxed dry bilayer without solvent or ions</span>
+            <span class="hint">— clear this to export the assembled dry bilayer without solvent or ions</span>
           </label>
         </div>
         <div id="pure-membrane-dry-notice" class="validation-warnings hidden">
-          Dry bilayer export selected. Solvation and ion placement will be omitted; the package will contain the relaxed bilayer coordinates and topology.
+          Dry bilayer export selected. Solvation and ion placement will be omitted; the package will contain the assembled bilayer coordinates and topology. Equilibration of the complete system is still required.
         </div>
         <div id="solvation-controls">
         <div class="field">
@@ -642,7 +706,7 @@
         </div>
 
         <!-- 3D viewer: solvation box -->
-        <div class="viewer-box" id="solvation-3d-viewer" style="width:100%; height:300px; margin-top:12px; border:1px solid var(--border); border-radius:6px; position:relative;"></div>
+        <div class="viewer-box" id="solvation-3d-viewer" style="width:100%; margin-top:12px; border:1px solid var(--border); border-radius:6px; position:relative;"></div>
         <span class="hint" style="text-align:center;display:block;margin-top:4px;" id="solvation-viewer-label">Solvation box — XY from membrane, Z from padding</span>
         </div>
       </div>
@@ -732,15 +796,7 @@
           </table>
           <div class="ion-summary-footer" id="ion-summary-footer"></div>
         </div>
-        <h3 class="info-section-title" style="margin-top:16px;">Complete Simulation System
-          <span class="hint">— exact coordinates saved by Ion Check</span>
-        </h3>
-        <div id="ion-viewer" class="viewer-container" style="position:relative;width:100%;height:520px;overflow:hidden;border:1px solid var(--border);border-radius:6px;"></div>
-        <span class="hint" id="ion-viewer-label" style="display:block;text-align:center;margin-top:6px;">Waters are shown in blue; ions are shown as large spheres.</span>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
-          <button type="button" class="btn primary" id="ion-confirm-system-btn" disabled style="flex:1;">&#10003; Confirm Simulation System</button>
-          <span class="hint" id="ion-confirm-system-status">Run Check Ion Counts to generate the final system preview.</span>
-        </div>
+
       </div>
       <div class="panel-actions">
         <button type="button" class="btn back-btn" aria-label="Go to previous step">&larr; Back</button>
@@ -748,97 +804,65 @@
       </div>
     </section>
 
+    <section class="panel" id="panel-final_review">
+      <h2>Final Structure Review</h2>
+      <p class="section-desc">Inspect the exact checked system and its components before choosing simulation parameters.</p>
+      <div id="final-component-summary" aria-live="polite"></div>
+      <div id="ion-viewer" class="viewer-container" style="position:relative;width:100%;overflow:hidden;border:1px solid var(--border);"></div>
+      <p class="hint" id="ion-viewer-label">The complete checked structure will appear here.</p>
+      <button type="button" class="btn" id="final-viewer-retry">Retry viewer</button>
+      <div class="step-action">
+        <button type="button" class="btn primary" id="ion-confirm-system-btn" disabled>&#10003; Confirm Simulation System</button>
+        <p class="hint" id="ion-confirm-system-status">Wait for the complete structure to render before confirming.</p>
+      </div>
+      <div class="panel-actions"><button type="button" class="btn back-btn">&larr; Back</button><button type="button" class="btn primary next-btn">Next &rarr;</button></div>
+    </section>
+
   </div>
 </div>
 
-<script src="/static/vendor/3dmol-2.5.5/3Dmol-min.js"></script>
-<script src="/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js"></script>
-<script src="/static/constants.js?v={{ version }}"></script>
-<script src="/static/ions.js?v={{ version }}"></script>
-<script src="/static/app.js?v={{ version }}"></script>
+<script defer src="/static/assets.js?v={{ version }}"></script>
+<script defer src="/static/constants.js?v={{ version }}"></script>
+<script defer src="/static/http.js?v={{ version }}"></script>
+<script defer src="/static/viewer_style.js?v={{ version }}"></script>
+<script defer src="/static/checkpoint_viewer.js?v={{ version }}"></script>
+<script defer src="/static/final_review.js?v={{ version }}"></script>
+<script defer src="/static/ions.js?v={{ version }}"></script>
+<!-- Keep the classic application scripts in source order; they share globals. -->
+<script defer src="/static/resource_queue.js?v={{ version }}"></script>
+<script defer src="/static/app.js?v={{ version }}"></script>
+<script defer src="/static/app_parts/custom_lipids.js?v={{ version }}"></script>
+<script defer src="/static/app_parts/structure_processing.js?v={{ version }}"></script>
+<script defer src="/static/app_parts/simulation.js?v={{ version }}"></script>
+<script defer src="/static/app_parts/system_verification.js?v={{ version }}"></script>
 
-<!-- Custom Lipid Modal -->
-<div class="modal-overlay hidden" id="custom-lipid-modal">
-  <div class="modal-panel">
-    <h3>&#9678; Add Custom Lipid from SMILES</h3>
-    <div class="form-grid">
-      <div class="field">
-        <label for="custom-lipid-name">Residue ID (1–5 characters)</label>
-        <input type="text" id="custom-lipid-name" placeholder="e.g. MYLIP" maxlength="5"
-               pattern="[A-Za-z][A-Za-z0-9_]{0,4}">
-        <p class="hint">GROMACS residue identifier: starts with a letter; letters, digits and underscore only.</p>
-      </div>
-      <div class="field">
-        <label for="custom-lipid-smiles">SMILES String</label>
-        <input type="text" id="custom-lipid-smiles" placeholder="e.g. CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC=CCCCCCCCC">
-      </div>
-      <button type="button" class="btn primary" id="custom-lipid-parse-btn">&#9654; Parse &amp; Preview</button>
-    </div>
-
-    <!-- Results (hidden until parsed) -->
-    <div class="custom-lipid-result hidden" id="custom-lipid-result">
-      <div class="custom-lipid-preview">
-        <div class="custom-lipid-structure" id="custom-lipid-structure">
-          <canvas id="smiles-canvas" width="360" height="200"></canvas>
-        </div>
-        <table class="custom-lipid-props">
-          <tr><td>Formula</td><td id="cl-formula">—</td></tr>
-          <tr><td>Mass</td><td id="cl-mass">—</td></tr>
-          <tr><td>Category</td><td id="cl-category">—</td></tr>
-          <tr><td>Charge</td><td id="cl-charge">—</td></tr>
-          <tr><td>APL (estimated)</td><td id="cl-apl">—</td></tr>
-          <tr><td>Thickness (DHH)</td><td id="cl-dh">—</td></tr>
-          <tr><td>Tail composition</td><td id="cl-tails">—</td></tr>
-        </table>
-      </div>
-    </div>
-    <div class="custom-lipid-build-status hidden" id="custom-lipid-build-status" role="status" aria-live="polite">
-      <div class="progress-bar"><div id="custom-lipid-build-progress"></div></div>
-      <strong id="custom-lipid-build-phase"></strong>
-      <span id="custom-lipid-build-message"></span>
-      <p class="hint">This molecule and all generated parameters remain private to the current task. This dialog stays locked until validation succeeds.</p>
-    </div>
-
-    <div class="modal-actions">
-      <button type="button" class="btn" id="custom-lipid-cancel-btn">Cancel</button>
-      <button type="button" class="btn primary hidden" id="custom-lipid-confirm-btn">&#10003; Add to Lipid Library</button>
-    </div>
-  </div>
-</div>
-
-<!-- Compute Queue Modal -->
-<div class="modal-overlay hidden" id="compute-queue-modal" role="dialog"
-     aria-modal="true" aria-labelledby="compute-queue-title">
-  <div class="modal-panel queue-modal-panel">
-    <h3 id="compute-queue-title">&#9201; Task added to the compute queue</h3>
-    <p id="compute-queue-message">
-      The server is busy. Your checked workflow has been saved and will start
-      automatically.
+<!-- New lipid requests are reviewed offline by the administrator. -->
+<div class="modal-overlay hidden" id="custom-lipid-modal" role="dialog"
+     aria-modal="true" aria-labelledby="custom-lipid-title"
+     aria-describedby="custom-lipid-contact-description" aria-hidden="true">
+  <div class="modal-panel" tabindex="-1">
+    <h3 id="custom-lipid-title">Contact administrator</h3>
+    <p id="custom-lipid-contact-description">
+      To request a new lipid, email the administrator using the address on the
+      homepage or announcement board. New lipids cannot be submitted or
+      calculated through this website.
     </p>
-    <dl class="queue-details">
-      <dt>Task ID</dt>
-      <dd><code id="compute-queue-task-id"></code>
-        <button type="button" class="btn" id="compute-queue-copy">Copy</button>
-      </dd>
-      <dt>Queue position</dt>
-      <dd id="compute-queue-position">—</dd>
-      <dt>Estimated start</dt>
-      <dd id="compute-queue-estimate">—</dd>
-    </dl>
-    <p class="hint">
-      Keep the complete Task ID. Opening this task again restores the first
-      incomplete step and the current queue/build status.
-    </p>
-    <label class="queue-acknowledge">
-      <input type="checkbox" id="compute-queue-saved">
-      I have saved the Task ID
-    </label>
+    <p>Please include the following in your email:</p>
+    <ul>
+      <li>Lipid name</li>
+      <li>SMILES string, including stereochemistry and formal charges where applicable</li>
+      <li>Requested force field</li>
+    </ul>
+    <p class="hint">The administrator will review the molecule and arrange parameterization
+      and validation before making it available.</p>
+    <p class="hint hidden" id="custom-lipid-legacy-status" role="status" aria-live="polite"></p>
     <div class="modal-actions">
-      <button type="button" class="btn primary" id="compute-queue-close" disabled>
-        Continue in background
-      </button>
+      <button type="button" class="btn" id="custom-lipid-cancel-btn">Close</button>
+      <a class="btn primary" id="custom-lipid-contact-link" href="/" target="_blank"
+         rel="noopener noreferrer">View homepage / announcements</a>
     </div>
   </div>
 </div>
+
 </body>
 </html>

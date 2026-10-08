@@ -7,15 +7,14 @@ via the entry_points mechanism.
 from __future__ import annotations
 
 import importlib.metadata
-from typing import Type
 
 from gmxbuilder.pipeline.base import BaseModule
 
 # Global module registry: name -> Module class
-_registry: dict[str, Type[BaseModule]] = {}
+_registry: dict[str, type[BaseModule]] = {}
 
 
-def register_module(cls: Type[BaseModule]) -> Type[BaseModule]:
+def register_module(cls: type[BaseModule]) -> type[BaseModule]:
     """Register a module class in the global registry."""
     if not cls.name:
         raise ValueError(f"Module {cls} must define a non-empty 'name' class variable")
@@ -23,7 +22,7 @@ def register_module(cls: Type[BaseModule]) -> Type[BaseModule]:
     return cls
 
 
-def get_module(name: str) -> Type[BaseModule] | None:
+def get_module(name: str) -> type[BaseModule] | None:
     """Look up a registered module by name."""
     return _registry.get(name)
 
@@ -33,7 +32,7 @@ def list_modules() -> list[tuple[str, str]]:
     return [(cls.name, cls.description) for cls in _registry.values()]
 
 
-def discover_modules() -> dict[str, Type[BaseModule]]:
+def discover_modules() -> dict[str, type[BaseModule]]:
     """Discover and register all available modules.
 
     Checks:

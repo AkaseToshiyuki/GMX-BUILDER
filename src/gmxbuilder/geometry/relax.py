@@ -26,6 +26,8 @@ def relax_interleaflet_clashes_xy(
     displacement: float = 0.025,
     n_iterations: int = 120,
     box_xy: float | None = None,
+    workers: int = 1,
+    obstacles: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Relieve cross-leaflet tail clashes without changing membrane DHH.
 
@@ -35,6 +37,22 @@ def relax_interleaflet_clashes_xy(
     define a stable per-molecule descent direction. A bounded rigid offset
     preserves both leaflets' APL and lateral ordering while breaking exact
     upper/lower tail coincidences before energy minimization.
+
+    The shift search evaluates every candidate against every atom of a
+    leaflet: about 5 million nearest-neighbour lookups for 128 lipids.
+
+    *workers* is handed to SciPy, which parallelises the query inside its own
+    C extension, so there is no Python-level concurrency and the result does
+    not depend on it. Left at 1 so a caller outside a task budget behaves
+    exactly as before.
+
+    *obstacles* are atoms the sheet must not slide into -- an embedded protein,
+    a ligand, a nucleic acid. Without them this scores the shift against the
+    other leaflet alone and will happily translate a whole leaflet up to
+    0.2 nm through a protein it was just packed against, which is exactly what
+    it did: only the lower leaflet moves here, and only the lower leaflet lost
+    lipids to the clash filter that ran afterwards. The candidate set includes
+    a zero shift, so with no obstacles the result is unchanged.
     """
     if not len(upper) or not len(lower):
         return upper, lower
@@ -55,7 +73,19 @@ def relax_interleaflet_clashes_xy(
         )
     upper_search[:, 2] -= z_origin
     tree_options = {"boxsize": np.asarray([box_xy, box_xy, z_box])} if box_xy is not None else {}
-    tree = cKDTree(upper_search, **tree_options)
+    scored_against = upper_search
+    if obstacles is not None and len(obstacles):
+        obstacle_search = np.asarray(obstacles, dtype=float).copy()
+        if box_xy is not None:
+            obstacle_search[:, :2] = wrap_periodic_coordinates(obstacle_search[:, :2], box_xy)
+        obstacle_search[:, 2] -= z_origin
+        # A solute atom outside the leaflets' own Z span would fall outside the
+        # periodic box this tree declares, which SciPy rejects. Clamping keeps
+        # such an atom in the scoring set at the nearest plane it can occupy:
+        # it still blocks a shift, which is the point.
+        obstacle_search[:, 2] = np.clip(obstacle_search[:, 2], 0.0, z_box - 1e-9)
+        scored_against = np.vstack((upper_search, obstacle_search))
+    tree = cKDTree(scored_against, **tree_options)
 
     # The established arguments retain their meaning as search controls, so
     # this robustness fix does not introduce a new caller-facing parameter.
@@ -74,7 +104,7 @@ def relax_interleaflet_clashes_xy(
                     box_xy,
                 )
             candidate[:, 2] -= z_origin
-            nearest = tree.query(candidate, k=1)[0]
+            nearest = tree.query(candidate, k=1, workers=workers)[0]
             score = tuple(float(value) for value in np.percentile(nearest, [0.0, 0.1, 1.0]))
             if best_score is None or score > best_score:
                 best_score = score
@@ -324,18 +354,13 @@ def rotate_lipids_away_from_clashes(
             molecule = coords[start:end].copy()
             centre_xy = molecule[:, :2].mean(axis=0)
             local_xy = molecule[:, :2] - centre_xy
-            current_clearance = float(fixed_tree.query(_tree_coords(molecule), k=1)[0].min())
-            best_clearance = current_clearance
-            best_xy = molecule[:, :2]
-            for angle in angles:
-                cosine, sine = np.cos(angle), np.sin(angle)
-                rotation = np.asarray([[cosine, -sine], [sine, cosine]])
-                candidate = molecule.copy()
-                candidate[:, :2] = local_xy @ rotation.T + centre_xy
-                clearance = float(fixed_tree.query(_tree_coords(candidate), k=1)[0].min())
-                if clearance > best_clearance:
-                    best_clearance = clearance
-                    best_xy = candidate[:, :2].copy()
+            candidates = _rotation_candidates(molecule, local_xy, centre_xy, angles)
+            nearest = fixed_tree.query(_tree_coords(candidates.reshape(-1, 3)), k=1)[0]
+            clearance = nearest.reshape(len(candidates), len(molecule)).min(axis=1)
+            current_clearance = float(clearance[0])
+            best_index = int(np.argmax(clearance))
+            best_clearance = float(clearance[best_index])
+            best_xy = candidates[best_index, :, :2]
             if best_clearance > current_clearance + 1e-6:
                 coords[start:end, :2] = best_xy
                 improved = True
@@ -347,7 +372,7 @@ def rotate_lipids_away_from_clashes(
     pairs = pairs[owners[pairs[:, 0]] != owners[pairs[:, 1]]] if len(pairs) else pairs
     if len(pairs) == 0:
         return coords, min_distance
-    distances = full_tree.sparse_distance_matrix(full_tree, min_distance).tocoo()
+    distances = full_tree.sparse_distance_matrix(full_tree, min_distance, output_type="coo_matrix")
     valid = (distances.row < distances.col) & (owners[distances.row] != owners[distances.col])
     minimum = float(distances.data[valid].min()) if np.any(valid) else min_distance
     return coords, minimum
@@ -362,6 +387,7 @@ def rotate_lipids_away_from_external_clashes(
     angle_samples: int = 36,
     max_rounds: int = 3,
     box_xy: float | None = None,
+    workers: int = 1,
 ) -> tuple[np.ndarray, float]:
     """Rotate whole lipids in XY to remove contacts with another leaflet.
 
@@ -369,6 +395,11 @@ def rotate_lipids_away_from_external_clashes(
     Candidate rotations are also scored against the other lipids in the same
     leaflet, preventing a cross-leaflet improvement from creating a lateral
     singularity.
+
+    *workers* is handed to SciPy, which parallelises the query inside its own
+    C extension, so there is no Python-level concurrency and the result does
+    not depend on it. Left at 1 so a caller outside a task budget behaves
+    exactly as before.
     """
     sizes = [int(value) for value in lipid_sizes]
     if not sizes or len(coords) == 0 or len(external) == 0:
@@ -401,7 +432,7 @@ def rotate_lipids_away_from_external_clashes(
     external_tree = cKDTree(tree_coords(external), **tree_options)
 
     for _ in range(max_rounds):
-        external_distances = external_tree.query(tree_coords(coords), k=1)[0]
+        external_distances = external_tree.query(tree_coords(coords), k=1, workers=workers)[0]
         offenders = np.unique(
             np.repeat(np.arange(len(sizes)), sizes)[external_distances < min_distance]
         )
@@ -411,35 +442,33 @@ def rotate_lipids_away_from_external_clashes(
         for lipid_index in offenders:
             start, end = offsets[lipid_index], offsets[lipid_index + 1]
             same_leaflet = np.vstack((coords[:start], coords[end:]))
-            fixed = np.vstack((external, same_leaflet))
-            fixed_tree = cKDTree(tree_coords(fixed), **tree_options)
+            fixed_tree = cKDTree(tree_coords(same_leaflet), **tree_options)
             molecule = coords[start:end].copy()
             centre_xy = molecule[:, :2].mean(axis=0)
             local_xy = molecule[:, :2] - centre_xy
-
-            def score(
-                candidate: np.ndarray,
-                fixed_tree: cKDTree = fixed_tree,
-            ) -> tuple[float, float, float]:
-                nearest = fixed_tree.query(tree_coords(candidate), k=1)[0]
-                return tuple(float(value) for value in np.percentile(nearest, [0.0, 1.0, 10.0]))
-
-            best_score = score(molecule)
-            best_xy = molecule[:, :2]
-            for angle in angles:
-                cosine, sine = np.cos(angle), np.sin(angle)
-                rotation = np.asarray([[cosine, -sine], [sine, cosine]])
-                candidate = molecule.copy()
-                candidate[:, :2] = local_xy @ rotation.T + centre_xy
-                candidate_score = score(candidate)
-                if candidate_score > best_score:
-                    best_score = candidate_score
-                    best_xy = candidate[:, :2].copy()
+            candidates = _rotation_candidates(molecule, local_xy, centre_xy, angles)
+            search = tree_coords(candidates.reshape(-1, 3))
+            nearest = np.minimum(
+                fixed_tree.query(search, k=1)[0], external_tree.query(search, k=1)[0]
+            ).reshape(len(candidates), len(molecule))
+            scores = np.percentile(nearest, [0.0, 1.0, 10.0], axis=1).T
+            best_index = max(range(len(scores)), key=lambda i: tuple(scores[i]))
+            best_xy = candidates[best_index, :, :2]
             if not np.array_equal(best_xy, molecule[:, :2]):
                 coords[start:end, :2] = best_xy
                 improved = True
         if not improved:
             break
 
-    minimum = float(external_tree.query(tree_coords(coords), k=1)[0].min())
+    minimum = float(external_tree.query(tree_coords(coords), k=1, workers=workers)[0].min())
     return coords, minimum
+
+
+def _rotation_candidates(molecule, local_xy, centre_xy, angles):
+    """Retain candidate/reduction order while batching spatial queries."""
+    candidates = np.repeat(molecule[None, :, :], len(angles) + 1, axis=0)
+    for index, angle in enumerate(angles, start=1):
+        cosine, sine = np.cos(angle), np.sin(angle)
+        rotation = np.asarray([[cosine, -sine], [sine, cosine]])
+        candidates[index, :, :2] = local_xy @ rotation.T + centre_xy
+    return candidates

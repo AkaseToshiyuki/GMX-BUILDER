@@ -9,49 +9,73 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
+from gmxbuilder.geometry.overlap import find_overlapping_atoms
 from gmxbuilder.io.gro import GROWriter
 from gmxbuilder.io.top import TopologyWriter
-from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
 from gmxbuilder.modules.export.exporter import ExportModule
+from gmxbuilder.modules.export.layout import (
+    FORCEFIELD_DIR,
+    STRUCTURE_DIR,
+    TOPOLOGY_DIR,
+)
+from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+from gmxbuilder.modules.membrane.builder import MembraneBuilder
+from gmxbuilder.modules.modifications.processor import StructureProcessor
 from gmxbuilder.modules.solvation.solvate import SolvationBuilder
 from gmxbuilder.modules.solvation.water_models import (
     WaterRegistry,
     supported_force_fields,
     water_model_supported,
 )
-from gmxbuilder.geometry.overlap import find_overlapping_atoms
+from gmxbuilder.web.task_types import get_task_type
+from tests.prerequisites import require_v4_entries, requires_forcefield
 from tests.test_gromacs_smoke import _find_gmx
 from tests.test_membrane_gromacs_smoke import (
     _two_residue_system,
     _write_smoke_mdp,
 )
-from gmxbuilder.modules.membrane.builder import MembraneBuilder
-from gmxbuilder.modules.modifications.processor import StructureProcessor
-from gmxbuilder.web.task_types import get_task_type
-
 
 WATER_MODELS = ("tip3p", "spc", "spce", "tip4p")
 
 
 def test_solvation_viewer_uses_checkpoint_specific_box_origin():
-    app_js = (
-        Path(__file__).parents[1] / "src" / "gmxbuilder" / "web" / "static" / "app.js"
-    ).read_text(encoding="utf-8")
-    renderer = app_js.split("async function renderSolvationViewer()", 1)[1].split(
-        "// ===================================================================\n"
-        "// Simulation Parameters",
-        1,
-    )[0]
+    import json
+    import shutil
 
-    assert "if (_solvChecked)" in renderer
-    assert "checkpointStep = 'solvation'" in renderer
-    assert "boxOrigin.x = (bounds.minX + bounds.maxX) / 2.0 - boxA / 2.0" in renderer
-    assert "var membraneBounds = _pdbMembraneZBoundsAngstrom(pdbContent)" in renderer
-    assert "boxC = membraneBounds.maxZ - membraneBounds.minZ + 2.0 * paddingA" in renderer
-    assert "boxOrigin.z = membraneMidZ - boxC / 2.0" in renderer
-    assert "drawOrthogonalBox(v, boxA, boxB, boxC, boxOrigin)" in renderer
-    assert "drawOrthogonalBox(v, boxA, boxB, boxC, boxOrigin);\n\n  // Checked" in renderer
-    assert "v.zoomTo();\n  v.render();" in renderer
+    if not shutil.which("node"):
+        pytest.skip("Node is required for the viewer box geometry check")
+    static = Path(__file__).parents[1] / "src/gmxbuilder/web/static"
+    source = (static / "checkpoint_viewer.js").read_text()
+    geometry = source[source.index("  function box(") : source.index("  async function render(")]
+    probe = (
+        geometry
+        + """
+      const matrix=[[2,0,0],[0,3,0],[0,0,4]];
+      const results=["solvation","membrane","ions","cg_environment","cg_solvation",
+        "cg_system","structure","input","forcefield"].map(step=>{
+        const edges=[];box({addLine:line=>edges.push(line)},matrix,step);return edges;
+      });
+      console.log(JSON.stringify(results));
+    """
+    )
+    output = subprocess.run(["node", "-e", probe], check=True, capture_output=True, text=True)
+    positive, centered, *remaining = json.loads(output.stdout)
+    assert remaining[:4] == [positive] * 4
+    assert remaining[4:] == [[], [], []]
+    for edges, low, high in [
+        (positive, [0, 0, 0], [20, 30, 40]),
+        (centered, [-10, -15, -20], [10, 15, 20]),
+    ]:
+        assert len(edges) == 12
+        points = np.array(
+            [
+                [point[axis] for axis in ["x", "y", "z"]]
+                for edge in edges
+                for point in [edge["start"], edge["end"]]
+            ]
+        )
+        np.testing.assert_array_equal(points.min(axis=0), low)
+        np.testing.assert_array_equal(points.max(axis=0), high)
 
 
 def _empty_system(box=(1.5, 1.5, 1.5)) -> System:
@@ -186,6 +210,7 @@ def test_overlap_detection_handles_large_cutoff_in_a_small_periodic_box():
     ).all()
 
 
+@requires_forcefield("amber99sb-ildn")
 def test_topology_preserves_noncontiguous_water_runs(tmp_path):
     water = WaterRegistry.get("tip3p")
     atom_names = list(water.atom_names) + ["NA"] + list(water.atom_names)
@@ -236,6 +261,7 @@ def test_grid_fallback_honors_water_site_count_and_solution_frame(model_name):
 
 
 @pytest.mark.parametrize("model_name", WATER_MODELS)
+@pytest.mark.slow
 def test_prebuilt_water_and_matching_topology_pass_grompp(tmp_path, model_name):
     gmx = _find_gmx()
     config = {
@@ -259,7 +285,7 @@ def test_prebuilt_water_and_matching_topology_pass_grompp(tmp_path, model_name):
         structure, case_dir / "topol.top"
     )
     top_text = (case_dir / "topol.top").read_text()
-    assert f'#include "{model_name}.itp"' in top_text
+    assert f'#include "{FORCEFIELD_DIR}/{model_name}.itp"' in top_text
     (case_dir / "smoke.mdp").write_text(
         "integrator = steep\nnsteps = 1\ncutoff-scheme = Verlet\n"
         "rlist = 0.5\nrcoulomb = 0.5\nrvdw = 0.5\n"
@@ -275,6 +301,7 @@ def test_prebuilt_water_and_matching_topology_pass_grompp(tmp_path, model_name):
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
 
 
+@requires_forcefield("charmm36m")
 def test_water_model_is_selected_with_force_field_and_locked_for_solvation():
     system = _empty_system()
     selected = ForceFieldSelector().run(system, {"name": "charmm36m", "water_model": "spce"}).system
@@ -285,6 +312,7 @@ def test_water_model_is_selected_with_force_field_and_locked_for_solvation():
         SolvationBuilder().run(selected, {"water_model": "tip3p", "box_size": [1.0, 1.0, 1.0]})
 
 
+@requires_forcefield("charmm36m")
 def test_exporter_uses_water_model_locked_in_system_metadata(tmp_path):
     selected = (
         ForceFieldSelector()
@@ -313,10 +341,14 @@ def test_exporter_uses_water_model_locked_in_system_metadata(tmp_path):
         },
     )
     assert result.success
-    assert '#include "spce.itp"' in (output / "topol.top").read_text()
+    assert (
+        f'#include "{FORCEFIELD_DIR}/spce.itp"' in (output / TOPOLOGY_DIR / "topol.top").read_text()
+    )
 
 
-def test_complete_solvated_membrane_passes_grompp_and_mdrun(tmp_path):
+@pytest.mark.slow
+def test_complete_solvated_membrane_passes_grompp_and_mdrun(tmp_path, require_simulation):
+    require_v4_entries(["POPC"], "charmm36m", "charmm36m")
     gmx = _find_gmx()
     protein = (
         StructureProcessor()
@@ -384,6 +416,7 @@ def test_complete_solvated_membrane_passes_grompp_and_mdrun(tmp_path):
         timeout=120,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
+    require_simulation()
     mdrun = subprocess.run(
         [gmx, "mdrun", "-s", "smoke.tpr", "-deffnm", "smoke-em", "-ntmpi", "1"],
         cwd=tmp_path,
@@ -396,6 +429,7 @@ def test_complete_solvated_membrane_passes_grompp_and_mdrun(tmp_path):
     assert "force on at least one atom is not finite" not in output
 
 
+@pytest.mark.slow
 def test_default_solution_protocol_exports_and_passes_grompp(tmp_path):
     gmx = _find_gmx()
     system = (
@@ -447,13 +481,13 @@ def test_default_solution_protocol_exports_and_passes_grompp(tmp_path):
                 "-f",
                 f"mdp/{mdp_name}",
                 "-c",
-                "input.gro",
+                f"{STRUCTURE_DIR}/input.gro",
                 "-r",
-                "input.gro",
+                f"{STRUCTURE_DIR}/input.gro",
                 "-p",
-                "topol.top",
+                f"{TOPOLOGY_DIR}/topol.top",
                 "-n",
-                "index.ndx",
+                f"{STRUCTURE_DIR}/index.ndx",
                 "-o",
                 f"{mdp_name}.tpr",
             ],
@@ -473,6 +507,9 @@ def test_default_solution_protocol_exports_and_passes_grompp(tmp_path):
         {"overlap_scale": 1.1},
         {"box_size": [1.0, 2.0]},
         {"box_size": [1.0, float("nan"), 1.0]},
+        {"box_size": [101.0, 1.0, 1.0]},
+        {"box_size": [40.0, 40.0, 40.0]},
+        {"box_size": [36.0, 36.0, 36.0]},
     ],
 )
 def test_solvation_config_rejects_invalid_values(config):
@@ -480,8 +517,50 @@ def test_solvation_config_rejects_invalid_values(config):
         SolvationBuilder().validate_config(config)
 
 
+def test_water_grid_rejects_tiny_spacing_before_array_allocation():
+    with pytest.raises(ModuleConfigError, match="molecule budget"):
+        SolvationBuilder()._generate_water_grid(
+            np.zeros(3),
+            np.ones(3),
+            WaterRegistry.get("tip3p"),
+            spacing=1e-9,
+        )
+
+
 def test_enabled_workflows_define_water_model_in_force_field_step():
     for task_id in ("membrane-bilayer", "pure-membrane", "solvator"):
         defaults = get_task_type(task_id).default_config
         assert defaults["forcefield"]["water_model"] == "tip3p"
         assert "water_model" not in defaults["solvation"]
+
+
+def test_solvation_keeps_protein_centred_when_lipid_atoms_cross_periodic_edges():
+    system = _asymmetric_membrane_system()
+    system.structure.coordinates[2:, 0] = 3.5  # Whole lipid outside a centred 4 nm box.
+    original_relative = system.coordinates[2] - system.coordinates[0]
+    result = (
+        SolvationBuilder()
+        .run(
+            system,
+            {
+                "box_padding": 2,
+                "remove_overlap": False,
+                "use_prebuilt_water": False,
+            },
+        )
+        .system
+    )
+    assert np.allclose(result.coordinates[:2, :2].mean(axis=0), [2, 2])
+    assert np.allclose(result.coordinates[2] - result.coordinates[0], original_relative)
+    assert result.metadata["solvation"]["solute_z_envelope_image_gap_nm"] == pytest.approx(2.5)
+
+
+def test_solvation_rejects_touching_protein_z_periodic_envelopes():
+    with pytest.raises(ModuleConfigError, match="envelopes touch"):
+        SolvationBuilder().run(
+            _asymmetric_membrane_system(protein_z=(-2, 2)),
+            {
+                "box_padding": 0,
+                "remove_overlap": False,
+            },
+        )

@@ -1,0 +1,25 @@
+[Unit]
+Description=GMXBUILDER V4 lipid library queue from a pinned source checkout
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/bash %h/.config/gmxbuilder/run-v4-library.sh
+Restart=no
+KillMode=control-group
+TimeoutStopSec=120
+Nice=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.cache/gmxbuilder %h/.local/state/gmxbuilder %h/.local/share/gmxbuilder
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

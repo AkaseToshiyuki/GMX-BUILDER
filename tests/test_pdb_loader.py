@@ -3,13 +3,12 @@
 import numpy as np
 import pytest
 
+from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
-from gmxbuilder.core.enums import ComponentKind
-from gmxbuilder.core.exceptions import ParseError
+from gmxbuilder.io.pdb import PDBParser, PDBWriter
 from gmxbuilder.modules.input.pdb_input import PDBInputModule
 from gmxbuilder.pipeline.step_executor import _compute_step_metrics
-from gmxbuilder.io.pdb import PDBParser, PDBWriter
 
 
 def _empty_system(metadata=None):
@@ -75,14 +74,18 @@ def test_pdb_parser_selects_highest_occupancy_alternate_location(tmp_path):
     assert structure.coordinates[0, 0] == pytest.approx(0.2)
 
 
-def test_pdb_parser_rejects_insertion_codes_instead_of_merging_residues(tmp_path):
+def test_pdb_parser_preserves_insertion_codes_without_merging_residues(tmp_path):
     pdb = tmp_path / "insertion.pdb"
     pdb.write_text(
-        "ATOM      1  CA  ALA A  10A      1.000   0.000   0.000  1.00  0.00           C\nEND\n"
+        "ATOM      1  CA  ALA A  10       0.000   0.000   0.000  1.00  0.00           C\n"
+        "ATOM      2  CA  ALA A  10A      1.000   0.000   0.000  1.00  0.00           C\nEND\n"
     )
 
-    with pytest.raises(ParseError, match="insertion codes"):
-        PDBParser().parse(pdb)
+    structure = PDBParser().parse(pdb)
+    assert structure.resids == [1, 2]
+    records = [structure.source_info["atoms"][uid] for uid in structure.source_ids]
+    assert [(row["resid"], row["icode"]) for row in records] == [(10, ""), (10, "A")]
+    np.testing.assert_allclose(structure.coordinates[:, 0], [0, 0.1])
 
 
 def test_pdb_loader_preserves_build_metadata_and_centers_solute(small_pdb_file):
@@ -129,7 +132,7 @@ def test_pdb_loader_rejects_non_finite_structure_values(tmp_path, monkeypatch):
         elements=["C"],
     )
     monkeypatch.setattr(
-        "gmxbuilder.modules.input.pdb_input.PDBParser.parse",
+        "gmxbuilder.io.pdb.PDBParser.parse",
         lambda _self, _path: invalid,
     )
 
@@ -185,6 +188,7 @@ def test_input_normalizes_phosphoserine_and_records_reversible_patch(tmp_path):
         + "TER\nEND\n"
     )
 
+    _use_parent_scaffold(pdb, "SER", {})
     result = PDBInputModule().run(_empty_system(), {"pdb": str(pdb)})
 
     assert result.success
@@ -192,7 +196,22 @@ def test_input_normalizes_phosphoserine_and_records_reversible_patch(tmp_path):
     assert set(result.system.structure.atom_names) == {"N", "CA", "C", "O", "CB", "OG"}
     report = result.system.metadata["input_modifications"]
     assert report["detected"] == report["recognized"] == 1
-    assert report["records"] == [
+    assert len(report["records"]) == 1
+    record = dict(report["records"][0])
+    deposited = record.pop("original_atoms")
+    input_lines = [line for line in pdb.read_text().splitlines() if line.startswith("ATOM")]
+    assert [atom["name"] for atom in deposited] == [line[12:16].strip() for line in input_lines]
+    assert [atom["element"] for atom in deposited] == [line[76:78].strip() for line in input_lines]
+    np.testing.assert_allclose(
+        [atom["coordinates_nm"] for atom in deposited],
+        [
+            [float(line[a:b]) / 10 for a, b in ((30, 38), (38, 46), (46, 54))]
+            for line in input_lines
+        ],
+        atol=1e-12,
+        rtol=0,
+    )
+    assert [record] == [
         {
             "chain": "A",
             "resid": 10,
@@ -274,6 +293,7 @@ def test_input_mly_is_dimethyllysine_not_malonyllysine(tmp_path):
         + "TER\nEND\n"
     )
 
+    _use_parent_scaffold(pdb, "LYS", {})
     result = PDBInputModule().run(_empty_system(), {"pdb": str(pdb)})
 
     assert result.success
@@ -298,6 +318,7 @@ def test_input_normalizes_selenomethionine_without_inferring_oxidation(tmp_path)
         "TER\nEND\n"
     )
 
+    _use_parent_scaffold(pdb, "MET", {"SE": "SD"})
     result = PDBInputModule().run(_empty_system(), {"pdb": str(pdb)})
 
     assert result.success
@@ -308,3 +329,22 @@ def test_input_normalizes_selenomethionine_without_inferring_oxidation(tmp_path)
     assert record["status"] == "normalized_only"
     assert record["patch_id"] is None
     assert "no oxidation patch was inferred" in record["warning"]
+
+
+def _use_parent_scaffold(path, parent, aliases=None):
+    from importlib.metadata import distribution
+
+    template = distribution("pdbfixer").locate_file(f"pdbfixer/templates/{parent}.pdb")
+    records = {
+        line[12:16].strip(): line[30:54]
+        for line in template.read_text().splitlines()
+        if line.startswith("ATOM")
+    }
+    aliases = aliases or {}
+    lines = []
+    for line in path.read_text().splitlines():
+        name = aliases.get(line[12:16].strip(), line[12:16].strip())
+        if line.startswith("ATOM") and name in records:
+            line = line[:30] + records[name] + line[54:]
+        lines.append(line)
+    path.write_text("\n".join(lines) + "\n")

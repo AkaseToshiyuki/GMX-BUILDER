@@ -41,6 +41,7 @@ def compute_principal_axes(coords: np.ndarray, masses: np.ndarray | None = None)
 
     cov = centered.T @ centered / (len(coords) - 1)
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    # Reject numerically collapsed coordinates before selecting an orientation.
     if not np.isfinite(eigenvalues).all() or float(eigenvalues.max()) <= 1e-16:
         raise ValueError("coordinates do not define a non-degenerate principal axis")
 
@@ -55,6 +56,7 @@ def compute_principal_axes(coords: np.ndarray, masses: np.ndarray | None = None)
     # across CPU/library builds without pretending the degenerate PCA axis is
     # physically unique.
     ordered_values = eigenvalues[order]
+    # Absolute/relative tie tolerances select a reproducible basis, not a physical axis.
     if abs(ordered_values[0] - ordered_values[1]) <= max(1e-12, 1e-8 * abs(ordered_values[0])):
         first = int(np.lexsort((coords[:, 2], coords[:, 1], coords[:, 0]))[0])
         second = int(np.argmax(np.sum((coords - coords[first]) ** 2, axis=1)))

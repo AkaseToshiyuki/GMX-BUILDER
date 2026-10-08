@@ -1,20 +1,21 @@
 """Fast, offline regression checks for core file-generation paths."""
 
-import numpy as np
-import pytest
 import subprocess
 
-from gmxbuilder.io.gro import GROReader, GROWriter
-from gmxbuilder.io.mdp import MDPWriter
-from gmxbuilder.io.pdb import PDBParser
-from gmxbuilder.modules.export.exporter import ExportModule
-from gmxbuilder.runtime.citations import atomistic_citations
+import numpy as np
+import pytest
+
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ParseError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.core.topology import Bond, Topology
+from gmxbuilder.io.gro import GROReader, GROWriter
+from gmxbuilder.io.mdp import MDPWriter, derive_velocity_seed
+from gmxbuilder.io.pdb import PDBParser
+from gmxbuilder.modules.export.exporter import ExportModule
+from gmxbuilder.runtime.citations import atomistic_citations
 
 
 def test_atomistic_citations_follow_selected_parameter_families():
@@ -98,6 +99,91 @@ def test_mdp_writer_generates_a_complete_default_protocol(tmp_path):
     assert all(path.stat().st_size > 0 for path in paths)
     assert "comm-grps               = SOLU_MEMB SOLV" in (tmp_path / "equili_1.mdp").read_text()
     assert "comm-grps               = SOLU_MEMB SOLV" in (tmp_path / "production_1.mdp").read_text()
+
+
+def test_default_velocity_seed_is_explicit_and_reproducible(tmp_path):
+    writer = MDPWriter()
+    writer.generate_all(tmp_path, {})
+
+    first = (tmp_path / "equili_1.mdp").read_text()
+    assert "gen-seed                = -1" not in first
+    assert f"gen-seed                = {derive_velocity_seed(42)}" in first
+    assert writer.last_velocity_seed == derive_velocity_seed(42)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "pattern"),
+    [
+        ({"dt": "0.005"}, "HMR or virtual sites"),
+        ({"constraints": "none"}, "unconstrained atomistic bonds"),
+        ({"rlist": "0.8", "rvdw": "1.0"}, "rlist must be at least"),
+        ({"gen-vel": "yes", "gen-seed": "-1"}, "persisted positive"),
+    ],
+)
+def test_final_mdp_validation_cannot_be_bypassed_by_overrides(tmp_path, overrides, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        MDPWriter().generate_all(tmp_path, {"mdp_overrides": overrides})
+    assert not list(tmp_path.glob("*.mdp"))
+
+
+def test_normalized_stage_overrides_still_cross_the_final_scientific_gate(tmp_path):
+    normalized = MDPWriter.normalize_simulation_config(
+        {
+            "schema_version": 2,
+            "eq_stages": [
+                {
+                    "enabled": True,
+                    "ensemble": "nvt",
+                    "dt": 1.0,
+                    "dt_unit": "fs",
+                    "nsteps": 10,
+                    "mdp_overrides": {"dt": "0.005"},
+                }
+            ],
+            "prod_iters": [
+                {
+                    "enabled": True,
+                    "ensemble": "npt",
+                    "dt": 2.0,
+                    "dt_unit": "fs",
+                    "nsteps": 10,
+                }
+            ],
+        },
+        {"force_field_family": "amber", "has_membrane": True},
+    )
+
+    with pytest.raises(ValueError, match="HMR or virtual sites"):
+        MDPWriter().generate_all(
+            tmp_path,
+            {"force_field_family": "amber", "has_membrane": True},
+            eq_stages=normalized["eq_stages"],
+            prod_iters=normalized["prod_iters"],
+            minimization=normalized["minimization"],
+        )
+
+
+def test_charmm_final_validation_rejects_override_protocol_drift(tmp_path):
+    with pytest.raises(ValueError, match="requires DispCorr=no"):
+        MDPWriter().generate_all(
+            tmp_path,
+            {
+                "force_field_family": "charmm",
+                "mdp_overrides": {"DispCorr": "EnerPres"},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("context", "pattern"),
+    [
+        ({"periodic_box_heights_nm": [2.0, 4.0, 4.0]}, "twice the maximum cutoff"),
+        ({"solute_face_distances_nm": [0.5, 2.0, 2.0]}, "solute-to-periodic-face"),
+    ],
+)
+def test_mdp_final_validation_enforces_periodic_geometry(tmp_path, context, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        MDPWriter().generate_all(tmp_path, context)
 
 
 def test_simulation_config_keeps_workflow_controls_out_of_mdp_context():
@@ -761,12 +847,24 @@ def test_run_script_separates_external_mpi_from_thread_mpi(tmp_path):
     assert "must divide" in invalid.stderr
 
 
-def test_package_readme_describes_the_actual_flat_parameter_layout(tmp_path):
-    (tmp_path / "input.gro").write_text("coordinates")
-    (tmp_path / "topol.top").write_text('#include "forcefield.itp"\n')
-    (tmp_path / "index.ndx").write_text("[ System ]\n")
-    (tmp_path / "forcefield.itp").write_text("[ defaults ]\n")
-    (tmp_path / "POPC.itp").write_text("[ moleculetype ]\n")
+def test_package_readme_describes_the_layout_that_is_actually_on_disk(tmp_path):
+    """A README that names files where they are not is worse than none."""
+    from gmxbuilder.modules.export.layout import (
+        FORCEFIELD_DIR,
+        STRUCTURE_DIR,
+        TOPOLOGY_DIR,
+    )
+
+    structure = tmp_path / STRUCTURE_DIR
+    topology = tmp_path / TOPOLOGY_DIR
+    forcefield = topology / FORCEFIELD_DIR
+    for directory in (structure, topology, forcefield):
+        directory.mkdir(parents=True)
+    (structure / "input.gro").write_text("coordinates")
+    (structure / "index.ndx").write_text("[ System ]\n")
+    (topology / "topol.top").write_text(f'#include "{FORCEFIELD_DIR}/forcefield.itp"\n')
+    (topology / "POPC.itp").write_text("[ moleculetype ]\n")
+    (forcefield / "forcefield.itp").write_text("[ defaults ]\n")
     readme = tmp_path / "README.txt"
 
     ExportModule._write_readme(
@@ -779,11 +877,17 @@ def test_package_readme_describes_the_actual_flat_parameter_layout(tmp_path):
     )
     content = readme.read_text()
 
-    assert "stored in the package root" in content
-    assert "forcefield.itp" in content
-    assert "POPC.itp" in content
-    assert "toppar/" not in content
+    assert f"{STRUCTURE_DIR}/input.gro" in content
+    assert f"{TOPOLOGY_DIR}/topol.top" in content
+    assert f"{TOPOLOGY_DIR}/POPC.itp" in content
+    assert f"{TOPOLOGY_DIR}/{FORCEFIELD_DIR}/forcefield.itp" in content
+    # No input.pdb was written, so the README must not offer one.
     assert "input.pdb" not in content
+    # Every path the README prints must exist relative to the package root.
+    for line in content.splitlines():
+        candidate = line.strip().split(" ")[0]
+        if candidate.startswith((f"{STRUCTURE_DIR}/", f"{TOPOLOGY_DIR}/")):
+            assert (tmp_path / candidate).exists(), f"README names a missing file: {candidate}"
 
 
 def test_mdp_macros_match_the_available_restraint_sections(tmp_path):

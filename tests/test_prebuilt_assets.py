@@ -1,7 +1,7 @@
 import hashlib
 import json
-from pathlib import Path
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +14,7 @@ from gmxbuilder.runtime.prebuilt_assets import (
     install_prebuilt_assets,
     prebuilt_asset_status,
 )
+from tests.dry_initial_fixture import dry_initial_fixture
 
 
 def _fixture_bundle(tmp_path: Path) -> Path:
@@ -42,6 +43,7 @@ def _fixture_bundle(tmp_path: Path) -> Path:
                 "force_field": "amber14sb",
                 "lipid_ff": "gaff2",
                 "quality": {
+                    "initial_water_exclusion": dry_initial_fixture(),
                     "passed": True,
                     "orientation": {"passed": True, "n_lipids_checked": 20},
                 },
@@ -157,6 +159,53 @@ def test_prebuilt_assets_reject_stale_library_schema(tmp_path):
         )
 
 
+@pytest.mark.parametrize("bundled_parameters", [True, False])
+def test_staging_admission_uses_bundled_target_and_host_parameters(
+    tmp_path, monkeypatch, caplog, bundled_parameters
+):
+    """A local fit must neither hide a missing bundle fit nor replace its source."""
+    from gmxbuilder.modules.forcefield.gaff_backend import _cache_root
+    from gmxbuilder.runtime.prebuilt_assets import _validate_staging
+
+    staging = tmp_path / "staging"
+    entry = staging / "lipid_equilibrated/amber-gaff2/20AHC"
+    entry.mkdir(parents=True)
+    (entry / "metadata.json").write_text(
+        json.dumps(
+            {
+                "force_field": "amber14sb",
+                "lipid_ff": "gaff2",
+                "equilibration_host": {"lipid_name": "POPC"},
+            }
+        )
+    )
+    ambient = tmp_path / "user-cache"
+    monkeypatch.setenv("GMXBUILDER_GAFF_CACHE", str(ambient))
+    for root in (ambient, staging / "gaff2"):
+        for name in ("L_20AHC", "POPC"):
+            directory = root / name
+            directory.mkdir(parents=True)
+            if (root == staging / "gaff2") == bundled_parameters:
+                (directory / "parameters").write_text("the accepted parameter definitions")
+
+    def inspect(self, name, force_field, lipid_ff):
+        for parameter_name in ("L_20AHC", "POPC"):
+            path = _cache_root(parameter_name, install=False) / parameter_name / "parameters"
+            if not path.is_file() or path.read_text() != "the accepted parameter definitions":
+                return None
+        return object()
+
+    monkeypatch.setattr(
+        "gmxbuilder.runtime.prebuilt_assets.EquilibratedLipidLibrary.inspect", inspect
+    )
+    _validate_staging(
+        staging, {"contents": {"strict_library_entries": 1, "gaff2_cache_entries": 2}}
+    )
+    assert ("will not be served" in caplog.text) is not bundled_parameters
+    assert _cache_root("L_20AHC", install=False) == ambient
+    assert _cache_root("POPC", install=False) == ambient
+
+
 def test_prebuilt_assets_replace_stale_strict_entry_on_upgrade(tmp_path):
     manifest = _fixture_bundle(tmp_path)
     lipid_root = tmp_path / "cache" / "lipids"
@@ -181,3 +230,42 @@ def test_prebuilt_assets_replace_stale_strict_entry_on_upgrade(tmp_path):
     assert result["replaced_lipid_entries"] == 1
     assert not (stale / "obsolete.txt").exists()
     assert json.loads((stale / "metadata.json").read_text())["schema_version"] == SCHEMA_VERSION
+
+
+def test_the_installation_lock_can_be_entered_twice_in_one_process(tmp_path):
+    """A lock a process can take against itself is not a lock, it is a trap.
+
+    ``flock`` is held per open file description, so opening the file again and
+    asking for it again waits forever -- and the installation does reach back
+    into code that comes here, because removing a library entry the runtime
+    rejects means asking the library about it. That deadlock stalled a full test
+    suite for four hours with two charge fits queued behind it.
+    """
+    import threading
+
+    from gmxbuilder.runtime.prebuilt_assets import _installation_lock
+
+    finished = threading.Event()
+
+    def nest():
+        with _installation_lock(tmp_path / "lipid", tmp_path / "gaff"):
+            with _installation_lock(tmp_path / "lipid", tmp_path / "gaff"):
+                pass
+        finished.set()
+
+    worker = threading.Thread(target=nest, daemon=True)
+    worker.start()
+    assert finished.wait(30), "the second entry waited for the first one to finish"
+
+
+def test_reading_a_cached_gaff_template_does_not_install_anything(monkeypatch, tmp_path):
+    """The lipid library asks this from inside an installation."""
+    from gmxbuilder.modules.forcefield import gaff_backend
+    from gmxbuilder.runtime import prebuilt_assets
+
+    def refuse():
+        raise AssertionError("a peek at the cache must not install assets")
+
+    monkeypatch.setattr(prebuilt_assets, "ensure_prebuilt_assets", refuse)
+    monkeypatch.setenv("GMXBUILDER_GAFF_CACHE", str(tmp_path))
+    assert gaff_backend.cached_gaff_template("NOSUCHLIPID", "CCO", 0, charge_method="gas") is None

@@ -1,0 +1,98 @@
+{
+  "schema": "v4-maintainer-approvals-1",
+  "approvals": [
+    {
+      "id": "cer18-charmm36m-200ns-20260913",
+      "lipid": "CER18",
+      "family": "charmm36m-lipid",
+      "approved_by": "Haochen Yang",
+      "approved_on": "2026-09-13",
+      "authorization": "Maintainer approved normal library admission after the recorded discussion; no additional composition or temperature restrictions on builder users.",
+      "reason": "Identity, structural, sampling and replica consistency checks pass. Accept retained conformers for the normal membrane builder while preserving the two automatic terminal-platform failures.",
+      "replica_evidence_sha256": [
+        "9bcedbdabbf02f325b73f05f9428d5cb3fca1bb899b9c498abf75f4599669b28",
+        "1ba3a0d7d21469c17a61c1c999ecffa8c740c19034b250869189b652f539b401"
+      ],
+      "source_metadata_sha256": [
+        "959738f39a3077b8db31c25602a97bae5d75c0d46a744423b0f57e7dd8eabdc5",
+        "b9ffe61cfb64589a2d022da7dd146ce57db0ee3822588730e00a82a74eebdc1d"
+      ],
+      "waived_failures": [
+        "replica 2: area_per_lipid_nm2/terminal_half_shift: -2.4512% exceeds 2% platform tolerance",
+        "replica 2: head_to_head_nm/terminal_half_shift: 2.0218% exceeds 2% platform tolerance"
+      ],
+      "equilibrium_certified": false,
+      "quantitative_area_override": false
+    },
+    {
+      "id": "cer18-charmm36m-200ns-20260914-chemical-selection",
+      "lipid": "CER18",
+      "family": "charmm36m-lipid",
+      "approved_by": "Haochen Yang",
+      "approved_on": "2026-09-13",
+      "authorization": "Maintainer approved normal library admission after the recorded discussion; no additional composition or temperature restrictions on builder users.",
+      "reason": "Identity, structural, sampling and replica consistency checks pass. Accept retained conformers for the normal membrane builder while preserving the two automatic terminal-platform failures.",
+      "replica_evidence_sha256": [
+        "10a01a2ffecbc91650d6c68129bdc7c787e02af5befa7d1635b8834c9c0108c2",
+        "4e4e726d6291deb1d39bcee40772c87bcfc07df33fde19df893e3c7f3f68dfb1"
+      ],
+      "source_metadata_sha256": [
+        "7d9bdaf819e0a3385cf79154cf841e7f3e4770bd87ccdba6fbecba4cb40e664c",
+        "4ec8648093bf3ca59223371735b936456b33fe7272dee6dd7c93fd715255820d"
+      ],
+      "waived_failures": [
+        "replica 2: area_per_lipid_nm2/terminal_half_shift: -2.4512% exceeds 2% platform tolerance",
+        "replica 2: head_to_head_nm/terminal_half_shift: 2.0219% exceeds 2% platform tolerance"
+      ],
+      "equilibrium_certified": false,
+      "quantitative_area_override": false,
+      "analysis_migration": {
+        "on": "2026-09-14",
+        "parent_approval_id": "cer18-charmm36m-200ns-20260913",
+        "authorization": "Maintainer authorized the observable-definition repair and deployment on 2026-09-14. This carries the existing admission decision forward; it is not new automatic certification.",
+        "observable_selection_method": "bond-graph-head-tail-1",
+        "original_waived_failures": [
+          "replica 2: area_per_lipid_nm2/terminal_half_shift: -2.4512% exceeds 2% platform tolerance",
+          "replica 2: head_to_head_nm/terminal_half_shift: 2.0218% exceeds 2% platform tolerance"
+        ],
+        "new_failed_categories": [],
+        "unchanged_conformers": [
+          {
+            "replica": 1,
+            "conformers": 1760,
+            "identical_bytes": true
+          },
+          {
+            "replica": 2,
+            "conformers": 840,
+            "identical_bytes": true
+          }
+        ],
+        "md_evidence": "Private/reports/v4-reuse-observables-20260914/migration-CER18.log"
+      }
+    },
+    {
+      "id": "pop2-gaff2-200ns-hydration-20260922",
+      "scope": "local-hydration-effective-samples-1",
+      "lipid": "POP2",
+      "family": "amber-gaff2",
+      "approved_by": "Haochen Yang",
+      "approved_on": "2026-09-22",
+      "authorization": "POP2直接允许入库",
+      "reason": "Maintainer explicitly accepts the reviewed 200 ns initialization conformers despite replica 1 upper hydration effective samples 9.418814984337503 being below 10. Preserve all automatic failures and area diagnostics.",
+      "replica_evidence_sha256": [
+        "f653238933d9ab5106856fa86e62ad8dceb1ea6bb65b92c11194e0274db6fecf",
+        "6a078fae1545ac8daaa62f8c1c94a4287bcf7859e66a188399c6c95c4b729d8b"
+      ],
+      "source_metadata_sha256": [
+        "59f8a64f0ffffda65ae57607c71e2d01fd82a127e33a22ed37cd775a07bb93a8",
+        "41682a3aa0c7af91bc0228f70e59f26bf40453b4ccdae991852c8e4ba00019be"
+      ],
+      "waived_failures": [
+        "replica 1: hydration:contacts:upper: fewer than ten effective time samples"
+      ],
+      "equilibrium_certified": false,
+      "quantitative_area_override": false
+    }
+  ]
+}

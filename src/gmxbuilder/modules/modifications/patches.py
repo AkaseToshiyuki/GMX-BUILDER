@@ -11,7 +11,6 @@ Each Patch defines:
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
 
 
 @dataclasses.dataclass
@@ -53,9 +52,9 @@ class Patch:
     charge_shift: int  # change in net residue charge
     added_atoms: list[PatchAtom] = dataclasses.field(default_factory=list)
     removed_atoms: list[str] = dataclasses.field(default_factory=list)  # atom names to remove
-    bond_to: Optional[str] = None  # atom to connect the new group to
-    mass_shift: float = 0.0  # g/mol
-    formula_addition: str = ""  # e.g. "PO3H" or "C2H3O"
+    bond_to: str | None = None  # atom to connect the new group to
+    mass_shift: float = 0.0  # Net molecular mass change (g/mol), including lost atoms.
+    formula_addition: str = ""  # Added fragment, not the net formula delta after H replacement.
     requires_itp: str = ""  # force-field .itp template name
     stereo_constraints: tuple[StereoConstraint, ...] = ()
 
@@ -1002,6 +1001,54 @@ _UNSUPPORTED_REASONS: dict[str, str] = {
 }
 
 
+# These combinations failed native grompp validation in the 2026-09-14 audit.
+# Internal residues remain supported. Do not substitute caps or omit torsions.
+_UNVALIDATED_FREE_TERMINI = {
+    "amber14sb": {
+        **{
+            name: ("N", "C")
+            for name in ("PHOS_SER", "PHOS_THR", "PHOS_TYR", "PHOS1_SER", "PHOS1_THR", "PHOS1_TYR")
+        },
+        "HYP_PRO": ("N",),
+    },
+    "amber99sb": {"HYP_PRO": ("N", "C")},
+    "amber99sb-ildn": {"HYP_PRO": ("N", "C")},
+    "charmm36m": {
+        **{
+            name: ("N", "C")
+            for name in (
+                "CSO_CYS",
+                "CSX_CYS",
+                "CSN_CYS",
+                "SMC_CYS",
+                "OCS_CYS",
+                "SAC_SER",
+                "TYS_TYR",
+                "NIY_TYR",
+            )
+        },
+        "HYP_PRO": ("N",),
+    },
+}
+
+
+def unsupported_free_termini(patch_id: str, force_field: str | None) -> tuple[str, ...]:
+    return _UNVALIDATED_FREE_TERMINI.get((force_field or "").lower(), {}).get(patch_id, ())
+
+
+def validate_patch_position(patch_id, force_field, free_ends):
+    """Reject known incomplete terminal chemistry before constructing any atoms."""
+    from gmxbuilder.core.exceptions import ModuleConfigError
+
+    blocked = set(free_ends) & set(unsupported_free_termini(patch_id, force_field))
+    if blocked:
+        raise ModuleConfigError(
+            f"{patch_id} has no validated free {'/'.join(sorted(blocked))}-terminal "
+            f"model in {force_field}. Native terminal/bonded parameters are incomplete. "
+            "Use a validated molecular model; caps must not be added merely to bypass this check."
+        )
+
+
 def patch_capability(patch_id: str, force_field: str | None = None) -> tuple[bool, str]:
     """Return whether *patch_id* can currently produce a valid structure."""
     if patch_id not in ALL_PATCHES:
@@ -1093,6 +1140,7 @@ def list_patches(force_field: str | None = None) -> list[dict]:
             "mass_shift": p.mass_shift,
             "formula_addition": p.formula_addition,
             "stereochemistry": [item.label for item in p.stereo_constraints],
+            "unsupported_free_termini": list(unsupported_free_termini(pid, force_field)),
             "supported": patch_capability(pid, force_field)[0],
             "support_reason": patch_capability(pid, force_field)[1],
         }
@@ -1116,6 +1164,7 @@ def list_patches_for_residue(resname: str, force_field: str | None = None) -> li
                     "charge_shift": effective_patch_charge_shift(pid, force_field),
                     "formula_addition": p.formula_addition,
                     "stereochemistry": [item.label for item in p.stereo_constraints],
+                    "unsupported_free_termini": list(unsupported_free_termini(pid, force_field)),
                     "supported": supported,
                     "support_reason": support_reason,
                 }

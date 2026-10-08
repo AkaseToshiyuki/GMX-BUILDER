@@ -1,0 +1,49 @@
+AMBER14SB protein + OL24 DNA + ff99bsc0-chiOL3 RNA
+
+********************************************************************
+* This force field is assembled at installation time. It is NOT a  *
+* redistributed copy of any upstream package.                      *
+*                                                                  *
+* Protein, water, ions, phosphorylated residues:                   *
+*   the GROMACS 2026 ff14SB port bundled with GMXBUILDER, byte for *
+*   byte. Converted and validated by Vedran Miletic, Milosz        *
+*   Wieczor, Markus Rampp, Carsten Kutzner, Bert L. de Groot and   *
+*   Vytautas Gapsys.                                               *
+*                                                                  *
+* DNA and RNA:                                                     *
+*   the nucleic-acid half of amber14sb_OL24.ff, downloaded from    *
+*   https://fch.upol.cz/ff_ol/ and verified against a pinned       *
+*   SHA-256. Residue databases are taken verbatim; parameters are  *
+*   added only where the nucleic acids need them and no residue    *
+*   already supported can reach them.                              *
+*                                                                  *
+* The base carries the plain ff99 glycosidic torsion for           *
+* OS-CT-N*-CK and OS-CT-N*-CM. Those are replaced with the refined *
+* chiOL profile -- that replacement is what the OL series is for.  *
+* All four atom types are nucleic-only, so no protein is affected. *
+*                                                                  *
+* Cite, for the protein:                                           *
+*   Maier, J. A. et al. ff14SB. J. Chem. Theory Comput. 11,        *
+*   3696-3713 (2015). doi:10.1021/acs.jctc.5b00255                 *
+*   Miletic, V. et al. ChemRxiv (2026).                            *
+*                                                                  *
+* Cite, for DNA (OL24 and the refinements it builds on):           *
+*   Zgarbova, M. et al. J. Chem. Theory Comput. 21, 833-846 (2025) *
+*   Zgarbova, M. et al. J. Chem. Theory Comput. 17, 6292 (2021)    *
+*   Zgarbova, M. et al. J. Chem. Theory Comput. 11, 5723 (2015)    *
+*   Zgarbova, M. et al. J. Chem. Theory Comput. 9, 2339 (2013)     *
+*   Perez, A. et al. Biophys. J. 92, 3817 (2007)                   *
+*                                                                  *
+* Cite, for RNA (ff99bsc0 + chiOL3):                               *
+*   Zgarbova, M. et al. J. Chem. Theory Comput. 7, 2886 (2011)     *
+*   Perez, A. et al. Biophys. J. 92, 3817 (2007)                   *
+*                                                                  *
+* Verified against the unmodified upstream port on a hexanucleotide*
+* single point: bond, angle, proper-dihedral and Coulomb(SR)       *
+* energies are identical. Impropers differ by 0.004 kJ/mol because *
+* this force field enables _FF_AMBER_LEAP_ATOM_REORDERING, which   *
+* the 2019-era upstream port predates; removing that define        *
+* reproduces the upstream value exactly. 1-4 terms differ by 1e-5  *
+* relative because the bundled files carry more significant        *
+* figures (fudgeQQ 0.83333333333333333 against 0.8333).            *
+********************************************************************

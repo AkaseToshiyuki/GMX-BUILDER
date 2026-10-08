@@ -9,30 +9,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from gmxbuilder.core.system import System
-from gmxbuilder.core.topology import Topology, AtomType, MoleculeBlock
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ForceFieldError
+from gmxbuilder.core.system import System
+from gmxbuilder.core.topology import MoleculeBlock, Topology
 from gmxbuilder.modules.forcefield.base_ff import ForceField
 from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
-
-
-# Approximate CHARMM36 atom type parameters for common elements
-# Used as fallback when no .rtp file is available
-_CHARMM36_DEFAULTS: dict[str, dict] = {
-    "C": {"mass": 12.011, "sigma": 0.356359, "epsilon": 0.46024},
-    "N": {"mass": 14.007, "sigma": 0.329632, "epsilon": 0.83680},
-    "O": {"mass": 15.999, "sigma": 0.302905, "epsilon": 0.50208},
-    "H": {"mass": 1.008, "sigma": 0.040001, "epsilon": 0.19246},
-    "S": {"mass": 32.065, "sigma": 0.356359, "epsilon": 1.04600},
-    "P": {"mass": 30.974, "sigma": 0.374177, "epsilon": 0.83680},
-    "NA": {"mass": 22.990, "sigma": 0.242992, "epsilon": 0.19623},
-    "CL": {"mass": 35.453, "sigma": 0.404468, "epsilon": 0.62760},
-    "K": {"mass": 39.098, "sigma": 0.314264, "epsilon": 0.36468},
-    "CA": {"mass": 40.078, "sigma": 0.241199, "epsilon": 0.25620},
-    "ZN": {"mass": 65.380, "sigma": 0.195998, "epsilon": 0.52300},
-    "MG": {"mass": 24.305, "sigma": 0.141445, "epsilon": 0.10836},
-}
 
 
 @ForceFieldRegistry.register
@@ -46,58 +28,9 @@ class CHARMM36ForceField(ForceField):
 
     def build_system_topology(self, system: System) -> Topology:
         topology = Topology(force_field=self.name)
+        from gmxbuilder.modules.forcefield.protein_templates import native_atom_types
 
-        # Load the RTP files for this exact force field.  CHARMM36m must not
-        # silently receive atom types and charges from CHARMM36's singleton.
-        from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
-
-        rtp = load_force_field_rtp(self.name)
-
-        n_resnames = len(system.structure.resnames)
-        n_atom_names = len(system.structure.atom_names)
-
-        # Generic fallback atom types by element (when RTP lookup fails)
-        _ELEM_GENERIC_TYPE: dict[str, str] = {
-            "C": "CT3",
-            "N": "NH1",
-            "O": "O",
-            "H": "H",
-            "S": "S",
-            "P": "P",
-            "NA": "NA",
-            "CL": "CL",
-            "K": "K",
-            "CA": "CA",
-            "ZN": "ZN",
-            "MG": "MG",
-        }
-
-        atom_types = []
-        for i in range(system.num_atoms):
-            elem = system.structure.elements[i] if i < len(system.structure.elements) else "C"
-            elem = elem.upper()
-            params = _CHARMM36_DEFAULTS.get(elem, _CHARMM36_DEFAULTS["C"])
-
-            # Look up residue-specific atom type and charge from RTP
-            rn = system.structure.resnames[i] if i < n_resnames else "ALA"
-            an = system.structure.atom_names[i] if i < n_atom_names else "CA"
-            atype_name = _ELEM_GENERIC_TYPE.get(elem, "CT3")
-            charge = 0.0
-            if rtp is not None:
-                rtp_result = rtp.get_atom_type(rn, an)
-                if rtp_result:
-                    atype_name, charge = rtp_result
-
-            at = AtomType(
-                name=atype_name,
-                mass=params["mass"],
-                charge=charge,
-                sigma=params["sigma"],
-                epsilon=params["epsilon"],
-            )
-            atom_types.append(at)
-
-        topology.atom_types = atom_types
+        topology.atom_types = native_atom_types(system, self.name)
 
         # Build molecule blocks for each component
         for comp in system.components:
@@ -161,6 +94,9 @@ class CHARMM36ForceField(ForceField):
                 )
             )
 
+        from gmxbuilder.modules.forcefield.protein_templates import assign_protein_atoms
+
+        assign_protein_atoms(system, topology, self.name)
         return topology
 
     def get_ff_includes(self) -> list[str]:

@@ -3,23 +3,32 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import json
 import zipfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROReader
 from gmxbuilder.io.mdp import _nonbond_params
+from gmxbuilder.modules.coarse_grained.export import CGExportModule
+from gmxbuilder.modules.export.exporter import ExportModule
+from gmxbuilder.modules.export.layout import STRUCTURE_DIR
+from gmxbuilder.modules.martini3_bilayer import CGExportModule as BilayerCGExportModule
+from gmxbuilder.modules.martini3_solvent import CGExportModule as SolventCGExportModule
 from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
 from gmxbuilder.modules.pure_membrane.export import PureMembraneExportModule
 from gmxbuilder.pipeline.step_executor import StepRunner, get_pipeline_steps
 from gmxbuilder.web import server
 from gmxbuilder.web.server import app
 from gmxbuilder.web.task_manager import TaskManager
+from tests.prerequisites import requires_forcefield
 
 
 def _checkpoint_system() -> System:
@@ -42,6 +51,7 @@ def _checkpoint_system() -> System:
     )
 
 
+@requires_forcefield("amber99sb-ildn")
 def test_finalization_exports_exact_checkpoint_without_coordinate_rebuild(tmp_path):
     runner = StepRunner(tmp_path, pipeline_type="pure-membrane")
     source = _checkpoint_system()
@@ -53,7 +63,7 @@ def test_finalization_exports_exact_checkpoint_without_coordinate_rebuild(tmp_pa
     )
 
     assert result["status"] == "ok"
-    exported = GROReader().read(runner.step_dir("export") / "input.gro")
+    exported = GROReader().read(runner.step_dir("export") / STRUCTURE_DIR / "input.gro")
     assert exported.num_atoms == source.num_atoms
     assert np.allclose(exported.coordinates, source.coordinates, atol=5.1e-4, rtol=0)
     assert np.allclose(exported.box_vectors, source.structure.box_vectors, atol=5.1e-6)
@@ -70,6 +80,7 @@ def test_finalization_exports_exact_checkpoint_without_coordinate_rebuild(tmp_pa
     assert "verify" not in get_pipeline_steps("pure-membrane")
 
 
+@requires_forcefield("amber99sb-ildn")
 def test_dry_export_archive_excludes_stale_and_unrelated_files(tmp_path):
     output = tmp_path / "export"
     output.mkdir()
@@ -96,6 +107,7 @@ def test_dry_export_archive_excludes_stale_and_unrelated_files(tmp_path):
     assert not any(name.startswith("mdp/") for name in names)
 
 
+@requires_forcefield("amber99sb-ildn")
 def test_finalization_ignores_client_controlled_output_directory(tmp_path):
     runner = StepRunner(tmp_path / "task", pipeline_type="pure-membrane")
     source = _checkpoint_system()
@@ -116,11 +128,32 @@ def test_finalization_ignores_client_controlled_output_directory(tmp_path):
     assert (runner.step_dir("export") / "confined.zip").is_file()
 
 
+@pytest.mark.parametrize(
+    "module",
+    [ExportModule(), CGExportModule(), BilayerCGExportModule(), SolventCGExportModule()],
+)
+@pytest.mark.parametrize("unsafe_name", ["../escape", "nested/name", "x" * 65])
+def test_all_exporters_reject_archive_names_outside_portable_boundary(
+    module, unsafe_name, tmp_path
+):
+    with pytest.raises(ModuleConfigError, match="system_name"):
+        module.validate_config({"output_dir": tmp_path, "system_name": unsafe_name})
+    assert not (tmp_path.parent / "escape.zip").exists()
+
+
+@requires_forcefield("amber99sb-ildn")
+@pytest.mark.parametrize("resid", [1, 10000])
 def test_wet_finalization_contract_includes_launcher_and_mdp_without_path_leaks(
     tmp_path,
+    resid,
+    monkeypatch,
 ):
     runner = StepRunner(tmp_path, pipeline_type="membrane-bilayer")
+    # This fixture isolates export layout; real input gating is covered by
+    # test_input_readiness with complete and broken coordinate structures.
+    monkeypatch.setattr(runner, "input_validation_current", lambda: True)
     source = _checkpoint_system()
+    source.structure.resids = [resid]
     source.save_checkpoint(runner.step_dir("ions"))
 
     result = runner.finalize_from_checkpoint(
@@ -138,6 +171,7 @@ def test_wet_finalization_contract_includes_launcher_and_mdp_without_path_leaks(
         names = archive.namelist()
         assert "run_md.sh" in names
         assert "mdp/mini.mdp" in names
+        assert ("structure/input.pdb" in names) == (resid <= 9999)
         assert (archive.getinfo("run_md.sh").external_attr >> 16) & 0o111
     public_log = "\n".join(result["log"])
     assert str(tmp_path) not in public_log
@@ -180,6 +214,34 @@ def test_legacy_download_route_survives_process_restart(tmp_path, monkeypatch):
     assert Path(response.path) == archive
 
 
+@pytest.mark.parametrize("route", ["api_task_download", "api_download"])
+@pytest.mark.parametrize("state_kind", ["expired", "missing", "malformed"])
+def test_download_rejects_invalid_lifecycle_before_artifact_lookup(
+    tmp_path, monkeypatch, route, state_kind
+):
+    manager = TaskManager(tmp_path / "tasks")
+    task = manager.create_task("complete.pdb")
+    task_id = task["task_id"]
+    state_path = manager.get_task_dir(task_id) / "state.json"
+    if state_kind == "expired":
+        state = json.loads(state_path.read_text())
+        state["created_at"] = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+        state_path.write_text(json.dumps(state))
+    elif state_kind == "missing":
+        state_path.unlink()
+    else:
+        state_path.write_text("not json")
+    monkeypatch.setattr(server, "task_manager", manager)
+    monkeypatch.setattr(server, "_tasks", {task_id: {"status": "completed"}})
+
+    def forbidden(*args):
+        pytest.fail("Invalid lifecycle reached output resolution")
+
+    monkeypatch.setattr(server, "_authoritative_task_zip", forbidden)
+    monkeypatch.setattr(manager, "get_output_dir", forbidden)
+    assert asyncio.run(getattr(server, route)(task_id)).status_code == 404
+
+
 def test_public_build_log_redacts_server_paths():
     assert (
         server._redact_server_paths(
@@ -200,8 +262,10 @@ def test_path_redaction_uses_configured_task_root(monkeypatch):
     )
 
 
-def test_finalization_requires_the_confirmed_checkpoint(tmp_path):
-    result = StepRunner(tmp_path, "membrane-bilayer").finalize_from_checkpoint("ions")
+def test_finalization_requires_the_confirmed_checkpoint(tmp_path, monkeypatch):
+    runner = StepRunner(tmp_path, "membrane-bilayer")
+    monkeypatch.setattr(runner, "input_validation_current", lambda: True)
+    result = runner.finalize_from_checkpoint("ions")
     assert result["status"] == "error"
     assert "Ion" in result["error"] or "ions" in result["error"]
 
@@ -242,8 +306,7 @@ def test_new_task_ids_have_full_entropy_and_private_files(tmp_path):
     assert (task_dir / "state.json").stat().st_mode & 0o077 == 0
 
 
-def test_online_lipid_build_is_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("GMXBUILDER_ALLOW_ONLINE_LIPID_BUILD", raising=False)
+def test_retired_lipid_build_route_rejects_unauthenticated_requests():
     with TestClient(app) as client:
         response = client.post(
             "/api/build-lipid-library",

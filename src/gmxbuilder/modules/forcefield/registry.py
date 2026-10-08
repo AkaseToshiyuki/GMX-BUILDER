@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Type
-
 from gmxbuilder.modules.forcefield.base_ff import ForceField
 
 
 class ForceFieldRegistry:
     """Registry of available force field implementations."""
 
-    _forcefields: dict[str, Type[ForceField]] = {}
+    _forcefields: dict[str, type[ForceField]] = {}
 
     @classmethod
-    def register(cls, ff_class: Type[ForceField]) -> Type[ForceField]:
+    def register(cls, ff_class: type[ForceField]) -> type[ForceField]:
         cls._forcefields[ff_class.name] = ff_class
         return ff_class
 

@@ -4,15 +4,40 @@ After=network.target
 
 [Service]
 Type=simple
+User=gmxbuilder
+Group=gmxbuilder
+StateDirectory=gmxbuilder
+# Provision this account's user bus and managed FUSE storage before enabling.
+# XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS must be set for its numeric UID in
+# secrets.env; isolated operations are launched via systemd-run --user.
 WorkingDirectory=/opt/gmxbuilder
 Environment=GMXBUILDER_DEPLOYMENT_MODE=public
-Environment=GMXBUILDER_TASK_DIR=/var/lib/gmxbuilder/tasks
+Environment=GMXBUILDER_INSTALL_LOCK=/var/lib/gmxbuilder/install.lock
+Environment=GMXBUILDER_MANAGED_ROOT=/var/lib/gmxbuilder/web-storage/mounted
+Environment=GMXBUILDER_TASK_DIR=/var/lib/gmxbuilder/web-storage/mounted/tasks
+# This is a system unit; worker dependencies belong to the separate user manager.
+# Do not set PartOf to a same-named unit in the wrong manager.
+Environment=GMXBUILDER_SERVICE_UNIT=
+ExecStopPost=/usr/bin/systemctl --user stop gmxbuilder-op-*.service
+Environment=GMXBUILDER_CPU_CORES=4
+Environment=GMXBUILDER_MAX_BUILDS=1
+Environment=GMXBUILDER_TASK_THREADS=4
+Environment=GMXBUILDER_TASK_MEMORY_GIB=16
+Environment=GMXBUILDER_TASK_MAX_PERSISTENT_GIB=2
+Environment=GMXBUILDER_STORAGE_MAX_GIB=100
+Environment=TMPDIR=/var/lib/gmxbuilder/web-storage/mounted/tmp
+Environment=XDG_CACHE_HOME=/var/lib/gmxbuilder/web-storage/mounted/cache
 Environment=GMXBUILDER_CORS_ORIGINS=https://gmxbuilder.example.org
+Environment=GMXBUILDER_ALLOWED_HOSTS=gmxbuilder.example.org
 Environment=GMXBUILDER_TRUSTED_PROXIES=127.0.0.1/32
+# Preserve the socket peer for the application's own trusted-proxy validation.
+Environment=FORWARDED_ALLOW_IPS=
 EnvironmentFile=/etc/gmxbuilder/secrets.env
 ExecStart=/opt/gmxbuilder/.venv/bin/gmxbuilder serve --host 127.0.0.1 --port 7788
 Restart=on-failure
 RestartSec=3
+MemoryMax=16G
+MemorySwapMax=0
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

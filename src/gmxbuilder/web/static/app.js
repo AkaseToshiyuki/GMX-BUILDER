@@ -14,11 +14,25 @@ const state = {
   buildRunning: false,
   customLipidBusy: false,
 };
+// `const` at script scope is not a property of `window`, which puts the whole
+// wizard state out of reach of anything driving the page from outside it --
+// a browser test, or the console. Exposed the same way the viewer and the
+// chain/molecule selections already are. Mutated in place, never reassigned,
+// so the two names never diverge.
+window.state = state;
 var _cgenffUploads = {};
 var _ligandChargeDrafts = {};
+var _charmmCompatSmiles = {};
+var _charmmCompatResearch = false;
+var _charmmIdentitySources = {};
+var _charmmMol2Uploads = {};
+var _charmmIdentityRequest = 0;
+var _charmmIdentityTimer = null;
+var _restoredLigandBackend = null;
 var _ligandChargeOrigins = {};
 var _computedLigandCharges = {};
 var _computedLigandChargePH = null;
+var _ligandChargeRequest = 0;
 
 // Step metadata — title + icon for each module name
 const STEP_META = {
@@ -28,6 +42,7 @@ const STEP_META = {
   orient:     { title: 'Orientation' },
   solvation:  { title: 'Solvent & Box' },
   ions:       { title: 'Ions' },
+  final_review: { title: 'Final Structure Review' },
   forcefield: { title: 'Force Field' },
   topology:   { title: 'Topology & Parameters' },
   simparams:  { title: 'Simulation Params' },
@@ -60,6 +75,16 @@ const ROUTE_WORKFLOWS = Object.fromEntries(
   Object.entries(WORKFLOW_ROUTES).map(function(entry) { return [entry[1], entry[0]]; })
 );
 let _restoringRoute = false;
+let _resumeError = '';
+function showResumeError(message) {
+  let notice=document.getElementById('task-resume-error');
+  if(!notice) {
+    notice=document.createElement('div');notice.id='task-resume-error';
+    notice.className='input-check-report error';notice.setAttribute('role','alert');
+  }
+  const panel=document.querySelector('.panel.active') || document.getElementById('panel-task-type');
+  panel.querySelector('h2').after(notice);notice.textContent=message;
+}
 
 async function copyTaskIdToClipboard() {
   const taskId = String(state.taskId || '').trim();
@@ -94,9 +119,8 @@ function taskRouteSlug() {
 function syncTaskRoute(stepIdx, forceReplace) {
   const slug = taskRouteSlug();
   if (!slug || stepIdx < 0) return;
-  // Task identifiers are deliberately kept out of browser history, address
-  // bars, referrer headers, screenshots, and shared links.  Task recovery is
-  // explicit through the Resume-by-ID form on the home page.
+  // Keep task identifiers out of URLs; remember only this tab's task context.
+  rememberCurrentTask();
   const target = '/' + slug + '/Step' + (stepIdx + 1);
   if (window.location.pathname === target) return;
   if (_restoringRoute || forceReplace) history.replaceState({}, '', target);
@@ -105,23 +129,63 @@ function syncTaskRoute(stepIdx, forceReplace) {
 
 function parseTaskRoute(pathname) {
   const match = String(pathname || '').match(
-    /^\/(BilayerBuilder|PureBilayerSystem|Solvator|CoarseGrainedBuilder)\/Step(\d+)\/?$/
+    /^\/([A-Za-z0-9]+)\/Step(\d+)\/?$/
   );
-  if (!match) return null;
+  if (!match || !ROUTE_WORKFLOWS[match[1]]) return null;
   return {
     workflow: ROUTE_WORKFLOWS[match[1]],
     stepIdx: Math.max(0, parseInt(match[2], 10) - 1),
   };
 }
 
+function rememberCurrentTask() {
+  if (!state.taskType || state.currentStepIdx < 0) return;
+  try {
+    sessionStorage.setItem('gmxbuilder-current-task', JSON.stringify({
+      task_id: state.taskId, workflow: state.taskType.id, step: state.currentStepIdx
+    }));
+  } catch (_error) { /* Manual resume remains available when storage is disabled. */ }
+}
+
+function forgetCurrentTask() {
+  try { sessionStorage.removeItem('gmxbuilder-current-task'); } catch (_error) {}
+}
+
+function exitCurrentTask() {
+  forgetCurrentTask();
+  // A fresh document releases viewers and polling without cancelling server work.
+  window.location.replace('/');
+}
+
+function acceptedManagedUpload(ticket) {
+  if (!ticket || !/^[a-f0-9]{32}$/.test(ticket.task_id || '')) return;
+  state.taskId = ticket.task_id;
+  document.getElementById('task-id-display').textContent = ticket.task_id;
+  document.getElementById('header-task-id').classList.remove('hidden');
+  rememberCurrentTask();
+}
+
 async function restoreRouteFromLocation() {
   const route = parseTaskRoute(window.location.pathname);
-  if (!route) return;
+  if (!route) { goToTaskSelect(); return; }
+  var saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem('gmxbuilder-current-task')); } catch (_error) {}
   _restoringRoute = true;
+  var panels = document.getElementById('panels');
   try {
+    if (saved && saved.workflow === route.workflow && /^[a-f0-9]{12}(?:[a-f0-9]{20})?$/.test(saved.task_id || '')) {
+      panels.inert = true;
+      document.getElementById('panel-task-type').classList.remove('active');
+      showComputeQueueStatus({task_id:saved.task_id, status:'running', message:'Restoring the saved task and current operation status…'});
+      if (await resumeTask(saved.task_id, route.stepIdx)) return;
+      forgetCurrentTask();
+    }
     await selectTaskType(route.workflow);
-    goToWizardStep(Math.min(route.stepIdx, state.wizardSteps.length - 1));
+    // A URL without saved task context cannot prove that later steps passed.
+    goToWizardStep(0);
+    if(_resumeError) showResumeError(_resumeError);
   } finally {
+    panels.inert = false;
     _restoringRoute = false;
     if (state.currentStepIdx >= 0) syncTaskRoute(state.currentStepIdx, true);
   }
@@ -130,15 +194,31 @@ async function restoreRouteFromLocation() {
 // ----- Init -----
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('DOMContentLoaded START');
+  const taskGrid = document.getElementById('task-grid');
+  taskGrid.inert = true;
   try {
-  await Promise.all([loadTaskTypes(), loadOptions()]);
+  loadOptions();
+  const tasksLoaded = await loadTaskTypes();
+  if (!tasksLoaded) {
+    const notice = document.createElement('div');
+    notice.id = 'startup-load-error';
+    notice.setAttribute('role', 'alert');
+    notice.textContent = 'Workflow options could not be loaded. Please retry. ';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry loading page';
+    retry.addEventListener('click', () => window.location.reload());
+    notice.appendChild(retry);
+    taskGrid.before(notice);
+    return;
+  }
   setupUpload();
   setupRunButton();
   initOrientationStep();
   initStructureProcessing();
   
   initCustomLipidModal();
-  initComputeQueueModal();
+  initComputeQueueStatus();
   initSimParams();
   initCheckButtons();
   initCoarseGrainedControls();
@@ -147,7 +227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (solvBtn) {
     solvBtn.addEventListener("click", async function() {
       await _doCheckStep('solvation', 'solv-check-status', 'solv-check-btn');
-      setTimeout(function() { renderSolvationViewer(); }, 300);
+
     });
   }
   // Any Step 6 input change invalidates the saved checkpoint and requires
@@ -165,6 +245,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderSimStages();
     reloadModificationCatalog();
     reloadCrosslinkCapabilities();
+    reloadTerminalCapabilities();
     const dropdown = document.getElementById('lipid-picker-dropdown');
     if (dropdown && !dropdown.classList.contains('hidden')) renderLipidList('');
   });
@@ -178,6 +259,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (select) select.addEventListener('change', function() {
       resetForceFieldCheck();
       renderLigandChargeInputs();
+      updateV4CompositionAvailability();
       const dropdown = document.getElementById('lipid-picker-dropdown');
       if (dropdown && !dropdown.classList.contains('hidden')) renderLipidList('');
     });
@@ -199,20 +281,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   var copyTaskIdButton = document.getElementById('copy-task-id');
   if (copyTaskIdButton) copyTaskIdButton.addEventListener('click', copyTaskIdToClipboard);
-  // A full page load/reload never reconstructs task state from a URL.  Return
-  // to the task selector and require the user to enter the saved Task ID.
-  // In-page navigation still uses clean /Workflow/StepN history entries.
-  if (window.location.pathname !== '/') history.replaceState({}, '', '/');
+  document.getElementById('exit-task')?.addEventListener('click', exitCurrentTask);
+  await restoreRouteFromLocation();
   window.addEventListener('popstate', function() {
     restoreRouteFromLocation();
   });
+  taskGrid.inert = false;
   console.log('DOMContentLoaded END — all init functions called');
   } catch(e) { console.error('DOMContentLoaded error:', e.message, e.stack); }
 
   // Cleanup build-polling intervals on page unload (prevent stale HTTP requests)
   window.addEventListener('beforeunload', function() {
     if (window._buildPollTimers) {
-      window._buildPollTimers.forEach(function(t) { clearInterval(t); });
+      window._buildPollTimers.forEach(function(t) { GMXPoll.stop(t); });
       window._buildPollTimers = [];
     }
   });
@@ -224,17 +305,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadTaskTypes() {
   try {
-    const res = await fetch('/api/task-types');
-    const data = await res.json();
+    const data = await GMXHttp.json('/api/task-types', {}, {
+      validate: data => Array.isArray(data.task_types)
+    });
     renderTaskCards(data.task_types);
+    return true;
   } catch (err) {
     console.error('Failed to load task types:', err);
+    return false;
   }
 }
 
 function renderTaskCards(taskTypes) {
   const grid = document.getElementById('task-grid');
   grid.innerHTML = '';
+  const planned = taskTypes.filter(t => !t.enabled);
+  const plannedSection = document.createElement('details');
+  plannedSection.className = 'planned-workflows';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Planned workflows (' + planned.length + ')';
+  plannedSection.appendChild(summary);
+  const plannedGrid = document.createElement('div');
+  plannedGrid.className = 'task-grid';
+  plannedSection.appendChild(plannedGrid);
 
   // Group by category
   const grouped = {};
@@ -243,19 +336,23 @@ function renderTaskCards(taskTypes) {
     grouped[t.category].push(t);
   });
 
-  // Render with category headers
+  // Both availability sections keep their own category headings.
   for (const [cat, types] of Object.entries(grouped)) {
     // Category header
-    const header = document.createElement('div');
+    const header = document.createElement('h3');
     header.className = 'card-category-header';
-    header.style.cssText = `grid-column:1/-1;font-size:13px;font-weight:700;color:${CAT_COLORS[cat]||'#64748b'};margin-top:${Object.keys(grouped).indexOf(cat)>0?'16px':'0'};`;
+    header.style.color = CAT_COLORS[cat] || '#64748b';
     header.textContent = cat;
-    grid.appendChild(header);
+    if (types.some(t => t.enabled)) grid.appendChild(header.cloneNode(true));
+    if (types.some(t => !t.enabled)) plannedGrid.appendChild(header);
 
     types.forEach(t => {
-      const card = document.createElement('div');
+      const card = document.createElement('button');
+      card.type = 'button';
       card.className = 'task-card' + (t.enabled ? '' : ' disabled');
       card.dataset.taskId = t.id;
+      card.disabled = !t.enabled;
+      card.setAttribute('aria-pressed', 'false');
 
       const badge = t.enabled ? '' : '<span class="card-badge">Coming Soon</span>';
 
@@ -270,25 +367,35 @@ function renderTaskCards(taskTypes) {
       if (t.enabled) {
         card.addEventListener('click', () => selectTaskType(t.id));
       }
-      grid.appendChild(card);
+      (t.enabled ? grid : plannedGrid).appendChild(card);
     });
   }
+  if (planned.length) grid.appendChild(plannedSection);
 }
 
 async function selectTaskType(taskId) {
   try {
     // Show selection
     document.querySelectorAll('.task-card').forEach(c => {
-      c.classList.toggle('selected', c.dataset.taskId === taskId);
+      const selected = c.dataset.taskId === taskId;
+      c.classList.toggle('selected', selected);
+      c.setAttribute('aria-pressed', selected ? 'true' : 'false');
     });
 
-    const res = await fetch(`/api/task-type/${taskId}`);
-    state.taskType = await res.json();
+    state.taskType = await GMXHttp.json(`/api/task-type/${taskId}`, {}, {
+      validate: data => Array.isArray(data.visible_modules)
+    });
     state.wizardSteps = state.taskType.visible_modules || [];
     state.currentStepIdx = 0;
     state.completedSteps = new Set();   // reset locks on new task type
     state.pdbInfo = null;               // reset PDB info
     state.taskId = null;
+    _charmmCompatSmiles = {};
+    _charmmCompatResearch = false;
+    _restoredLigandBackend = null;
+    resetLigandPHState();
+    window._ffCompatibility = null;
+    _ffCompatibilityValid = false;
     var taskIdText = document.getElementById('task-id-display');
     var taskIdBox = document.getElementById('header-task-id');
     if (taskIdText) taskIdText.textContent = '';
@@ -297,6 +404,7 @@ async function selectTaskType(taskId) {
     _orientedPdbContent = null;
     _membraneCheckpointPdb = null;
     _membraneActualBox = null;
+    _membraneActualCounts = null;
     _checkedSteps.clear();
     _checkedConfig = null;
     _compositionChecked = false;
@@ -322,12 +430,15 @@ async function selectTaskType(taskId) {
         throw new Error(createResult.error || 'Could not create task');
       }
       state.taskId = createResult.task_id;
+      rememberCurrentTask();
       if (taskIdText) taskIdText.textContent = state.taskId;
       if (taskIdBox) taskIdBox.classList.remove('hidden');
       setTimeout(loadTaskCustomLipids, 0);
       syncTaskRoute(0, true);
     }
 
+    if (state.taskType.requires_input === false && !await ensureOptionsLoaded()) return;
+    if (isCoarseGrainedWorkflow()) loadMartiniLipidCapabilities().catch(function() {});
     configureTaskSpecificControls();
 
     // Adapt UI for liquid builder: no solvation check needed, different labels
@@ -536,6 +647,7 @@ const _CG_STEP_ORDER = [
 ];
 
 function invalidateCoarseGrainedFrom(stepName) {
+  renderMembraneCompositionWarnings([]);
   if (!isCoarseGrainedWorkflow()) return;
   var start = _CG_STEP_ORDER.indexOf(stepName);
   if (start < 0) return;
@@ -667,12 +779,17 @@ function openCgLipidPicker(anchor) {
   var picker = document.getElementById('cg-lipid-picker-dropdown');
   if (!picker) return;
   var rect = anchor.getBoundingClientRect();
-  picker.style.position = 'fixed'; picker.style.left = rect.left + 'px';
-  picker.style.top = (rect.bottom + 4) + 'px'; picker.style.width = Math.max(rect.width, 500) + 'px';
+  var margin = 8;
+  var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  var dropdownWidth = Math.min(Math.max(rect.width, 500), Math.max(0, viewportWidth - margin * 2));
+  var dropdownLeft = Math.max(margin, Math.min(rect.left, viewportWidth - dropdownWidth - margin));
+  picker.style.position = 'fixed'; picker.style.left = dropdownLeft + 'px';
+  picker.style.top = (rect.bottom + 4) + 'px'; picker.style.width = dropdownWidth + 'px';
   picker.classList.remove('hidden');
   var search = document.getElementById('cg-lipid-picker-search');
   if (search) search.value = '';
   renderCgLipidPicker('');
+  keepDropdownInViewport(picker, rect);
 }
 
 function closeCgLipidPicker() {
@@ -944,7 +1061,7 @@ function syncPureMembraneSolvationOption(invalidate) {
 
   var desired = ['forcefield', 'membrane', 'solvation'];
   if (includeSolvent) desired.push('ions');
-  desired.push('simparams');
+  desired.push('final_review', 'simparams');
   var changed = JSON.stringify(state.wizardSteps) !== JSON.stringify(desired);
   state.wizardSteps = desired;
   if (changed) renderStepNav();
@@ -1017,7 +1134,7 @@ function loadTaskDefaults() {
   // Apply defaults to form fields
   if (defaults.membrane) {
     const m = defaults.membrane;
-    selectLipid(m.lipid_type || 'POPC');
+    selectLipid(m.lipid_type || 'POPC', {restoreDefault: true});
     const nLipidsEl = document.getElementById('n-lipids-per-leaflet');
     if (nLipidsEl) nLipidsEl.value = m.n_lipids_per_leaflet || 150;
   }
@@ -1104,7 +1221,8 @@ function canGoToStep(idx) {
     if (!modName) continue;
     // Skip steps that don't require explicit checks
     if (modName === 'topology' || modName === 'simparams' || modName === 'export') continue;
-    if (modName === 'ions' && !(window._isSystemConfirmed ? window._isSystemConfirmed() : false)) {
+    if (modName === 'membrane' && v4CompositionErrors().length) return false;
+    if (modName === 'final_review' && !window.isFinalReviewConfirmed()) {
       return false;
     }
     if (!_checkedSteps.has(modName) && !state.completedSteps.has(i)) return false;
@@ -1135,24 +1253,24 @@ function isCurrentStepFulfilled() {
   if (modName === 'topology' || modName === 'simparams' || modName === 'export') return true;
   if (modName === 'ions') {
     return _checkedSteps.has('ions') &&
-      (window._isIonsChecked ? window._isIonsChecked() : false) &&
-      (window._isSystemConfirmed ? window._isSystemConfirmed() : false);
+      (window._isIonsChecked ? window._isIonsChecked() : false);
   }
-  if (modName === 'cg_system') {
-    return _checkedSteps.has('cg_system') &&
-      document.getElementById('cg-confirm-system')?.checked === true;
-  }
+  if (modName === 'membrane') return _checkedSteps.has(modName) && !v4CompositionErrors().length;
+  if (modName === 'final_review') return window.isFinalReviewConfirmed();
+  if (modName === 'forcefield') return _checkedSteps.has(modName) && _ffCompatibilityValid;
   return _checkedSteps.has(modName);
 }
 
 function goToTaskSelect() {
+  forgetCurrentTask();
   // Always allowed back
   state.currentStepIdx = -1;
+  clearStepProgress();
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   var panel0 = document.getElementById('panel-task-type');
   if (panel0) panel0.classList.add('active');
   updateStepNavHighlight();
-  if (!_restoringRoute) history.pushState({}, '', '/');
+  if (!_restoringRoute && window.location.pathname !== '/') history.pushState({}, '', '/');
 }
 
 // ---- Step execution on server (incremental checkpoint build) ----
@@ -1161,48 +1279,61 @@ var _viewerLoadTimer = null;  // cleared before setting new setTimeout in goToWi
 
 /** Centralized fetch helper — throws on non-2xx, parses JSON on success. */
 async function _apiFetch(url, options) {
-  var res = await fetch(url, options);
-  if (!res.ok) {
-    var text = await res.text().catch(function() { return ''; });
-    throw new Error('HTTP ' + res.status + ': ' + (text || res.statusText).substring(0, 200));
-  }
-  return res.json();
+  // Step handlers consume structured domain errors, warnings and repair details.
+  return GMXHttp.json(url, options, {allowErrorPayload: true});
 }
 
-async function _runStepOnServer(stepName, config) {
-  if (_stepRunning || !state.taskId) return null;
-  _stepRunning = true;
-  var statusEl = document.getElementById('step-run-status');
-  if (statusEl) { statusEl.textContent = 'Running...'; statusEl.style.display = 'block'; }
-  try {
-    var result = await _apiFetch('/api/step/' + state.taskId + '/' + stepName, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config: config || {} }),
-    });
-    if (result.status === 'ok') {
-      if (statusEl) { statusEl.textContent = '✓ Done (' + (result.elapsed_s != null ? result.elapsed_s : '?') + 's)'; statusEl.style.color = '#059669'; }
-      return result;
-    } else {
-      if (statusEl) { statusEl.textContent = '✗ ' + (result.error || 'Failed'); statusEl.style.color = '#dc2626'; }
-      return null;
-    }
-  } catch (e) {
-    if (statusEl) { statusEl.textContent = '✗ ' + (e.message || 'Network error'); statusEl.style.color = '#dc2626'; }
-    return null;
-  } finally {
-    _stepRunning = false;
-  }
-}
+// A queued preview must not keep a completed Check locked indefinitely.
+var _VIEWER_REQUEST_TIMEOUT_MS = 30000;
 
 async function _loadStepViewerPdb(stepName) {
   if (!state.taskId) return null;
+  var controller = new AbortController();
+  var timeout = setTimeout(function() { controller.abort(); }, _VIEWER_REQUEST_TIMEOUT_MS);
   try {
-    var resp = await fetch('/api/step/' + state.taskId + '/' + stepName + '/viewer.pdb');
+    var resp = await fetch('/api/step/' + state.taskId + '/' + stepName + '/viewer.pdb', {
+      signal: controller.signal
+    });
     if (resp.ok) return await resp.text();
     console.warn('_loadStepViewerPdb: HTTP', resp.status, 'for step', stepName);
-  } catch (e) { console.warn('_loadStepViewerPdb: network error for step', stepName, e); }
+  } catch (e) { console.warn('_loadStepViewerPdb: preview unavailable for step', stepName, e); }
+  finally { clearTimeout(timeout); }
   return null;
+}
+
+async function refreshCheckedInputPreview() {
+  var taskId = state.taskId;
+  var report = document.getElementById('input-check-report');
+  var previous = document.getElementById('input-preview-feedback');
+  if (previous) previous.remove();
+  var feedback = document.createElement('p');
+  feedback.id = 'input-preview-feedback';
+  feedback.className = 'hint';
+  feedback.textContent = 'Loading the checked structure preview…';
+  report.appendChild(feedback);
+  try {
+    var pdb = await _loadStepViewerPdb('input');
+    if (taskId !== state.taskId || !feedback.isConnected) return;
+    if (!pdb) throw new Error('Saved preview unavailable');
+    if (state.pdbInfo) {
+      state.pdbInfo.pdb_content = pdb;
+      var box = pdb.match(/^CRYST1\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/m);
+      if (box) state.pdbInfo.box_nm = box.slice(1).map(value => Number(value) / 10);
+    }
+    redrawPDBViewerWithChainFilter();
+    feedback.remove();
+  } catch (error) {
+    if (taskId !== state.taskId || !feedback.isConnected) return;
+    // Input validation is authoritative. A display failure does not revoke it;
+    // the separate final-system confirmation still requires a rendered viewer.
+    feedback.textContent = 'Input check passed, but the saved preview could not be displayed. You can continue or reload the preview. ';
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn';
+    retry.textContent = 'Reload preview';
+    retry.addEventListener('click', function() { refreshCheckedInputPreview(); });
+    feedback.appendChild(retry);
+  }
 }
 
 async function renderCoarseGrainedViewer(stepName, pdbOverride, preserveCamera) {
@@ -1214,8 +1345,13 @@ async function renderCoarseGrainedViewer(stepName, pdbOverride, preserveCamera) 
     cg_system: 'cg-system-viewer',
   };
   var targetId = targetMap[stepName];
+  if (!pdbOverride && ['cg_environment', 'cg_solvation', 'cg_system'].includes(stepName)) {
+    if (!_checkedSteps.has(stepName)) return false;
+    return Boolean(await GMXViewer.render(targetId, stepName));
+  }
   var target = targetId ? document.getElementById(targetId) : null;
-  if (!target || typeof $3Dmol === 'undefined') return false;
+  if (!target) return false;
+  await GMXAssets.viewer();
   // 3Dmol reads the element's client rectangle when its WebGL canvas is
   // created.  Rendering a hidden wizard panel previously produced a viewport
   // anchored to the document rather than this box.  Wait until the target is
@@ -1256,7 +1392,7 @@ async function renderCoarseGrainedViewer(stepName, pdbOverride, preserveCamera) 
   if (!viewer || !target.querySelector('canvas')) {
     target.replaceChildren();
     try {
-      viewer = $3Dmol.createViewer(target, {backgroundColor: 'white'});
+      viewer = $3Dmol.createViewer(target, {backgroundColor: window.gmxViewerBackground()});
     } catch (error) {
       target.textContent = '3D viewer unavailable: this browser does not provide a working WebGL context.';
       target.classList.add('viewer-unavailable');
@@ -1269,19 +1405,7 @@ async function renderCoarseGrainedViewer(stepName, pdbOverride, preserveCamera) 
   if (viewer.removeAllShapes) viewer.removeAllShapes();
   if (viewer.removeAllLabels) viewer.removeAllLabels();
   var model = viewer.addModel(pdb, 'pdb');
-  viewer.setStyle({}, {
-    sphere: {radius: 0.16, colorscheme: 'Jmol'},
-    stick: {radius: 0.065, colorscheme: 'Jmol'}
-  });
-  if (stepName === 'cg_mapping' || stepName === 'cg_orientation') {
-    viewer.setStyle({}, {sphere: {radius: 0.14, colorscheme: 'Jmol'}, stick: {radius: 0.08, colorscheme: 'Jmol'}});
-  }
-  viewer.setStyle(
-    {atom: ['BB', 'SC1', 'SC2', 'SC3', 'SC4', 'SC5']},
-    {sphere: {radius: 0.20, color: '#9f6f8f'}, stick: {radius: 0.08, color: '#9f6f8f'}}
-  );
-  viewer.setStyle({resn: 'W'}, {sphere: {radius: 0.045, color: '#60a5fa', opacity: 0.14}});
-  viewer.setStyle({resn: ['NA', 'CL']}, {sphere: {radius: 0.24, colorscheme: 'Jmol'}});
+  GMXStyle.apply(viewer, GMXStyle.pdbAtoms(viewer, pdb), {coarse: true});
   if (stepName === 'cg_orientation') {
     var half = Number(document.getElementById('cg-orientation-half-thickness')?.value || 1.4);
     addCgOrientationPlaneMarkers(viewer, pdb, half);
@@ -1453,40 +1577,6 @@ function showCgOrientationPreview() {
   else runCgAutomaticOrientationPreview();
 }
 
-async function confirmCoarseGrainedSystem() {
-  var checkbox = document.getElementById('cg-confirm-system');
-  var status = document.getElementById('cg-system-status');
-  if (!checkbox || !checkbox.checked || !state.taskId) return;
-  checkbox.disabled = true;
-  try {
-    var response = await fetch('/api/step/' + state.taskId + '/cg_system/confirm', {
-      method: 'POST'
-    });
-    var result = await response.json();
-    if (!response.ok || result.confirmed !== true) {
-      throw new Error(result.error || 'Confirmation failed');
-    }
-    _checkedSteps.add('cg_system');
-    // Confirmation is checkpoint metadata, never a construction option.  Keep
-    // the checked module snapshot unchanged so a later rebuild cannot smuggle
-    // confirmation into a fresh random assembly.
-    checkbox.disabled = false;
-    if (status) {
-      status.textContent = '✓ Exact CG checkpoint confirmed';
-      status.style.color = '#059669';
-    }
-    updateNextButtonState();
-    updateStepNavHighlight();
-  } catch (error) {
-    checkbox.checked = false;
-    checkbox.disabled = false;
-    if (status) {
-      status.textContent = '✗ ' + (error.message || 'Confirmation failed');
-      status.style.color = '#dc2626';
-    }
-  }
-}
-
 function initCgOrientationControls() {
   var controls = {
     z: {
@@ -1586,7 +1676,7 @@ function initCoarseGrainedControls() {
   document.addEventListener('click', function(event) {
     if (!event.target.closest('#cg-lipid-picker-dropdown') && !event.target.closest('#panel-cg_environment .mix-lipid-trigger')) closeCgLipidPicker();
   });
-  loadMartiniLipidCapabilities().catch(function() {});
+  // Capabilities are loaded when entering a coarse-grained workflow.
 
   var checks = [
     ['cg-model-check', 'cg_model', 'cg-model-status'],
@@ -1603,19 +1693,6 @@ function initCoarseGrainedControls() {
       await _doCheckStep(spec[1], spec[2], spec[0]);
     });
   });
-  var confirmation = document.getElementById('cg-confirm-system');
-  if (confirmation) {
-    confirmation.disabled = true;
-    confirmation.addEventListener('change', function() {
-      if (confirmation.checked) confirmCoarseGrainedSystem();
-      else {
-        _checkedSteps.delete('cg_system');
-        updateNextButtonState();
-        updateStepNavHighlight();
-      }
-    });
-  }
-
   var inputIds = [
     'cg-protein-model', 'cg-secondary', 'cg-secondary-string', 'cg-elastic',
     'cg-elastic-force', 'cg-elastic-lower', 'cg-elastic-upper',
@@ -1646,7 +1723,14 @@ function initCoarseGrainedControls() {
 }
 
 function goToWizardStep(idx) {
-  if (idx < 0 || idx >= state.wizardSteps.length) return;
+  const wanted = state.wizardSteps[idx];
+  if (!window._optionsReady && wanted !== 'input') {
+    const task = state.taskType;
+    ensureOptionsLoaded().then(ok => { if (ok && task === state.taskType) goToWizardStep(idx); });
+    return;
+  }
+
+  if (idx < 0 || idx >= state.wizardSteps.length || state.uploadRunning) return;
 
   // Lock check: forward steps must have all previous completed
   if (idx > state.currentStepIdx && !canGoToStep(idx)) {
@@ -1664,11 +1748,10 @@ function goToWizardStep(idx) {
     return;
   }
   if (ionIdx >= 0 && idx > ionIdx && (
-      !(window._isIonsChecked ? window._isIonsChecked() : false) ||
-      !(window._isSystemConfirmed ? window._isSystemConfirmed() : false)
+      !(window._isIonsChecked ? window._isIonsChecked() : false)
   )) {
     shakeStepNav();
-    alert("Run Check Ion Counts, inspect the complete system, and click Confirm Simulation System before proceeding.");
+    alert("Run Check Ion Counts before continuing to Final Structure Review.");
     return;
   }
   if (structIdx >= 0 && idx > structIdx && !_protonationComputed) {
@@ -1677,6 +1760,7 @@ function goToWizardStep(idx) {
     return;
   }
 
+  document.getElementById('compute-queue-status')?.classList.add('hidden');
   state.currentStepIdx = idx;
   const modName = state.wizardSteps[idx];
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -1692,8 +1776,9 @@ function goToWizardStep(idx) {
   for (var i = idx + 1; i < state.wizardSteps.length; i++) {
     state.completedSteps.delete(i);
     _checkedSteps.delete(state.wizardSteps[i]);
+    clearStepProgress(state.wizardSteps[i]);
   }
-  if (idx <= state.wizardSteps.indexOf('membrane')) { _compositionChecked = false; _membraneCheckpointPdb = null; _membraneActualBox = null; }
+  if (idx <= state.wizardSteps.indexOf('membrane')) { _compositionChecked = false; _membraneCheckpointPdb = null; _membraneActualBox = null; _membraneActualCounts = null; }
   if (idx <= state.wizardSteps.indexOf('solvation')) {
     _solvChecked = pureMembraneIncludesSolvent() ? false : true;
   }
@@ -1724,11 +1809,13 @@ function goToWizardStep(idx) {
 
   if (modName === 'forcefield') {
     refreshForceFieldCompatibility();
+    watchLigandPreparation();
   }
 
   // Load viewer data from previous step's checkpoint (not current step —
   // current step's checkpoint is created by the Check button).
   if (modName === "membrane") {
+    refreshV4LipidAvailability();
     if (_viewerLoadTimer !== null) clearTimeout(_viewerLoadTimer);
     _viewerLoadTimer = setTimeout(async function() {
       renderMembraneViewer();
@@ -1741,9 +1828,7 @@ function goToWizardStep(idx) {
     }, 400);
   }
 
-  if (modName === "ions" && window._renderIonViewer) {
-    setTimeout(function() { window._renderIonViewer(); }, 400);
-  }
+  if (modName === 'final_review') window.renderFinalReview();
 
   if (modName === 'cg_orientation') {
     setTimeout(showCgOrientationPreview, 250);
@@ -1834,13 +1919,22 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     goToPrevStep();
   }
-  // Step nav buttons (only module steps — task type is handled inline above)
-  const stepBtn = e.target.closest('#step-nav .step[data-step-module]');
-  if (stepBtn) {
-    const mod = stepBtn.dataset.stepModule;
-    const idx = state.wizardSteps.indexOf(mod);
-    if (idx >= 0) goToWizardStep(idx);
-  }
+});
+
+document.addEventListener('keydown', function(event) {
+  var option = event.target.closest('[role="option"]');
+  if (!option || !['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+  var listbox = option.closest('[role="listbox"]');
+  if (!listbox) return;
+  var options = Array.from(listbox.querySelectorAll('[role="option"]:not(:disabled)'));
+  var index = options.indexOf(option);
+  if (index < 0 || !options.length) return;
+  event.preventDefault();
+  if (event.key === 'Home') index = 0;
+  else if (event.key === 'End') index = options.length - 1;
+  else if (event.key === 'ArrowDown' || event.key === 'ArrowRight') index = (index + 1) % options.length;
+  else index = (index - 1 + options.length) % options.length;
+  options[index].focus();
 });
 
 // ===================================================================
@@ -1848,15 +1942,12 @@ document.addEventListener('click', (e) => {
 // ===================================================================
 
 async function resumeTask(taskId, requestedStepIdx) {
+  if (!await ensureOptionsLoaded()) return false;
+  _resumeError='';document.getElementById('task-resume-error')?.remove();
   try {
     state.customLipidBusy = false;
-    _customLipidFailedName = null;
-    if (_customLipidPollTimer) {
-      clearTimeout(_customLipidPollTimer);
-      _customLipidPollTimer = null;
-    }
     var res = await fetch("/api/task/" + taskId + "/resume");
-    if (!res.ok) { alert("Task not found or expired."); return; }
+    if (!res.ok) throw new Error("Task not found, expired, or temporarily unavailable. Enter the Task ID to retry.");
     var taskState = await res.json();
     var resumeStepData = null;
     try {
@@ -1867,8 +1958,7 @@ async function resumeTask(taskId, requestedStepIdx) {
     var savedTaskType = taskState.task_type || {};
     if (savedTaskType.requires_input !== false &&
         !taskState.pdb_info_full && !taskState.pdb_info) {
-      alert("Task has no PDB data — cannot resume.");
-      return;
+      throw new Error("Task has no structure data yet. Retry after its upload finishes.");
     }
 
     // Initialize wizard steps from saved state; fall back to task type defaults
@@ -1891,33 +1981,31 @@ async function resumeTask(taskId, requestedStepIdx) {
       // Final fallback
       if (!state.wizardSteps || state.wizardSteps.length === 0) {
         // Fallback if no task type found — include all possible steps
-        state.wizardSteps = taskState.visible_modules || ["input","forcefield","structure","solvation","ions","simparams"];
+        state.wizardSteps = taskState.visible_modules || ["input","forcefield","structure","solvation","ions","final_review","simparams"];
         state.taskType = { id: savedTypeId || "solvator", visible_modules: state.wizardSteps, pipeline: "solvator" };
       }
-      // Rebuild step nav
-      var nav = document.getElementById("step-nav");
-      if (nav) {
-        nav.innerHTML = "";
-        state.wizardSteps.forEach(function(modName, idx) {
-          var meta = STEP_META[modName] || { title: modName, icon: "?" };
-          var btn = document.createElement("button");
-          btn.className = "step";
-          btn.dataset.stepModule = modName;
-          btn.innerHTML = '<span class="step-num">' + (meta.icon || (idx + 1)) + '</span>' + meta.title;
-          btn.addEventListener("click", function() {
-            var si = state.wizardSteps.indexOf(modName);
-            if (si >= 0) goToWizardStep(si);
-          });
-          nav.appendChild(btn);
-        });
-      }
     }
+    renderStepNav();
+    state.completedSteps = new Set();
+    _checkedSteps.clear();
+    _checkedConfig = null;
     configureTaskSpecificControls();
     // Restore the force field before initializing simulation parameters.
     // CHARMM and Amber require different non-bonded defaults; initializing
     // against the page's Amber default would leave a resumed CHARMM task with
     // the invalid combination Force-switch + DispCorr=EnerPres.
     var savedForceFieldConfig = taskState.step_forcefield_config || taskState.forcefield || {};
+    _charmmCompatSmiles = savedForceFieldConfig.charmm_compat_smiles || {};
+    _charmmIdentitySources = {};
+    Object.keys(_charmmCompatSmiles).forEach(function(name) {
+      if (_charmmCompatSmiles[name]) _charmmIdentitySources[name] = 'smiles';
+    });
+    Object.keys(savedForceFieldConfig.charmm_compat_mol2 || {}).forEach(function(name) {
+      _charmmIdentitySources[name] = 'mol2';
+    });
+    _charmmMol2Uploads = taskState.ligand_chemistry_uploads || {};
+    _charmmCompatResearch = savedForceFieldConfig.charmm_compat_allow_research === true;
+    _restoredLigandBackend = savedForceFieldConfig.ligand_ff || null;
     var resumedProteinForceField = document.getElementById('ff-protein');
     if (resumedProteinForceField && typeof savedForceFieldConfig.name === 'string') {
       var savedForceFieldOption = Array.from(resumedProteinForceField.options).some(function(option) {
@@ -1945,7 +2033,13 @@ async function resumeTask(taskId, requestedStepIdx) {
       pdb_content: taskState.pdb_content || "",
       sequences: taskState.sequences || [],
       small_molecules: pdb.small_molecules || taskState.small_molecules || [],
-      validation_warnings: [],
+      validation_warnings: taskState.validation_warnings || [],
+      input_status: taskState.input_status,
+      cell_info: taskState.cell_info,
+      input_validation: taskState.input_validation,
+      chain_mapping: taskState.chain_mapping || {},
+      selection_info: taskState.input_selection_summary || null,
+      fragment_choices: taskState.input_fragment_choices || null,
       task_id: taskId,
     };
 
@@ -1979,10 +2073,18 @@ async function resumeTask(taskId, requestedStepIdx) {
     // by Step 3 and reject stale/out-of-range values such as 0.0.
     var savedStructureConfig = taskState.step_structure_config || taskState.structure || {};
     var savedPH = savedStructureConfig.pH;
+    if (savedForceFieldConfig.ligand_pH !== undefined) savedPH = savedForceFieldConfig.ligand_pH;
     if (savedPH === undefined) savedPH = taskState.pH;
     savedPH = Number(savedPH === undefined ? 7.0 : savedPH);
     if (!Number.isFinite(savedPH) || savedPH < 1.0 || savedPH > 13.0) savedPH = 7.0;
     _systemPH = savedPH;
+    _ligandChargeRequest++;
+    _computedLigandCharges = {}; _computedLigandChargePH = null;
+    _ligandChargeDrafts = {}; _ligandChargeOrigins = {};
+    Object.entries(savedForceFieldConfig.ligand_charges || {}).forEach(function(entry) {
+      _ligandChargeDrafts[entry[0]] = String(entry[1]);
+      _ligandChargeOrigins[entry[0]] = 'manual';
+    });
     var resumedPHInput = document.getElementById('proc-pH');
     if (resumedPHInput) resumedPHInput.value = savedPH.toFixed(1);
 
@@ -1994,6 +2096,19 @@ async function resumeTask(taskId, requestedStepIdx) {
 
     // Show upload info and navigate
     if (info.num_atoms > 0) showUploadInfo(info);
+    restoreInputSelection(taskState.input_selection || {});
+    var savedInput = taskState.step_input_config || {};
+    document.getElementById('input-allow-incomplete').checked = savedInput.allow_incomplete_protein === true;
+    document.getElementById('input-renumber-residues').checked = savedInput.renumber_residues === true;
+    Object.keys(savedInput.chain_names || {}).forEach(function(chain) {
+      if (_chainState[chain]) {
+        _chainState[chain].name = savedInput.chain_names[chain];
+        document.querySelectorAll('.chain-rename').forEach(function(button) {
+          if (button.dataset.chain === chain) button.textContent = savedInput.chain_names[chain];
+        });
+      }
+    });
+    _savedFragmentConfig = savedInput;
     setInputModificationReport(taskState.input_modifications || {});
     restoreStructureProcessingConfig(savedStructureConfig);
     renderModificationGeometryReport(taskState.modification_geometry || []);
@@ -2007,33 +2122,52 @@ async function resumeTask(taskId, requestedStepIdx) {
         return typeof step === 'string' ? step : step.name;
       });
     }
-    if (_resumeCheckedSteps.length === 0) {
+    if (!resumeStepData && !taskState.input_check_required) {
       _resumeCheckedSteps = (taskState.steps_completed || []).slice();
+    }
+    if (taskState.input_check_required) {
+      _resumeCheckedSteps = [];
+      revokeStepPass('input');
+      var recheckStatus = document.getElementById('input-check-status');
+      if (recheckStatus) {
+        recheckStatus.textContent = 'Run Check Upload again: this task has not passed the current input validation.';
+        recheckStatus.style.color = '#d97706';
+      }
     }
     _protonationComputed = _resumeCheckedSteps.indexOf('structure') >= 0;
     _solvChecked = _resumeCheckedSteps.indexOf('solvation') >= 0;
     _compositionChecked = _resumeCheckedSteps.indexOf('membrane') >= 0;
+    var membraneRecord = (resumeStepData && resumeStepData.steps || []).find(function(step) {
+      return step && typeof step === 'object' && ['membrane', 'cg_environment'].includes(step.name);
+    });
+    renderMembraneCompositionWarnings(membraneRecord && membraneRecord.membrane_metrics && membraneRecord.membrane_metrics.membrane_composition_warnings || []);
+    _membraneActualCounts = membraneRecord && membraneRecord.membrane_metrics && membraneRecord.membrane_metrics.membrane || null;
+    _membraneActualBox = membraneRecord && membraneRecord.membrane_metrics && membraneRecord.membrane_metrics.box_dimensions_nm || null;
+    var membraneConfig = taskState.step_membrane_config || {};
+    if (membraneConfig.lipid_composition && membraneConfig.lipid_composition.upper) {
+      _mixUpper = membraneConfig.lipid_composition.upper;
+      _asymmetric = Array.isArray(membraneConfig.lipid_composition.lower);
+      _mixLower = _asymmetric ? membraneConfig.lipid_composition.lower : _mixUpper.map(m => ({...m}));
+      var asymmetryToggle = document.getElementById('asymmetric-bilayer');
+      if (asymmetryToggle) asymmetryToggle.checked = _asymmetric;
+      document.getElementById('lower-leaflet-section').classList.toggle('hidden', !_asymmetric);
+      updateLeafletLabels();
+    }
+    var savedLipidCount = document.getElementById('n-lipids-per-leaflet');
+    if (savedLipidCount && membraneConfig.n_lipids_per_leaflet) savedLipidCount.value = membraneConfig.n_lipids_per_leaflet;
+
     var hasIonCheckpoint = _resumeCheckedSteps.indexOf('ions') >= 0;
     if (window._setIonsChecked) window._setIonsChecked(hasIonCheckpoint);
-    var persistedBuildStatus = (taskState.build_status || {}).status;
-    var canRestoreSystemConfirmation = hasIonCheckpoint && (
-      taskState.current_step === 'simparams' ||
-      ['queued', 'running', 'completed'].indexOf(persistedBuildStatus) >= 0
-    );
-    if (window._setSystemConfirmed) {
-      window._setSystemConfirmed(canRestoreSystemConfirmation);
-    }
+    if (window._setSystemConfirmed) window._setSystemConfirmed(false);
+    if (window.invalidateFinalReview) window.invalidateFinalReview();
     // Pre-mark completed steps
     var completedSteps = _resumeCheckedSteps;
     completedSteps.forEach(function(stepName) {
       var si = state.wizardSteps.indexOf(stepName);
       if (si >= 0) markStepComplete(si);
     });
-    // Input step is always complete when PDB data exists (step 0 lock bypass)
-    var inputIdx = state.wizardSteps.indexOf("input");
-    if (inputIdx >= 0 && state.pdbInfo && (
-        state.pdbInfo.num_atoms > 0 || _resumeCheckedSteps.indexOf('input') >= 0
-    )) markStepComplete(inputIdx);
+
+    if (_resumeCheckedSteps.includes('input') && info.num_atoms > 0) showCheckedInputSummary(info);
 
     if (isCoarseGrainedWorkflow()) {
       var cgSystemRecord = (resumeStepData && resumeStepData.steps || []).find(function(step) {
@@ -2047,28 +2181,37 @@ async function resumeTask(taskId, requestedStepIdx) {
       }
     }
 
-    // Force-advance currentStepIdx past lock check (resume = all prior steps are done)
+    // Navigation still checks the restored server checkpoints.
     state.currentStepIdx = 0;
 
     var resumedBuild = taskState.build_status || {};
     var completedBuild = resumedBuild.status === "completed" &&
-      resumedBuild.download_available === true && resumedBuild.result;
+      resumedBuild.download_available === true && resumedBuild.result &&
+      !taskState.input_check_required;
 
     // Navigate to the first incomplete step. A completed finalization resumes
     // directly on the Simulation Parameters result panel unless the URL
     // explicitly requested another step.
     var currentStep = taskState.resume_step || taskState.current_step ||
       state.wizardSteps[0] || "input";
+    if (currentStep === 'simparams' && !completedBuild) currentStep = 'final_review';
     var stepIdx = state.wizardSteps.indexOf(currentStep);
-    if (Number.isInteger(requestedStepIdx)) {
+    if (taskState.input_check_required) {
+      stepIdx = state.wizardSteps.indexOf('input');
+    } else if (Number.isInteger(requestedStepIdx)) {
       stepIdx = Math.max(0, Math.min(requestedStepIdx, state.wizardSteps.length - 1));
     } else if (completedBuild) {
       var resultStepIdx = state.wizardSteps.indexOf("simparams");
       if (resultStepIdx >= 0) stepIdx = resultStepIdx;
     }
-    if (stepIdx >= 0) {
-      // Navigate first, then show message (alert blocks UI)
-    goToWizardStep(stepIdx);
+    if (completedBuild && state.wizardSteps[stepIdx] === 'simparams') {
+      // Restore access to an existing download without fabricating fresh approval.
+      state.currentStepIdx=stepIdx;
+      document.querySelectorAll('.panel').forEach(panel=>panel.classList.toggle('active',panel.id==='panel-simparams'));
+      updateStepNavHighlight();
+    } else {
+      while (stepIdx > 0 && !canGoToStep(stepIdx)) stepIdx--;
+      if (stepIdx >= 0) goToWizardStep(stepIdx);
     }
 
     // Show success message after navigation
@@ -2080,51 +2223,88 @@ async function resumeTask(taskId, requestedStepIdx) {
       headerSub.textContent = "Task " + taskId + " resumed — " + completedSteps.length + " steps restored.";
       setTimeout(function() { headerSub.textContent = state.taskType?.title || ""; }, 5000);
     }
-    if (completedBuild && !Number.isInteger(requestedStepIdx)) {
+    if (completedBuild && state.wizardSteps[stepIdx] === "simparams") {
       var progressSection = document.getElementById("progress-section");
       if (progressSection) progressSection.classList.remove("hidden");
       _showBuildResult(resumedBuild.result);
       syncTaskRoute(stepIdx, true);
     } else if (resumedBuild.status === "queued" || resumedBuild.status === "running") {
       state.buildRunning = true;
+      startBuildProgress(true);
+      setBuildProgressPhase('Reconnected to build — waiting for status…');
+      watchBuildResult({task_id:taskId}, 2000, null);
       try {
         var queueResponse = await fetch("/api/build/" + taskId + "/queue-status");
         var queueState = queueResponse.ok ? await queueResponse.json() : resumedBuild;
         queueState.task_id = taskId;
-        showComputeQueueModal(queueState);
+        showComputeQueueStatus(queueState);
       } catch (error) {
         resumedBuild.task_id = taskId;
-        showComputeQueueModal(resumedBuild);
+        showComputeQueueStatus(resumedBuild);
       }
     }
+    rememberCurrentTask();
+    return true;
   } catch (e) {
-    alert("Failed to resume: " + e.message);
+    _resumeError='Could not restore task: '+e.message;
+    showResumeError(_resumeError);
+    return false;
   }
 }
 
 
-async function loadOptions() {
-  try {
-    const res = await fetch('/api/options');
-    const opts = await res.json();
-
-    // Build custom lipid picker
-    buildLipidPicker(opts.lipids, opts.lipid_categories);
-    initLipidMixing();
-    if (state.taskId) setTimeout(loadTaskCustomLipids, 0);
-
-    // Store globally for task-type-dependent dropdown repopulation
-    window._allWaterModels = opts.water_models || [];
-    window._allSolvents = opts.solvents || [];
-
-    window._forceFieldOptions = opts.force_fields || [];
-    updateWaterModelOptions(true);
-
-    // Sensible defaults
-    syncLockedWaterModelDisplay();
-  } catch (err) {
-    console.error('Failed to load options:', err);
+let _optionsPromise = null;
+window._optionsReady = false;
+function optionNotice(message) {
+  let notice = document.getElementById('options-load-status');
+  if (!notice) {
+    notice = document.createElement('div'); notice.id = 'options-load-status';
+    notice.setAttribute('role', 'status');
+    document.getElementById('task-grid').before(notice);
   }
+  notice.replaceChildren(document.createTextNode(message + ' '));
+  return notice;
+}
+function ensureOptionsLoaded() {
+  return window._optionsReady ? Promise.resolve(true) : loadOptions();
+}
+function loadOptions() {
+  if (_optionsPromise) return _optionsPromise;
+  _optionsPromise = (async () => {
+    try {
+      optionNotice('Loading parameter choices… You can open a workflow now.');
+      const deadline = performance.now() + 60000;
+      let opts;
+      do {
+        opts = await GMXHttp.json('/api/options', {}, {
+          validate: data => Array.isArray(data.lipids) && Array.isArray(data.force_fields) &&
+            Array.isArray(data.water_models)
+        });
+        if (opts.status !== 'checking') break;
+        if (performance.now() >= deadline) throw new Error('Parameter choices are still preparing.');
+        await new Promise(resolve => setTimeout(resolve, 750));
+      } while (true);
+      buildLipidPicker(opts.lipids, opts.lipid_categories, opts.availability);
+      initLipidMixing();
+      if (state.taskId) setTimeout(loadTaskCustomLipids, 0);
+      window._allWaterModels = opts.water_models || [];
+      window._allSolvents = opts.solvents || [];
+      window._forceFieldOptions = opts.force_fields || [];
+      renderProteinForceFieldOptions();
+      updateWaterModelOptions(true);
+      syncLockedWaterModelDisplay();
+      window._optionsReady = true;
+      document.getElementById('options-load-status')?.remove();
+      return true;
+    } catch (err) {
+      const notice = optionNotice('Parameter choices could not be loaded.');
+      const retry = document.createElement('button'); retry.type = 'button';
+      retry.textContent = 'Retry loading choices'; retry.addEventListener('click', loadOptions);
+      notice.appendChild(retry);
+      return false;
+    } finally { _optionsPromise = null; }
+  })();
+  return _optionsPromise;
 }
 
 function populateSelect(id, items) {
@@ -2135,8 +2315,49 @@ function populateSelect(id, items) {
     const opt = document.createElement('option');
     opt.value = item.value;
     opt.textContent = item.label;
+    if (item.disabled) {
+      opt.disabled = true;
+      // The label says "Coming Soon"; the tooltip says what would actually
+      // make it available, which is usually running the installer.
+      if (item.title) opt.title = item.title;
+    }
     sel.appendChild(opt);
   });
+}
+
+// Force fields the interface knows about but cannot build with are shown
+// greyed out rather than hidden. Hiding them makes a capability the project
+// has look like one it lacks, and leaves a user who was told to select it
+// with nowhere to look.
+function renderProteinForceFieldOptions() {
+  var select = document.getElementById('ff-protein');
+  var options = window._forceFieldOptions || [];
+  if (!select || !options.length) return;
+
+  var previous = select.value;
+  populateSelect('ff-protein', options.map(function(ff) {
+    // The catalog label already carries the release and whether it is legacy;
+    // repeating that here produced "(legacy) — legacy".
+    var label = ff.label || ff.name;
+    if (!ff.installed) label += ' — Coming Soon';
+    return {
+      value: ff.name,
+      label: label,
+      disabled: !ff.installed,
+      title: ff.installed ? '' :
+        'Not installed on this deployment. Run ./install-local.sh to fetch and ' +
+        'verify its parameters.'
+    };
+  }));
+
+  var installed = options.filter(function(ff) { return ff.installed; });
+  var wanted = [previous, 'amber14sb'].concat(installed.map(function(ff) { return ff.name; }));
+  for (var i = 0; i < wanted.length; i++) {
+    if (installed.some(function(ff) { return ff.name === wanted[i]; })) {
+      select.value = wanted[i];
+      return;
+    }
+  }
 }
 
 function updateWaterModelOptions(useForceFieldDefault) {
@@ -2180,6 +2401,10 @@ function currentMembraneLipidNames() {
 }
 
 window._ffCompatibility = null;
+let _ffCompatibilityRequest = 0;
+let _ffCompatibilityController = null;
+let _ffCompatibilityValid = false;
+let _forceFieldRevision = 0;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, function(character) {
@@ -2212,24 +2437,55 @@ function populateCompatibilitySelect(id, options) {
 
 async function refreshForceFieldCompatibility() {
   if (!state.taskId) return;
+  _ffCompatibilityController?.abort();
+  const controller = _ffCompatibilityController = new AbortController();
+  const request = ++_ffCompatibilityRequest, task = state.taskId;
   var protein = document.getElementById('ff-protein');
   var status = document.getElementById('ff-compatibility-status');
   var confirm = document.getElementById('forcefield-check-btn');
   if (!protein) return;
+  const proteinName = protein.value, lipids = JSON.stringify(currentMembraneLipidNames());
+  const current = () => request === _ffCompatibilityRequest && task === state.taskId &&
+    proteinName === protein.value && lipids === JSON.stringify(currentMembraneLipidNames());
+  const selects = ['ff-lipid', 'ff-ligand'].map(id => document.getElementById(id));
+  _ffCompatibilityValid = false;
+  if (confirm) confirm.disabled = true;
+  selects.forEach(select => { if (select) select.disabled = true; });
+  updateNextButtonState();
   try {
-    if (status) status.textContent = 'Checking installed parameter families...';
-    var response = await fetch('/api/forcefield-compatibility/' + state.taskId, {
+    if (status) {
+      status.textContent = 'Checking installed parameter families...';
+      status.style.color = '';
+    }
+    var report = await GMXHttp.json('/api/forcefield-compatibility/' + task, {
+      signal: controller.signal,
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        protein_ff: protein.value,
-        lipid_names: currentMembraneLipidNames(),
+        protein_ff: proteinName,
+        lipid_names: JSON.parse(lipids),
       }),
+    }, {
+      current,
+      validate: report => typeof report.family === 'string' &&
+        Array.isArray(report.lipid_options) && Array.isArray(report.ligand_options) &&
+        [...report.lipid_options, ...report.ligand_options].every(item =>
+          item && typeof item.value === 'string' && typeof item.label === 'string' &&
+          typeof item.enabled === 'boolean')
     });
-    var report = await response.json();
-    if (!response.ok || report.error) throw new Error(report.error || 'Compatibility check failed');
+    if (!current()) return;
+    var previousFamily = window._ffCompatibility && window._ffCompatibility.family;
+    if (previousFamily !== report.family) {
+      document.getElementById('ff-ligand').value = '';
+    }
     window._ffCompatibility = report;
     var lipidOk = populateCompatibilitySelect('ff-lipid', report.lipid_options);
     var ligandOk = populateCompatibilitySelect('ff-ligand', report.ligand_options);
+    if (_restoredLigandBackend) {
+      if ((report.ligand_options || []).some(function(item) {
+        return item.enabled && item.value === _restoredLigandBackend;
+      })) document.getElementById('ff-ligand').value = _restoredLigandBackend;
+      _restoredLigandBackend = null;
+    }
     renderLigandChargeInputs();
     var warnings = [];
     (report.lipid_options || []).forEach(function(item) {
@@ -2239,7 +2495,9 @@ async function refreshForceFieldCompatibility() {
       if (!item.enabled && item.reason) warnings.push('Small molecule: ' + item.reason);
     });
     (report.ligands || []).forEach(function(item) {
-      warnings.push((item.display_name || item.name) + ': ' + item.rtp_reason);
+      if (report.family !== 'charmm' && item.rtp_reason) {
+        warnings.push((item.display_name || item.name) + ': ' + item.rtp_reason);
+      }
     });
     var nucleicOk = !report.nucleic_acid || report.nucleic_acid.enabled;
     if (report.nucleic_acid && report.nucleic_acid.present) {
@@ -2250,17 +2508,75 @@ async function refreshForceFieldCompatibility() {
       );
     }
     var valid = lipidOk && ligandOk && nucleicOk;
+    _ffCompatibilityValid = valid;
     if (status) {
       status.innerHTML = '<strong>' + (valid ? '✓ Compatible family: ' : '✗ No complete compatible combination for ') +
         String(report.family || '').toUpperCase() + '</strong>' +
         (warnings.length ? '<ul>' + warnings.map(function(item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + '</ul>' : '');
       status.style.color = valid ? '#166534' : '#b91c1c';
     }
-    if (confirm) confirm.disabled = !valid;
+    if (confirm) confirm.disabled = !valid || _stepRunning;
+    updateV4CompositionAvailability();
   } catch (error) {
+    if (!current()) return;
     window._ffCompatibility = null;
-    if (status) { status.textContent = '✗ ' + error.message; status.style.color = '#b91c1c'; }
+    _ffCompatibilityValid = false;
+    if (status) {
+      status.textContent = '✗ ' + error.message + ' ';
+      status.style.color = '#b91c1c';
+      const retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'btn';
+      retry.id = 'ff-compatibility-retry'; retry.textContent = 'Retry compatibility check';
+      retry.addEventListener('click', refreshForceFieldCompatibility);
+      status.appendChild(retry);
+    }
     if (confirm) confirm.disabled = true;
+  } finally {
+    if (current()) {
+      selects.forEach(select => { if (select) select.disabled = false; });
+      updateNextButtonState();
+    }
+  }
+}
+
+function resetLigandPHState() {
+  _charmmIdentityRequest++;
+  _charmmIdentitySources = {}; _charmmMol2Uploads = {};
+  clearTimeout(_charmmIdentityTimer);
+  _ligandChargeRequest++;
+  _computedLigandCharges = {}; _computedLigandChargePH = null;
+  _ligandChargeDrafts = {}; _ligandChargeOrigins = {};
+  _systemPH = 7.0;
+  ['ff-ligand-ph', 'proc-pH'].forEach(function(id) {
+    var input = document.getElementById(id);
+    if (input) input.value = '7.0';
+  });
+}
+
+function setLigandEnvironmentPH(value) {
+  var pH = Number(value);
+  if (String(value).trim() === '' || !Number.isFinite(pH) || pH < 1 || pH > 13) pH = NaN;
+  if (Object.is(pH, _systemPH)) return;
+  _systemPH = pH;
+  scheduleCharmmIdentity();
+  _ligandChargeRequest++; // A late response for an earlier pH cannot overwrite this state.
+  _computedLigandCharges = {}; _computedLigandChargePH = null;
+  ['ff-ligand-ph', 'proc-pH'].forEach(function(id) {
+    var input = document.getElementById(id);
+    if (input && input !== document.activeElement) input.value = Number.isFinite(pH) ? String(pH) : '';
+  });
+  Object.keys(_ligandChargeDrafts).forEach(function(name) {
+    if (_ligandChargeOrigins[name] !== 'manual') {
+      delete _ligandChargeDrafts[name];
+      var input = document.querySelector('[data-ligand-charge="' + name + '"]');
+      if (input) input.value = '';
+    }
+    _computedLigandCharges[name] = {status: 'stale', error: 'pH changed; recalculate the suggestion and review any manual charge.'};
+    updateLigandChargeStatus(name);
+  });
+  resetForceFieldCheck();
+  if (typeof invalidateProtonationState === 'function') {
+    invalidateProtonationState('Environment pH changed; recompute protein protonation.');
   }
 }
 
@@ -2271,6 +2587,99 @@ function renderLigandChargeInputs() {
   container.innerHTML = '';
   var report = window._ffCompatibility;
   if (!report || !source) return;
+  if ((report.ligand_names || []).length && ['gaff2', 'charmm_compat', 'cgenff'].includes(source.value)) {
+    var phLabel = document.createElement('label');
+    phLabel.className = 'field'; phLabel.textContent = 'Solution pH for ligand protonation (1.0–13.0)';
+    var phInput = document.createElement('input');
+    phInput.type = 'number'; phInput.id = 'ff-ligand-ph';
+    phInput.min = '1'; phInput.max = '13'; phInput.step = '0.1'; phInput.required = true;
+    phInput.value = Number.isFinite(_systemPH) ? String(_systemPH) : '';
+    phInput.addEventListener('input', function() { setLigandEnvironmentPH(phInput.value); });
+    phInput.addEventListener('change', function() {
+      setLigandEnvironmentPH(phInput.value);
+      if (source.value === 'gaff2') loadGaffChargeSuggestions(true);
+    });
+    phLabel.appendChild(phInput); container.appendChild(phLabel);
+    var phHint = document.createElement('p'); phHint.className = 'hint';
+    phHint.textContent = source.value === 'gaff2'
+      ? 'This pH controls charge suggestions and GAFF2 protonation, and is shared with protein processing. Changing pH invalidates previous checks.'
+      : source.value === 'charmm_compat'
+        ? 'Automatic identification uses a solution-pH protonation model. Explicit MOL2/SMILES overrides retain their supplied state. This pH is shared with protein processing.'
+        : 'CHARMM uses the explicit state in the uploaded CGenFF package; pH does not rewrite its hydrogens or charges.';
+    container.appendChild(phHint);
+  }
+  if (source.value === 'charmm_compat') {
+    var localIntro = document.createElement('p');
+    localIntro.className = 'hint';
+    localIntro.textContent = 'Ligands are identified automatically from the uploaded structure, ' +
+      'public chemical definitions and coordinate perception. Provide MOL2 or SMILES only when ' +
+      'identification needs clarification, or to override the molecular state. Identification ' +
+      'does not guarantee local force-field coverage; unsupported parameters still require CGenFF import.';
+    container.appendChild(localIntro);
+    (report.ligand_names || []).forEach(function(name) {
+      var row = document.createElement('div');
+      row.className = 'field charmm-compat-row';
+      var label = document.createElement('label');
+      label.textContent = ((report.ligand_labels || {})[name] || name) + ' (' + name + ')';
+      var mode = document.createElement('select'); mode.dataset.charmmIdentitySource = name;
+      [['auto', 'Identify automatically'], ['mol2', 'Provide MOL2'], ['smiles', 'Provide SMILES']].forEach(function(item) {
+        var option = document.createElement('option'); option.value = item[0]; option.textContent = item[1];
+        mode.appendChild(option);
+      });
+      mode.value = _charmmIdentitySources[name] || 'auto';
+      mode.addEventListener('change', function() {
+        _charmmIdentitySources[name] = mode.value;
+        _charmmIdentityRequest++; resetForceFieldCheck(); renderLigandChargeInputs();
+      });
+      label.appendChild(mode); row.appendChild(label);
+      var input = document.createElement('input');
+      input.type = 'text'; input.maxLength = 4096;
+      input.dataset.charmmSmiles = name;
+      input.placeholder = 'Exact molecular state, e.g. CCO for ethanol';
+      input.value = _charmmCompatSmiles[name] || '';
+      input.hidden = mode.value !== 'smiles';
+      input.addEventListener('input', function() {
+        _charmmCompatSmiles[name] = input.value.trim();
+        resetForceFieldCheck(); scheduleCharmmIdentity();
+      });
+      row.appendChild(input);
+      var smilesHint = document.createElement('p'); smilesHint.className = 'hint';
+      smilesHint.hidden = mode.value !== 'smiles';
+      smilesHint.textContent = 'Include charge and stereochemistry. If atom identities are ambiguous, ' +
+        'use MOL2 with matching atom names, or map every SMILES heavy atom 1..N to retained atom order.';
+      row.appendChild(smilesHint);
+      var fileLabel = document.createElement('label'); fileLabel.textContent = 'MOL2 with bonds and the intended protonation state';
+      fileLabel.hidden = mode.value !== 'mol2';
+      var file = document.createElement('input'); file.type = 'file'; file.accept = '.mol2';
+      file.dataset.charmmMol2 = name;
+      file.addEventListener('change', function() { uploadCharmmIdentity(name, file); });
+      fileLabel.appendChild(file); row.appendChild(fileLabel);
+      var status = document.createElement('p'); status.className = 'hint';
+      status.dataset.ligandIdentityStatus = name;
+      status.textContent = 'Identifying ligand chemistry…'; row.appendChild(status);
+      container.appendChild(row);
+    });
+    var researchLabel = document.createElement('label');
+    researchLabel.className = 'experimental-assignment-warning';
+    var research = document.createElement('input');
+    research.type = 'checkbox'; research.id = 'ff-charmm-research';
+    research.checked = _charmmCompatResearch;
+    research.addEventListener('change', function() {
+      _charmmCompatResearch = research.checked; resetForceFieldCheck();
+    });
+    researchLabel.appendChild(research);
+    var researchText = document.createElement('span');
+    researchText.textContent = 'Allow experimental assignment: atom types and ' +
+      'charges are read from environments the installed CHARMM release itself contains, so the range is ' +
+      'no longer a fixed list -- aldehydes, amides, nitroaromatics and heterocycles are accepted where ' +
+      'the release covers them. Out-of-plane (improper) terms are NOT assigned, so any planar centre is ' +
+      'unrestrained. Every export reports which atoms had no corroborating environment and how far the ' +
+      'charges of the matched ones spread. Physical accuracy has not been validated.';
+    researchLabel.appendChild(researchText);
+    container.appendChild(researchLabel);
+    loadCharmmIdentity();
+    return;
+  }
   if (source.value === 'cgenff') {
     var intro = document.createElement('div');
     intro.className = 'validation-warnings';
@@ -2437,9 +2846,15 @@ function updateLigandChargeStatus(name) {
 async function loadGaffChargeSuggestions(force) {
   if (!state.taskId) return;
   var targetPH = Number(_systemPH);
-  if (!Number.isFinite(targetPH) || targetPH < 1.0 || targetPH > 13.0) targetPH = 7.0;
   var names = ((window._ffCompatibility || {}).ligand_names || []);
   if (!names.length) return;
+  if (!Number.isFinite(targetPH) || targetPH < 1.0 || targetPH > 13.0) {
+    names.forEach(function(name) {
+      _computedLigandCharges[name] = {status: 'error', error: 'Enter a solution pH between 1.0 and 13.0.'};
+      updateLigandChargeStatus(name);
+    });
+    return;
+  }
   if (!force && _computedLigandChargePH === targetPH && Object.keys(_computedLigandCharges).length) {
     names.forEach(updateLigandChargeStatus);
     return;
@@ -2448,13 +2863,17 @@ async function loadGaffChargeSuggestions(force) {
     var status = document.querySelector('[data-ligand-charge-status="' + name + '"]');
     if (status) { status.textContent = 'Computing at pH ' + targetPH.toFixed(1) + '...'; status.style.color = '#d97706'; }
   });
+  var requestId = ++_ligandChargeRequest;
+  var requestTask = state.taskId;
   try {
-    var response = await fetch('/api/ligand-charge-suggestions/' + state.taskId, {
+    var result = await GMXHttp.json('/api/ligand-charge-suggestions/' + requestTask, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({pH: targetPH}),
+    }, {
+      current: () => requestId === _ligandChargeRequest && requestTask === state.taskId && targetPH === _systemPH,
+      validate: data => data.suggestions && typeof data.suggestions === 'object' && Number.isFinite(Number(data.pH))
     });
-    var result = await response.json();
-    if (!response.ok || result.error) throw new Error(result.error || 'Charge calculation failed');
+    if (requestId !== _ligandChargeRequest || requestTask !== state.taskId || targetPH !== _systemPH) return;
     _computedLigandCharges = result.suggestions || {};
     _computedLigandChargePH = Number(result.pH);
     names.forEach(function(name) {
@@ -2469,6 +2888,7 @@ async function loadGaffChargeSuggestions(force) {
     });
     resetForceFieldCheck();
   } catch (error) {
+    if (requestId !== _ligandChargeRequest || requestTask !== state.taskId || targetPH !== _systemPH) return;
     names.forEach(function(name) {
       _computedLigandCharges[name] = {status: 'error', error: error.message};
       updateLigandChargeStatus(name);
@@ -2486,8 +2906,97 @@ function collectLigandCharges() {
   return charges;
 }
 
+function collectCharmmCompatSmiles() {
+  if (document.getElementById('ff-ligand')?.value !== 'charmm_compat') return {};
+  var result = {};
+  ((window._ffCompatibility || {}).ligand_names || []).forEach(function(name) {
+    if (_charmmIdentitySources[name] === 'smiles') result[name] = _charmmCompatSmiles[name] || '';
+  });
+  return result;
+}
+
+function collectCharmmCompatMol2() {
+  var result = {};
+  if (document.getElementById('ff-ligand')?.value !== 'charmm_compat') return result;
+  ((window._ffCompatibility || {}).ligand_names || []).forEach(function(name) {
+    if (_charmmIdentitySources[name] === 'mol2') result[name] = {uploaded: true, sha256: _charmmMol2Uploads[name]?.sha256 || null};
+  });
+  return result;
+}
+
+function scheduleCharmmIdentity() {
+  _charmmIdentityRequest++;
+  clearTimeout(_charmmIdentityTimer);
+  document.querySelectorAll('[data-ligand-identity-status]').forEach(function(item) {
+    item.textContent = 'Chemistry input changed; identifying again…';
+  });
+  _charmmIdentityTimer = setTimeout(loadCharmmIdentity, 400);
+}
+
+async function loadCharmmIdentity() {
+  if (document.getElementById('ff-ligand')?.value !== 'charmm_compat' || !state.taskId) return;
+  var requestId = ++_charmmIdentityRequest, taskId = state.taskId, pH = _systemPH;
+  var inputs = {charmm_compat_smiles: collectCharmmCompatSmiles(), charmm_compat_mol2: collectCharmmCompatMol2(), ligand_pH: pH};
+  var inputKey = JSON.stringify(inputs);
+  function current() {
+    return requestId === _charmmIdentityRequest && taskId === state.taskId && Object.is(pH, _systemPH) &&
+      document.getElementById('ff-ligand')?.value === 'charmm_compat' && inputKey === JSON.stringify({
+        charmm_compat_smiles: collectCharmmCompatSmiles(), charmm_compat_mol2: collectCharmmCompatMol2(), ligand_pH: _systemPH});
+  }
+  try {
+    if (!Number.isFinite(pH)) throw new Error('Enter a solution pH between 1 and 13.');
+    var missing = Object.keys(inputs.charmm_compat_mol2).filter(function(name) { return !_charmmMol2Uploads[name]?.ready; });
+    if (missing.length) throw new Error('Choose a MOL2 file for: ' + missing.join(', '));
+    var empty = Object.keys(inputs.charmm_compat_smiles).filter(function(name) { return !inputs.charmm_compat_smiles[name]; });
+    if (empty.length) throw new Error('Enter SMILES for: ' + empty.join(', '));
+    var data = await GMXHttp.json('/api/ligand-chemistry/' + taskId, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: inputKey
+    }, {
+      current,
+      validate: data => data.ligands && typeof data.ligands === 'object'
+    });
+    if (!current()) return;
+    Object.entries(data.ligands || {}).forEach(function(entry) {
+      var status = document.querySelector('[data-ligand-identity-status="' + entry[0] + '"]');
+      if (!status) return;
+      var record = entry[1];
+      var sources = {user_smiles: 'supplied SMILES', user_mol2: 'supplied MOL2', input_mmcif: 'uploaded mmCIF', input_pdb: 'hydrogen-complete uploaded ligand',
+        wwpdb_ccd: 'wwPDB chemical dictionary', coordinate_perception: 'coordinate perception'};
+      status.textContent = record.status === 'ok'
+        ? '✓ Identified from ' + (sources[record.source] || record.source) + ': ' + record.smiles +
+          '; net charge ' + record.net_charge + '. ' + (record.warnings || []).join(' ')
+        : 'Clarification required: ' + record.error;
+    });
+  } catch (error) {
+    if (!current()) return;
+    document.querySelectorAll('[data-ligand-identity-status]').forEach(function(item) { item.textContent = error.message; });
+  }
+}
+
+async function uploadCharmmIdentity(name, fileInput) {
+  if (!fileInput.files.length) return;
+  var taskId = state.taskId, selected = fileInput.files[0];
+  delete _charmmMol2Uploads[name];
+  var status = document.querySelector('[data-ligand-identity-status="' + name + '"]');
+  _charmmIdentityRequest++; resetForceFieldCheck();
+  if (status) status.textContent = 'Checking MOL2 against the retained ligand…';
+  var form = new FormData(); form.append('ligand_name', name); form.append('mol2_file', selected);
+  try {
+    var response = await fetch('/api/ligand-chemistry-upload/' + taskId, {method: 'POST', body: form});
+    var result = await response.json();
+    if (taskId !== state.taskId || fileInput.files[0] !== selected) return;
+    if (!response.ok || result.error) throw new Error(result.error || 'MOL2 validation failed');
+    _charmmMol2Uploads[name] = result;
+    loadCharmmIdentity();
+  } catch (error) {
+    if (taskId !== state.taskId || fileInput.files[0] !== selected) return;
+    if (status) status.textContent = error.message;
+  }
+}
+
 function collectCGenFFParameters() {
   var result = {};
+  if (document.getElementById('ff-ligand')?.value !== 'cgenff') return result;
   var report = window._ffCompatibility || {};
   var forceField = document.getElementById('ff-protein')?.value;
   (report.ligand_names || []).forEach(function(name) {
@@ -2512,6 +3021,7 @@ function applyForceFieldResolution(metrics) {
 }
 
 function resetForceFieldCheck() {
+  _forceFieldRevision++;
   _checkedSteps.delete('forcefield');
   if (_checkedConfig) delete _checkedConfig.forcefield;
   var status = document.getElementById('forcefield-check-status');
@@ -2521,780 +3031,8 @@ function resetForceFieldCheck() {
 }
 
 // ===================================================================
-// Custom Lipid Picker
+// Custom Lipid Picker and modal live in app_parts/custom_lipids.js.
 // ===================================================================
-
-let _lipidPickerData = { lipids: [], categories: {} };
-let _selectedLipid = 'POPC';
-let _smilesDrawer = null;  // SmilesDrawer instance, initialized lazily
-
-let _pickerTarget = null;  // { leaflet, idx } of which row triggered the picker
-
-function buildLipidPicker(lipids, categories) {
-  _lipidPickerData = { lipids, categories };
-
-  const dropdown = document.getElementById('lipid-picker-dropdown');
-  const searchInput = document.getElementById('lipid-picker-search');
-
-  // Search filter
-  if (searchInput) {
-    searchInput.addEventListener('input', () => {
-      renderLipidList(searchInput.value.trim().toLowerCase());
-    });
-  }
-
-  // Close on outside click (guard against duplicate listeners on re-init)
-  if (!buildLipidPicker._outsideHandlerAttached) {
-    buildLipidPicker._outsideHandlerAttached = true;
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('#lipid-picker-dropdown') && !e.target.closest('.mix-lipid-trigger')) {
-        closeLipidDropdown();
-      }
-    });
-  }
-
-  // Select a default
-  selectLipid('POPC');
-}
-
-function openLipidDropdown(anchorEl) {
-  const dropdown = document.getElementById('lipid-picker-dropdown');
-  if (!dropdown) return;
-  // Position dropdown near the anchor element
-  if (anchorEl) {
-    const rect = anchorEl.getBoundingClientRect();
-    dropdown.style.position = 'fixed';
-    dropdown.style.left = rect.left + 'px';
-    dropdown.style.top = (rect.bottom + 4) + 'px';
-    dropdown.style.width = Math.max(rect.width, 500) + 'px';
-  }
-  dropdown.classList.remove('hidden');
-  const searchEl = document.getElementById('lipid-picker-search');
-  if (searchEl) searchEl.value = '';
-  renderLipidList('');
-}
-
-function closeLipidDropdown() {
-  const dropdown = document.getElementById('lipid-picker-dropdown');
-  if (dropdown) dropdown.classList.add('hidden');
-  _pickerTarget = null;
-}
-
-function selectLipid(name) {
-  const lipid = _lipidPickerData.lipids.find(l => l.name === name);
-  if (!lipid) { closeLipidDropdown(); return; }
-  const source = selectedLipidParameterSource();
-  if (source && (lipid.parameterizations || []).indexOf(source) < 0 && !lipid._custom) {
-    alert(lipidAvailabilityMessage(lipid, source));
-    return;
-  }
-  _selectedLipid = name;
-  // Save DHH for membrane plane rendering in orient 3D viewer
-  if (lipid.bilayer_thickness) _dominantLipidDHH = lipid.bilayer_thickness;
-
-  // If a specific row triggered the picker, update that row
-  if (_pickerTarget) {
-    const { leaflet, idx } = _pickerTarget;
-    const mix = leaflet === 'upper' ? _mixUpper : _mixLower;
-    if (idx < mix.length) {
-      mix[idx] = lipidMixEntry(name, mix[idx].ratio);
-      if (!_asymmetric && leaflet === 'upper') {
-        _mixLower = _mixUpper.map(m => ({...m}));
-      }
-      _invalidateMembraneBuild();
-      updateCompositionStatus();
-      renderMixList('upper');
-      renderMixList('lower');
-    }
-    closeLipidDropdown();
-    return;
-  }
-
-  // Fallback: add/replace in upper leaflet mix
-  const existing = _mixUpper.findIndex(m => m.name === name);
-  if (existing >= 0) {
-    // Already in mix — highlight it
-  } else if (_mixUpper.length === 1 && _mixUpper[0].ratio === 100) {
-    _mixUpper[0] = lipidMixEntry(name, 100);
-  } else {
-    _mixUpper.push(lipidMixEntry(name, 0));
-    normalizeRatios(_mixUpper);
-  }
-
-  if (!_asymmetric) {
-    _mixLower = _mixUpper.map(m => ({...m}));
-  }
-  renderMixList('upper');
-  renderMixList('lower');
-
-  closeLipidDropdown();
-}
-
-function lipidMixEntry(name, ratio) {
-  const lipid = (_lipidPickerData.lipids || []).find(l => l.name === name);
-  if (!lipid || !lipid._custom) return {name, ratio};
-  return {
-    name,
-    ratio,
-    category: lipid.category,
-    common_name: lipid.common_name,
-    formula: lipid.formula,
-    tail1: lipid.tail1,
-    tail2: lipid.tail2,
-    area_per_lipid: lipid.area_per_lipid,
-    bilayer_thickness: lipid.bilayer_thickness,
-    vdw_radius: lipid.vdw_radius,
-    charge: lipid.charge,
-    mass: lipid.mass,
-    smiles: lipid.smiles,
-    canonical_smiles: lipid.canonical_smiles,
-    inchi_key: lipid.inchi_key,
-    _custom: true,
-  };
-}
-
-function selectedLipidParameterSource() {
-  const lipidSelect = document.getElementById('ff-lipid');
-  if (lipidSelect && ['lipid21', 'gaff2', 'charmm36m', 'charmm36', 'oplsaa'].includes(lipidSelect.value)) {
-    return lipidSelect.value;
-  }
-  const proteinSelect = document.getElementById('ff-protein');
-  const protein = proteinSelect ? proteinSelect.value : '';
-  if (protein.startsWith('amber')) return 'lipid21';
-  if (protein === 'charmm36m' || protein === 'charmm36' || protein === 'oplsaa') return protein;
-  return '';
-}
-
-function lipidParameterSourceLabel(source) {
-  return ({
-    lipid21: 'Amber Lipid21 v1.0 (exact)',
-    gaff2: 'Amber14SB + GAFF2',
-    charmm36m: 'CHARMM36m',
-    charmm36: 'CHARMM36',
-    oplsaa: 'OPLS-AA',
-  })[source] || source || 'the selected force field';
-}
-
-function lipidAvailabilityMessage(lipid, selectedSource) {
-  const alternatives = (lipid.parameterizations || [])
-    .filter(source => source !== selectedSource)
-    .map(lipidParameterSourceLabel);
-  return lipid.name + ' is unavailable with ' + lipidParameterSourceLabel(selectedSource) + '. ' +
-    (alternatives.length
-      ? 'Available with: ' + alternatives.join(', ') + '.'
-      : 'No validated alternative is installed.');
-}
-
-function renderLipidList(filter) {
-  const container = document.getElementById('lipid-picker-list');
-  container.innerHTML = '';
-
-  const { lipids, categories } = _lipidPickerData;
-  const filterLower = filter || '';
-  const catNames = Object.keys(categories);
-  const selectedSource = selectedLipidParameterSource();
-
-  let anyVisible = false;
-
-  catNames.forEach(cat => {
-    const catLipids = categories[cat].lipids || [];
-    const filtered = catLipids.filter(name => {
-      if (!filterLower) return true;
-      const l = lipids.find(ll => ll.name === name);
-      if (!l) return false;
-      return l.name.toLowerCase().includes(filterLower) ||
-             l.common_name.toLowerCase().includes(filterLower) ||
-             l.category.toLowerCase().includes(filterLower) ||
-             l.formula.toLowerCase().includes(filterLower);
-    });
-
-    if (!filtered.length) return;
-    anyVisible = true;
-
-    // Category header
-    const header = document.createElement('div');
-    header.className = 'lipid-cat-header';
-    header.textContent = cat;
-    container.appendChild(header);
-
-    // Category grid
-    const grid = document.createElement('div');
-    grid.className = 'lipid-cat-grid';
-
-    filtered.forEach(name => {
-      const l = lipids.find(ll => ll.name === name);
-      if (!l) return;
-
-      const card = document.createElement('div');
-      card.className = 'lipid-card';
-      card.dataset.lipidName = l.name;
-      const supported = !selectedSource || (l.parameterizations || []).indexOf(selectedSource) >= 0;
-      if (!supported) {
-        card.classList.add('unavailable');
-        card.setAttribute('aria-disabled', 'true');
-        card.title = lipidAvailabilityMessage(l, selectedSource);
-      }
-      if (l.name === _selectedLipid) card.classList.add('selected');
-
-      // Structure schematic (SVG)
-      const imgDiv = document.createElement('div');
-      imgDiv.className = 'lipid-card-img';
-      imgDiv.innerHTML = lipidSchematicSVG(l);
-      card.appendChild(imgDiv);
-
-      // Info
-      const info = document.createElement('div');
-      info.className = 'lipid-card-info';
-
-      const nameDiv = document.createElement('div');
-      nameDiv.className = 'lipid-card-name';
-      nameDiv.textContent = l.name;
-      info.appendChild(nameDiv);
-
-      const desc = document.createElement('div');
-      desc.className = 'lipid-card-desc';
-      desc.textContent = l.common_name;
-      info.appendChild(desc);
-
-      const meta = document.createElement('div');
-      meta.className = 'lipid-card-meta';
-
-      const areaTag = document.createElement('span');
-      areaTag.className = 'lipid-card-tag';
-      areaTag.textContent = `APL ${l.area_per_lipid} nm²`;
-      meta.appendChild(areaTag);
-
-      const chargeTag = document.createElement('span');
-      chargeTag.className = 'lipid-card-tag';
-      if (l.charge > 0) chargeTag.classList.add('charge-pos');
-      else if (l.charge < 0) chargeTag.classList.add('charge-neg');
-      else chargeTag.classList.add('charge-zero');
-      chargeTag.textContent = l.charge === 0 ? 'neutral' : `charge ${l.charge > 0 ? '+' : ''}${l.charge}`;
-      meta.appendChild(chargeTag);
-
-      const parameterTag = document.createElement('span');
-      parameterTag.className = 'lipid-card-tag';
-      var availableSources = l.parameterizations || [];
-      var sourceLabels = {
-        gaff2: 'Amber/GAFF2', charmm36m: 'CHARMM36m RTP', charmm36: 'CHARMM36 RTP'
-      };
-      parameterTag.textContent = availableSources.indexOf(selectedSource) >= 0
-        ? sourceLabels[selectedSource]
-        : 'Unavailable';
-      parameterTag.title = 'Topology parameter source';
-      meta.appendChild(parameterTag);
-
-      const tailTag = document.createElement('span');
-      tailTag.className = 'lipid-card-tag';
-      tailTag.textContent = `${l.tail1[0]}:${l.tail1[1]}/${l.tail2[0]}:${l.tail2[1]}`;
-      meta.appendChild(tailTag);
-
-      info.appendChild(meta);
-      if (!supported) {
-        const unavailable = document.createElement('div');
-        unavailable.className = 'lipid-card-unavailable';
-        unavailable.textContent = lipidAvailabilityMessage(l, selectedSource);
-        info.appendChild(unavailable);
-      }
-      card.appendChild(info);
-
-      if (supported) card.addEventListener('click', () => selectLipid(l.name));
-      grid.appendChild(card);
-    });
-
-    container.appendChild(grid);
-  });
-
-  if (!anyVisible) {
-    container.innerHTML = '<p class="hint" style="text-align:center;padding:20px;">No lipids match your search.</p>';
-  }
-
-  // "Custom Lipid" option at the bottom
-  const customOpt = document.createElement('div');
-  customOpt.className = 'lipid-card lipid-option-custom';
-  const customSupported = selectedSource === 'gaff2';
-  const selectedProteinFF = (document.getElementById('ff-protein') || {}).value || '';
-  const gaffOption = ((window._ffCompatibility || {}).lipid_options || [])
-    .find(option => option.value === 'gaff2');
-  const canSwitchToCustom = selectedProteinFF.startsWith('amber') &&
-    Boolean(gaffOption && gaffOption.enabled);
-  customOpt.innerHTML = '<div class="lipid-card-info" style="text-align:center;padding:8px;"><span style="font-size:16px;">&#43;</span> Add Custom Lipid from SMILES' +
-    (customSupported ? '' : canSwitchToCustom
-      ? '<div class="lipid-card-unavailable">Switch this task from Lipid21 to Amber + GAFF2, then re-check Force Field.</div>'
-      : '<div class="lipid-card-unavailable">Custom lipids currently require Amber + GAFF2.</div>') + '</div>';
-  if (customSupported) {
-    customOpt.style.cursor = 'pointer';
-    customOpt.addEventListener('click', () => {
-      closeLipidDropdown();
-      openCustomLipidModal();
-    });
-  } else if (canSwitchToCustom) {
-    customOpt.style.cursor = 'pointer';
-    customOpt.addEventListener('click', () => {
-      closeLipidDropdown();
-      switchTaskToCustomLipidBackend();
-    });
-  } else {
-    customOpt.classList.add('unavailable');
-    customOpt.setAttribute('aria-disabled', 'true');
-  }
-  container.appendChild(customOpt);
-
-}
-
-function switchTaskToCustomLipidBackend() {
-  const lipidFF = document.getElementById('ff-lipid');
-  const forceFieldIdx = state.wizardSteps.indexOf('forcefield');
-  if (!lipidFF || forceFieldIdx < 0) return;
-  const accepted = window.confirm(
-    'Custom lipids require Amber + GAFF2. Switch the lipid backend to GAFF2? ' +
-    'The existing Force Field Check will be invalidated and must be run again.'
-  );
-  if (!accepted) return;
-  lipidFF.value = 'gaff2';
-  lipidFF.dispatchEvent(new Event('change', {bubbles: true}));
-  _checkedSteps.delete('forcefield');
-  state.completedSteps.delete(forceFieldIdx);
-  for (let index = forceFieldIdx + 1; index < state.wizardSteps.length; index++) {
-    _checkedSteps.delete(state.wizardSteps[index]);
-    state.completedSteps.delete(index);
-  }
-  goToWizardStep(forceFieldIdx);
-  alert(
-    'Lipid backend changed to GAFF2. Run Force Field Check again, then return ' +
-    'to Membrane Builder to submit the custom lipid.'
-  );
-}
-// ===================================================================
-// Custom Lipid Modal (SMILES input)
-// ===================================================================
-
-let _customLipidData = null;  // parsed lipid data, set on successful parse
-let _customLipidPollTimer = null;
-let _customLipidFailedName = null;
-
-function openCustomLipidModal() {
-  if (!state.taskId) {
-    alert('Create or upload the task first. Custom lipid parameters must be bound to a task ID.');
-    return;
-  }
-  const modal = document.getElementById('custom-lipid-modal');
-  if (!modal) return;
-  modal.classList.remove('hidden');
-  // Reset state
-  document.getElementById('custom-lipid-name').value = '';
-  document.getElementById('custom-lipid-smiles').value = '';
-  document.getElementById('custom-lipid-result').classList.add('hidden');
-  document.getElementById('custom-lipid-confirm-btn').classList.add('hidden');
-  document.getElementById('custom-lipid-build-status').classList.add('hidden');
-  document.getElementById('custom-lipid-cancel-btn').disabled = false;
-  _customLipidData = null;
-  _customLipidFailedName = null;
-}
-
-function closeCustomLipidModal() {
-  if (state.customLipidBusy) return;
-  const modal = document.getElementById('custom-lipid-modal');
-  if (modal) modal.classList.add('hidden');
-  _customLipidData = null;
-}
-
-async function parseCustomLipid() {
-  const nameEl = document.getElementById('custom-lipid-name');
-  const smilesEl = document.getElementById('custom-lipid-smiles');
-  const name = nameEl.value.trim();
-  const smiles = smilesEl.value.trim();
-
-  if (!name) { alert('Please enter a name for the lipid.'); return; }
-  if (!smiles) { alert('Please enter a SMILES string.'); return; }
-
-  try {
-    const res = await fetch('/api/custom-lipid', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, smiles}),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      alert('Parse error: ' + (err.error || res.statusText));
-      return;
-    }
-    const data = await res.json();
-    _customLipidData = data;
-
-    const exact = (data.registered_matches || []).find(match => match.match === 'exact');
-    const confirmBtn = document.getElementById('custom-lipid-confirm-btn');
-    if (exact) {
-      confirmBtn.classList.add('hidden');
-      alert('Submission rejected: this molecule already exists in the standard library as ' + exact.name + '. Custom submissions must be chemically distinct.');
-    } else {
-      confirmBtn.textContent = '\u2713 Build & Add Custom Lipid';
-      const connectivity = (data.registered_matches || []).filter(match => match.match === 'connectivity');
-      if (connectivity.length) {
-        alert('A lipid with the same connectivity exists (' + connectivity.map(m => m.name).join(', ') + '), but stereochemistry differs. It will be treated as a new molecule.');
-      }
-    }
-
-    // Show results
-    document.getElementById('custom-lipid-result').classList.remove('hidden');
-    if (!exact) document.getElementById('custom-lipid-confirm-btn').classList.remove('hidden');
-    document.getElementById('cl-formula').textContent = data.formula;
-    document.getElementById('cl-mass').textContent = data.mass.toFixed(1) + ' g/mol';
-    document.getElementById('cl-category').textContent = data.category + ' (' + (data.headgroup || '') + ')';
-    document.getElementById('cl-charge').textContent = (data.charge >= 0 ? '+' : '') + data.charge;
-    document.getElementById('cl-apl').textContent = (data.area_per_lipid * 100).toFixed(1) + ' Å² (' + data.area_per_lipid.toFixed(3) + ' nm²)';
-    document.getElementById('cl-dh').textContent = data.bilayer_thickness.toFixed(2) + ' nm';
-    document.getElementById('cl-tails').textContent =
-      'C' + data.tail1[0] + ':' + data.tail1[1] + ' / C' + data.tail2[0] + ':' + data.tail2[1];
-
-    // Draw 2D structure with SmilesDrawer
-    drawSmilesStructure(data.smiles);
-  } catch (e) {
-    alert('Failed to parse: ' + e.message);
-  }
-}
-
-function drawSmilesStructure(smiles) {
-  const canvas = document.getElementById('smiles-canvas');
-  if (!canvas) return;
-
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  if (typeof SmilesDrawer === 'undefined') {
-    window._cdmRetriesSD = (window._cdmRetriesSD || 0) + 1;
-    if (window._cdmRetriesSD > 20) {
-      ctx.fillStyle = '#c00'; ctx.font = '14px sans-serif';
-      ctx.fillText('Structure renderer failed to load', 20, 100);
-      return;
-    }
-    ctx.fillStyle = '#888'; ctx.font = '14px sans-serif';
-    ctx.fillText('Structure renderer loading...', 20, 100);
-    setTimeout(() => drawSmilesStructure(smiles), 800);
-    return;
-  }
-
-  // Renderer is available — reset retry counter for future parses
-  window._cdmRetriesSD = 0;
-
-  try {
-    // SmilesDrawer v2.x API: parse(smiles, successCb, errorCb)
-    SmilesDrawer.parse(smiles, function(tree) {
-      const drawer = new SmilesDrawer.Drawer({
-        width: canvas.width,
-        height: canvas.height,
-        bondThickness: 1.4,
-        shortBondLength: 0.82,
-        bondSpacing: 0.18,
-        terminalCarbons: true,
-        explicitHydrogens: false,
-        compactDrawing: true,
-        fontSize: 12,
-      });
-      drawer.draw(tree, canvas, 'light', false);
-    }, function(err) {
-      ctx.fillStyle = '#888'; ctx.font = '14px sans-serif';
-      ctx.fillText('(invalid SMILES)', 40, 100);
-    });
-  } catch (e) {
-    ctx.fillStyle = '#888'; ctx.font = '14px sans-serif';
-    ctx.fillText('(structure renderer error)', 40, 100);
-  }
-}
-
-async function confirmCustomLipid() {
-  if (_customLipidFailedName) {
-    await retryCustomLipid(_customLipidFailedName);
-    return;
-  }
-  if (!_customLipidData || !state.taskId) return;
-
-  const data = _customLipidData;
-  const exact = (data.registered_matches || []).find(match => match.match === 'exact');
-  if (exact) {
-    alert('This molecule is already present as ' + exact.name + ' and cannot be submitted as custom.');
-    return;
-  }
-  const forceField = (document.getElementById('ff-protein') || {}).value || 'amber14sb';
-  if (!forceField.startsWith('amber')) {
-    alert('A new custom lipid currently requires the Amber + GAFF2 family. Select AMBER ff14SB in Force Field Selection, confirm it, then parse this lipid again. CHARMM/CGenFF and OPLS generators are not installed.');
-    return;
-  }
-  const confirmBtn = document.getElementById('custom-lipid-confirm-btn');
-  confirmBtn.disabled = true;
-  confirmBtn.textContent = 'Submitting task-scoped calculation...';
-  try {
-    const build = await fetch('/api/task/' + state.taskId + '/custom-lipids', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        name: data.name,
-        smiles: data.canonical_smiles || data.smiles,
-        force_field: forceField,
-        lipid_ff: 'gaff2',
-      }),
-    });
-    const result = await build.json();
-    if (!build.ok) throw new Error(result.error || build.statusText);
-    beginCustomLipidBlocking(result);
-    await pollCustomLipid(result.name);
-  } catch (error) {
-    alert('Custom lipid submission failed: ' + error.message);
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = '\u2713 Build & Add Custom Lipid';
-  }
-}
-
-function addReadyTaskLipid(data) {
-  const existing = _lipidPickerData.lipids.find(l => l.name === data.name);
-  if (!existing) {
-    _lipidPickerData.lipids.push({
-      name: data.name,
-      common_name: data.common_name,
-      category: data.category,
-      formula: data.formula,
-      area_per_lipid: data.area_per_lipid,
-      bilayer_thickness: data.bilayer_thickness,
-      charge: data.charge,
-      mass: data.mass,
-      smiles: data.smiles,
-      canonical_smiles: data.canonical_smiles,
-      inchi_key: data.inchi_key,
-      tail1: data.tail1,
-      tail2: data.tail2,
-      vdw_radius: data.vdw_radius,
-      parameterizations: ['gaff2'],
-      _custom: true,
-      task_scoped: true,
-    });
-    if (!_lipidPickerData.categories['Custom Lipids']) {
-      _lipidPickerData.categories['Custom Lipids'] = { lipids: [] };
-    }
-    if (!_lipidPickerData.categories['Custom Lipids'].lipids.includes(data.name)) {
-      _lipidPickerData.categories['Custom Lipids'].lipids.push(data.name);
-    }
-  }
-}
-
-function beginCustomLipidBlocking(record) {
-  state.customLipidBusy = true;
-  _customLipidFailedName = null;
-  const modal = document.getElementById('custom-lipid-modal');
-  const status = document.getElementById('custom-lipid-build-status');
-  if (modal) modal.classList.remove('hidden');
-  if (status) status.classList.remove('hidden', 'failed');
-  const cancel = document.getElementById('custom-lipid-cancel-btn');
-  const confirm = document.getElementById('custom-lipid-confirm-btn');
-  if (cancel) cancel.disabled = true;
-  if (confirm) confirm.classList.add('hidden');
-  renderCustomLipidStatus(record);
-  updateNextButtonState();
-  updateStepNavHighlight();
-}
-
-function renderCustomLipidStatus(record) {
-  const progress = document.getElementById('custom-lipid-build-progress');
-  const phase = document.getElementById('custom-lipid-build-phase');
-  const message = document.getElementById('custom-lipid-build-message');
-  if (progress) progress.style.width = Math.max(0, Math.min(100, Number(record.progress) || 0)) + '%';
-  if (phase) phase.textContent = record.name + ' — ' + String(record.phase || record.state || '').replaceAll('_', ' ');
-  if (message) message.textContent = record.message || '';
-}
-
-async function pollCustomLipid(name) {
-  if (_customLipidPollTimer) clearTimeout(_customLipidPollTimer);
-  try {
-    const response = await fetch('/api/task/' + state.taskId + '/custom-lipids/' + encodeURIComponent(name));
-    const record = await response.json();
-    if (!response.ok) throw new Error(record.error || response.statusText);
-    renderCustomLipidStatus(record);
-    if (record.state === 'ready') {
-      state.customLipidBusy = false;
-      addReadyTaskLipid(record);
-      selectLipid(record.name);
-      const cancel = document.getElementById('custom-lipid-cancel-btn');
-      if (cancel) { cancel.disabled = false; cancel.textContent = 'Close'; }
-      const status = document.getElementById('custom-lipid-build-status');
-      if (status) status.classList.remove('failed');
-      updateNextButtonState();
-      updateStepNavHighlight();
-      setTimeout(loadTaskCustomLipids, 0);
-      return;
-    }
-    if (record.state === 'failed') {
-      state.customLipidBusy = true;
-      _customLipidFailedName = record.name;
-      const status = document.getElementById('custom-lipid-build-status');
-      if (status) status.classList.add('failed');
-      const confirm = document.getElementById('custom-lipid-confirm-btn');
-      if (confirm) {
-        confirm.classList.remove('hidden');
-        confirm.disabled = false;
-        confirm.textContent = '\u21bb Retry calculation';
-      }
-      return;
-    }
-    _customLipidPollTimer = setTimeout(function() { pollCustomLipid(name); }, 3000);
-  } catch (error) {
-    renderCustomLipidStatus({name, phase: 'connection error', progress: 0, message: error.message});
-    _customLipidPollTimer = setTimeout(function() { pollCustomLipid(name); }, 5000);
-  }
-}
-
-async function retryCustomLipid(name) {
-  const response = await fetch('/api/task/' + state.taskId + '/custom-lipids/' + encodeURIComponent(name) + '/retry', {method: 'POST'});
-  const record = await response.json();
-  if (!response.ok) { alert(record.error || 'Retry failed'); return; }
-  beginCustomLipidBlocking(record);
-  pollCustomLipid(name);
-}
-
-async function loadTaskCustomLipids() {
-  if (!state.taskId) return;
-  try {
-    const response = await fetch('/api/task/' + state.taskId + '/custom-lipids');
-    if (!response.ok) return;
-    const payload = await response.json();
-    const records = payload.lipids || [];
-    records.filter(r => r.state === 'ready').forEach(addReadyTaskLipid);
-    const blocked = records.find(r => r.state !== 'ready');
-    if (blocked) {
-      beginCustomLipidBlocking(blocked);
-      if (blocked.state === 'failed') {
-        _customLipidFailedName = blocked.name;
-        const status = document.getElementById('custom-lipid-build-status');
-        if (status) status.classList.add('failed');
-        const confirm = document.getElementById('custom-lipid-confirm-btn');
-        if (confirm) {
-          confirm.classList.remove('hidden');
-          confirm.disabled = false;
-          confirm.textContent = '\u21bb Retry calculation';
-        }
-      } else {
-        pollCustomLipid(blocked.name);
-      }
-    }
-  } catch (error) {
-    console.warn('Could not restore task custom lipids', error);
-  }
-}
-
-// Wire up modal buttons on page load
-function initCustomLipidModal() {
-  // Guard against double-initialisation (called from DOMContentLoaded)
-  if (initCustomLipidModal._done) return;
-  initCustomLipidModal._done = true;
-
-  const parseBtn = document.getElementById('custom-lipid-parse-btn');
-  const cancelBtn = document.getElementById('custom-lipid-cancel-btn');
-  const confirmBtn = document.getElementById('custom-lipid-confirm-btn');
-
-  if (parseBtn) parseBtn.addEventListener('click', parseCustomLipid);
-  if (cancelBtn) cancelBtn.addEventListener('click', closeCustomLipidModal);
-  if (confirmBtn) confirmBtn.addEventListener('click', confirmCustomLipid);
-
-  // Close on overlay click
-  const modal = document.getElementById('custom-lipid-modal');
-  if (modal) {
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal && !state.customLipidBusy) closeCustomLipidModal();
-    });
-  }
-
-  // Enter key in SMILES input triggers parse
-  const smilesEl = document.getElementById('custom-lipid-smiles');
-  if (smilesEl) {
-    smilesEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') parseCustomLipid();
-    });
-  }
-}
-
-/** Generate a clean schematic SVG for a lipid. */
-function lipidSchematicSVG(lipid) {
-  const W = 90, H = 62;
-  const headColors = {
-    PC:'#4f46e5', PE:'#0891b2', PG:'#ea580c', PS:'#7c3aed',
-    PA:'#dc2626', PI:'#ca8a04', SM:'#2563eb', ST:'#16a34a',
-    PIP:'#9333ea', CL:'#db2777', LPC:'#6366f1', LPE:'#06b6d4',
-    DG:'#78716c', CER:'#a16207', MGDG:'#22c55e', DGDG:'#15803d',
-    GM1:'#d946ef',
-  };
-  const hc = headColors[lipid.category] || '#64748b';
-
-  const t1Len = lipid.tail1[0] || 0;
-  const t1Unsat = lipid.tail1[1] || 0;
-  const t2Len = lipid.tail2[0] || 0;
-  const t2Unsat = lipid.tail2[1] || 0;
-  const isSterol = lipid.category === 'ST';
-  const isSingleTail = ['LPC','LPE','SM','CER'].includes(lipid.category);
-  const isGlycolipid = ['MGDG','DGDG','GM1'].includes(lipid.category);
-
-  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
-  svg += `<rect width="${W}" height="${H}" fill="#f8fafc" rx="4"/>`;
-
-  if (isSterol) {
-    // Sterol: 4-ring steroid backbone schematic
-    svg += `<rect x="22" y="14" width="8" height="8" fill="none" stroke="${hc}" stroke-width="1.2" rx="1"/>`;
-    svg += `<rect x="30" y="14" width="8" height="8" fill="none" stroke="${hc}" stroke-width="1.2" rx="1"/>`;
-    svg += `<rect x="38" y="14" width="8" height="8" fill="none" stroke="${hc}" stroke-width="1.2" rx="1"/>`;
-    svg += `<rect x="26" y="22" width="8" height="8" fill="none" stroke="${hc}" stroke-width="1.2" rx="1"/>`;
-    svg += `<circle cx="55" cy="26" r="3" fill="${hc}" opacity="0.4"/>`;
-    svg += `<circle cx="22" cy="18" r="4" fill="${hc}" opacity="0.7"/>`;
-    svg += `<text x="45" y="48" text-anchor="middle" font-size="7" fill="#64748b">${lipid.name}</text>`;
-  } else if (isSingleTail) {
-    // Sphingolipids / lyso lipids: single tail from backbone
-    svg += `<circle cx="20" cy="24" r="8" fill="${hc}" opacity="0.35"/>`;
-    svg += `<text x="20" y="27" text-anchor="middle" font-size="6" font-weight="bold" fill="${hc}">${lipid.category}</text>`;
-    svg += `<line x1="28" y1="20" x2="42" y2="10" stroke="#475569" stroke-width="1.5"/>`;
-    svg += `<line x1="42" y1="10" x2="${42 + Math.max(t1Len*0.6, 8)}" y2="8" stroke="#475569" stroke-width="1.2"/>`;
-    if (t1Len > 0) svg += `<text x="45" y="46" text-anchor="middle" font-size="6.5" fill="#94a3b8">C${t1Len}:${t1Unsat}</text>`;
-  } else if (isGlycolipid) {
-    // Glycolipids: sugar headgroup + two tails
-    svg += `<circle cx="16" cy="20" r="6" fill="${hc}" opacity="0.25"/>`;
-    svg += `<circle cx="22" cy="18" r="4" fill="${hc}" opacity="0.15"/>`;
-    svg += `<text x="19" y="35" text-anchor="middle" font-size="6" fill="${hc}">${lipid.category}</text>`;
-    svg += `<line x1="24" y1="24" x2="36" y2="16" stroke="#94a3b8" stroke-width="1"/>`;
-    svg += `<line x1="24" y1="24" x2="36" y2="28" stroke="#94a3b8" stroke-width="1"/>`;
-    const t1w = Math.max(6, Math.min(t1Len*1.0, 30));
-    const t2w = Math.max(6, Math.min(t2Len*1.0, 30));
-    svg += `<line x1="36" y1="14" x2="${36+t1w}" y2="11" stroke="#475569" stroke-width="1.3"/>`;
-    svg += `<line x1="36" y1="28" x2="${36+t2w}" y2="30" stroke="#475569" stroke-width="1.3"/>`;
-    svg += `<text x="40" y="46" text-anchor="start" font-size="6" fill="#94a3b8">${lipid.formula.substring(0,15)}...</text>`;
-  } else {
-    // Glycerophospholipid: headgroup circle + glycerol + two tails
-    svg += `<circle cx="18" cy="22" r="8" fill="${hc}" opacity="0.35"/>`;
-    svg += `<text x="18" y="25" text-anchor="middle" font-size="7" font-weight="bold" fill="${hc}">${lipid.category}</text>`;
-
-    // Glycerol backbone
-    svg += `<line x1="26" y1="22" x2="36" y2="18" stroke="#94a3b8" stroke-width="1"/>`;
-    svg += `<line x1="26" y1="22" x2="36" y2="28" stroke="#94a3b8" stroke-width="1"/>`;
-
-    // Tail 1 (upper)
-    const t1w = Math.max(6, Math.min(t1Len * 1.2, 36));
-    svg += `<line x1="36" y1="16" x2="${36 + t1w}" y2="13" stroke="#475569" stroke-width="1.5"/>`;
-    if (t1Unsat > 0) {
-      const bendX = 36 + t1w * 0.55;
-      svg += `<line x1="${bendX}" y1="13" x2="${bendX + 5}" y2="10" stroke="#475569" stroke-width="1.5"/>`;
-    }
-
-    // Tail 2 (lower)
-    const t2w = Math.max(6, Math.min(t2Len * 1.2, 36));
-    svg += `<line x1="36" y1="28" x2="${36 + t2w}" y2="30" stroke="#475569" stroke-width="1.5"/>`;
-    if (t2Unsat > 0) {
-      const bendX = 36 + t2w * 0.55;
-      svg += `<line x1="${bendX}" y1="30" x2="${bendX + 5}" y2="27" stroke="#475569" stroke-width="1.5"/>`;
-    }
-
-    // Tail labels
-    svg += `<text x="42" y="46" text-anchor="middle" font-size="6.5" fill="#94a3b8">C${t1Len}:${t1Unsat} / C${t2Len}:${t2Unsat}</text>`;
-  }
-
-  // Formula below
-  svg += `<text x="45" y="57" text-anchor="middle" font-size="6" fill="#cbd5e1">${lipid.formula}</text>`;
-  svg += `</svg>`;
-  return svg;
-}
 
 // ===================================================================
 // Orientation Step
@@ -3479,6 +3217,90 @@ async function requestOrientationPreview(config) {
   return data;
 }
 
+// Diagnostic bodies have one owner. Progress and button labels contain only status.
+function uniqueFeedbackMessages(messages) {
+  var seen = new Set();
+  var result = [];
+  (messages || []).forEach(function(value) {
+    var text = typeof value === 'string' ? value : (value && value.message) || '';
+    String(text).split('\n').forEach(function(line) {
+      line = line.trim();
+      var key = line.replace(/^(?:[✗×]\s*|Step execution failed:\s*)/, '').replace(/\s+/g, ' ');
+      if (key && !seen.has(key)) { seen.add(key); result.push(line); }
+    });
+  });
+  return result;
+}
+
+function appendFeedbackMessages(panel, messages) {
+  var lines = uniqueFeedbackMessages(messages);
+  if (!lines.length) return;
+  var list = document.createElement('ul');
+  lines.forEach(function(message) {
+    var item = document.createElement('li');
+    item.textContent = message;
+    list.appendChild(item);
+  });
+  panel.appendChild(list);
+}
+
+function renderInputReadiness(report, checked, errorMessage) {
+  var panel = document.getElementById('input-readiness-report');
+  if (!panel) return;
+  panel.replaceChildren();
+  panel.classList.toggle('hidden', !report && !errorMessage);
+  if (!report && !errorMessage) return;
+  report = report || {};
+  var errors = uniqueFeedbackMessages((report.errors || []).concat(errorMessage || []));
+  panel.classList.toggle('error', errors.length > 0);
+  var heading = document.createElement('h4');
+  heading.textContent = errors.length ? 'Input requires review' :
+    (checked ? 'Input structure validation passed' : 'Input assessment — run Check Upload to validate your selection');
+  panel.appendChild(heading);
+  var messages = errors.concat(report.warnings || []);
+  if ((report.repairable_residues || []).length) {
+    messages.push(report.repairable_residues.length +
+      (errors.length ? ' residue(s) have repairable missing side-chain atoms. Resolve the blocking issues before automatic repair can run.' :
+       ' residue(s) have missing side-chain atoms eligible for automatic repair during Check Upload.'));
+  }
+  appendFeedbackMessages(panel, messages);
+}
+
+function stepFeedbackElement(handle) {
+  var input = handle.stepName === 'input';
+  var id = input ? 'input-readiness-report' : 'step-feedback-' + handle.buttonId;
+  var panel = document.getElementById(id);
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = id;
+    panel.className = 'input-check-report step-feedback hidden';
+    panel.setAttribute('aria-live', 'polite');
+  }
+  if (handle.element.nextElementSibling !== panel) handle.element.after(panel);
+  return panel;
+}
+
+function operationHasFeedbackOwner(queueState) {
+  if (queueState.task_id && queueState.task_id !== state.taskId) return false;
+  var path = queueState.request_url || '';
+  if (state.uploadRunning && path === '/api/upload-pdb') return true;
+  if (state.buildRunning && (path === '/api/build' || !queueState.operation_id)) return true;
+  return /\/api\/(?:step|filter-pdb)\//.test(path) &&
+    !!document.querySelector('.step-progress[data-state="running"]');
+}
+
+function revokeStepPass(stepName) {
+  var start = state.wizardSteps.indexOf(stepName);
+  if (start < 0) return;
+  for (var i = start; i < state.wizardSteps.length; i++) {
+    _checkedSteps.delete(state.wizardSteps[i]);
+    state.completedSteps.delete(i);
+    if (_checkedConfig) delete _checkedConfig[state.wizardSteps[i]];
+  }
+  updateNextButtonState();
+  updateStepNavHighlight();
+}
+
 function renderInputCheckReport(repair, errorMessage, modificationReport, nucleicAcids) {
   var panel = document.getElementById('input-check-report');
   if (!panel) return;
@@ -3487,12 +3309,8 @@ function renderInputCheckReport(repair, errorMessage, modificationReport, nuclei
 
   var heading = document.createElement('h4');
   if (errorMessage) {
-    panel.classList.add('error');
-    heading.textContent = '\u2717 Input requires review';
-    panel.appendChild(heading);
-    var errorText = document.createElement('p');
-    errorText.textContent = errorMessage;
-    panel.appendChild(errorText);
+    panel.classList.add('hidden');
+    renderInputReadiness(null, false, errorMessage);
     return;
   }
 
@@ -3618,7 +3436,7 @@ function renderModificationGeometryReport(reports) {
   panel.appendChild(heading);
   var summary = document.createElement('p');
   summary.textContent =
-    'New heavy atoms were constructed and checked against the selected force field\'s ' +
+    'Added or restored heavy atoms were checked against the selected force field\'s ' +
     'equilibrium bond lengths and angles. Hard heavy-atom overlaps are rejected.';
   panel.appendChild(summary);
   var table = document.createElement('table');
@@ -3642,12 +3460,289 @@ function renderModificationGeometryReport(reports) {
       row.appendChild(cell);
     });
     body.appendChild(row);
+    var deposited = report.deposited_geometry;
+    if (deposited && (deposited.retained_deposited_atoms || deposited.rebuilt_atoms)) {
+      var detail = document.createElement('p');
+      var pieces = [];
+      if ((deposited.retained_deposited_atoms || []).length) {
+        pieces.push('preserved ' + deposited.retained_deposited_atoms.join(', '));
+      }
+      if ((deposited.rebuilt_atoms || []).length) {
+        pieces.push('built missing ' + deposited.rebuilt_atoms.join(', '));
+      }
+      detail.textContent = report.chain + ':' + report.resid + ' uploaded geometry: ' +
+        pieces.join('; ') + '. ' + (deposited.reason || '');
+      panel.appendChild(detail);
+    }
   });
   table.appendChild(body);
   panel.appendChild(table);
 }
 
 // ---- Generic Check button behavior ----
+var _progressHandle = null;
+
+// Every step whose Check writes a checkpoint to disk shows a progress bar
+// directly beneath its own Check button. One shared element cannot do this:
+// the button that starts a Check lives in a wizard panel that is hidden and
+// shown as the user moves between steps, so the bar has to belong to the same
+// panel as the button that was clicked. Bars are therefore created on demand —
+// which also gives the required behaviour that no bar exists until a Check
+// runs — and then kept, showing the outcome of the most recent Check.
+
+var _STEP_PROGRESS_POLL_MS = 800;
+
+var _STEP_PROGRESS_LABELS = {
+  input: 'upload check',
+  forcefield: 'force field setup',
+  structure: 'structure processing',
+  orient: 'orientation',
+  membrane: 'membrane build',
+  solvation: 'solvation',
+  ions: 'ion placement',
+  cg_model: 'Martini model check',
+  cg_mapping: 'protein mapping',
+  cg_orientation: 'orientation',
+  cg_environment: 'environment build',
+  cg_solvation: 'solvation',
+  cg_system: 'final system build',
+};
+
+/** Find, or build on first use, the progress bar belonging to a Check button. */
+function _stepProgressElement(btnId, statusElId) {
+  var existing = document.getElementById('step-progress-' + btnId);
+  if (existing) return existing;
+  var button = document.getElementById(btnId);
+  if (!button) return null;
+
+  var element = document.createElement('div');
+  element.id = 'step-progress-' + btnId;
+  element.className = 'step-progress';
+  element.setAttribute('aria-live', 'polite');
+  element.innerHTML =
+    '<div class="step-progress-row">' +
+      '<div class="step-progress-track">' +
+        '<div class="step-progress-bar" role="progressbar" aria-valuemin="0"' +
+        ' aria-valuemax="100" aria-valuenow="0"></div>' +
+      '</div>' +
+      '<span class="step-progress-percent">0%</span>' +
+    '</div>' +
+    '<div class="step-progress-foot">' +
+      '<span class="step-progress-phase"></span>' +
+      '<span class="step-progress-elapsed"></span>' +
+    '</div>';
+
+  // Anchor on the status text where the button has one beside it: the status
+  // is inline, so inserting after it puts the bar on the line below the button
+  // instead of between the button and its own message. Where the status lives
+  // in a different container (the solvation and ion panels wrap the button on
+  // its own), the button itself is the anchor.
+  var anchor = statusElId ? document.getElementById(statusElId) : null;
+  if (!anchor || anchor.parentElement !== button.parentElement) anchor = button;
+  anchor.insertAdjacentElement('afterend', element);
+  return element;
+}
+
+function _paintStepProgress(handle, fraction) {
+  var percent = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+  var bar = handle.element.querySelector('.step-progress-bar');
+  var readout = handle.element.querySelector('.step-progress-percent');
+  if (bar) {
+    bar.style.width = percent + '%';
+    bar.setAttribute('aria-valuenow', String(percent));
+  }
+  if (readout) readout.textContent = percent + '%';
+}
+
+function _startProgressDisplay(stepName, btnId, statusElId) {
+  var element = _stepProgressElement(btnId, statusElId);
+  if (!element) return null;
+  var label = _STEP_PROGRESS_LABELS[stepName] || stepName;
+  var handle = {
+    element: element,
+    buttonId: btnId,
+    stepName: stepName,
+    statusId: statusElId,
+    startedAt: Date.now(),
+    fraction: 0.02,
+    poll: null,
+    clock: null,
+  };
+
+  element.classList.remove('hidden');
+  element.setAttribute('data-state', 'running');
+  var phase = element.querySelector('.step-progress-phase');
+  var elapsed = element.querySelector('.step-progress-elapsed');
+  if (phase) phase.textContent = 'Starting ' + label + '…';
+  if (elapsed) elapsed.textContent = '0.0 s';
+  _paintStepProgress(handle, handle.fraction);
+
+  handle.clock = setInterval(function() {
+    if (elapsed) elapsed.textContent = ((Date.now() - handle.startedAt) / 1000).toFixed(1) + ' s';
+  }, 100);
+
+  return handle;
+}
+
+/**
+ * Show the bar under a Check button and keep it live until the Check returns.
+ *
+ * The percentage is only ever what the server reports: the runner publishes a
+ * fraction as it passes each phase, and nothing here invents intermediate
+ * values. While a phase is long the bar holds its position, and the animated
+ * fill plus the running clock are what say the step is still alive.
+ *
+ * Returns a handle for finishStepProgress, or null when the button is absent.
+ */
+function startStepProgress(stepName, btnId, statusElId) {
+  if (window.GMXViewer) GMXViewer.invalidate();
+  var status = document.getElementById(statusElId);
+  if (status) status.textContent = '';
+  if (stepName === 'input') {
+    document.getElementById('input-readiness-report').classList.add('hidden');
+    document.getElementById('input-check-report').classList.add('hidden');
+  }
+  var oldFeedback = document.getElementById('step-feedback-' + btnId);
+  if (oldFeedback) { oldFeedback.replaceChildren(); oldFeedback.classList.add('hidden'); }
+  var handle = _startProgressDisplay(stepName, btnId, statusElId);
+  if (!handle) return null;
+  var element = handle.element;
+  var phase = element.querySelector('.step-progress-phase');
+
+  handle.poll = GMXPoll.start(function() {
+    return GMXPoll.read('/api/step/' + state.taskId + '/progress').then(function(data) {
+      if (handle.done || handle.awaitingPreview || !element.isConnected || !data || !data.running) return;
+      // A step can only advance, but two Checks in quick succession can leave
+      // a stale entry behind; never let the bar run backwards.
+      var reported = Number(data.fraction) || 0;
+      if (reported > handle.fraction) {
+        handle.fraction = reported;
+        _paintStepProgress(handle, reported);
+      }
+      if (phase && data.phase) phase.textContent = data.phase;
+    }).catch(function() {
+      // A missed poll is not worth surfacing; the next one catches up.
+    });
+  }, _STEP_PROGRESS_POLL_MS);
+
+  beginCheckNotice(handle);
+  return handle;
+}
+
+/**
+ * Close out a bar: green and "Complete" with the total time on success, red
+ * with a short status on failure. The diagnostic body owns the reason.
+ * The bar stays on the page as the record of the
+ * most recent Check for that step.
+ */
+function finishStepProgress(handle, ok, message, report) {
+  if (!handle) return;
+  if (handle.done && (ok || handle.failed)) return;
+  handle.done = true;
+  handle.failed = !ok;
+  if (handle.poll) { GMXPoll.stop(handle.poll); handle.poll = null; }
+  if (handle.clock) { GMXPoll.stop(handle.clock); handle.clock = null; }
+  var seconds = (Date.now() - handle.startedAt) / 1000;
+  var element = handle.element;
+  var phase = element.querySelector('.step-progress-phase');
+  var elapsed = element.querySelector('.step-progress-elapsed');
+  element.setAttribute('data-state', ok ? 'done' : 'error');
+  _paintStepProgress(handle, ok ? 1 : handle.fraction);
+  if (phase) phase.textContent = ok ? 'Complete' : 'Check failed';
+  if (elapsed) elapsed.textContent = seconds.toFixed(1) + ' s total';
+  var status = document.getElementById(handle.statusId);
+  if (status) status.textContent = '';
+  if (!ok && handle.stepName !== 'build') renderStepFailure(handle, message, report);
+}
+
+function renderStepFailure(handle, message, report) {
+  var feedback = stepFeedbackElement(handle);
+  if (handle.stepName === 'input') {
+    renderInputReadiness(report, false, message || 'The check could not finish.');
+    document.getElementById('input-check-report').classList.add('hidden');
+  } else {
+    feedback.replaceChildren();
+    feedback.classList.remove('hidden');
+    feedback.classList.add('error');
+    appendFeedbackMessages(feedback, [message || 'The check could not finish.']);
+  }
+}
+
+function finishUnfinishedStepProgress(handle) {
+  if (handle && !handle.done) finishStepProgress(handle, false, 'Stopped before completion');
+  if (handle) handle.settled = true;
+  updateNextButtonState();
+}
+
+/**
+ * Drop the bars of steps whose checkpoints have just been invalidated.
+ *
+ * A green "Complete" is a claim about work that still stands. Going back and
+ * re-checking an earlier step discards every later checkpoint, so the bars
+ * that described them must go with the checkpoints rather than stay on screen
+ * asserting a result the task no longer holds.
+ */
+// ---- Background ligand parameterization ----
+// Started server-side when the upload Check succeeds, because it depends on
+// nothing chosen later and is the slowest thing a Check does. This only
+// reports it: a wait already being worked on should not look like a new one.
+
+var _ligandPrepTimer = null;
+
+function watchLigandPreparation() {
+  var line = document.getElementById('ff-ligand-prep');
+  if (!line || !state.taskId) return;
+  if (_ligandPrepTimer) { GMXPoll.stop(_ligandPrepTimer); _ligandPrepTimer = null; }
+
+  function render(data) {
+    var molecules = (data && data.molecules) || {};
+    var names = Object.keys(molecules);
+    if (!data || data.state === 'idle' || !names.length) {
+      line.classList.add('hidden');
+      return;
+    }
+    var computing = names.filter(function(n) { return molecules[n] === 'computing'; });
+    var ready = names.filter(function(n) { return molecules[n] === 'ready'; });
+    line.classList.remove('hidden');
+    if (computing.length) {
+      line.setAttribute('data-state', 'running');
+      line.textContent = 'Preparing GAFF2 parameters for ' + computing.join(', ') +
+        ' in the background — Check will reuse the result rather than wait for it.';
+      return;
+    }
+    if (data.state === 'done' && ready.length) {
+      line.setAttribute('data-state', 'done');
+      line.textContent = 'GAFF2 parameters ready for ' + ready.join(', ') + '.';
+      if (_ligandPrepTimer) { GMXPoll.stop(_ligandPrepTimer); _ligandPrepTimer = null; }
+      return;
+    }
+    // Ambiguous charges, an unavailable GAFF2 environment or a failure: the
+    // Check itself reports those with the context needed to act on them.
+    line.classList.add('hidden');
+    if (_ligandPrepTimer) { GMXPoll.stop(_ligandPrepTimer); _ligandPrepTimer = null; }
+  }
+
+  function poll() {
+    return GMXPoll.read('/api/ligand-prep/' + state.taskId)
+      .then(render)
+      .catch(function() { /* a missed poll is not worth surfacing */ });
+  }
+
+  _ligandPrepTimer = GMXPoll.start(poll, 2000, true);
+}
+
+function clearStepProgress(stepName) {
+  var scope = stepName ? document.getElementById('panel-' + stepName) : document;
+  if (!scope) return;
+  scope.querySelectorAll('.step-progress, .step-feedback').forEach(function(element) {
+    element.remove();
+  });
+  if (_checkNotice && (!stepName || _checkNotice.handle.stepName === stepName)) {
+    _checkNotice = null;
+    document.getElementById('compute-queue-status').classList.add('hidden');
+  }
+}
+
 async function _doCheckStep(stepName, statusElId, btnId) {
   var statusEl = document.getElementById(statusElId);
   var btn = document.getElementById(btnId);
@@ -3674,10 +3769,13 @@ async function _doCheckStep(stepName, statusElId, btnId) {
       if (inputReport) inputReport.classList.add('hidden');
     }
     if (btn) btn.disabled = true;
+    revokeStepPass(stepName);
     _stepRunning = true;
+    _progressHandle = startStepProgress(stepName, btnId, statusElId);
 
+    var inputRevision = _inputRevision;
     // Input step: first filter PDB by chain/molecule selections
-    if (stepName === 'input' && !isCoarseGrainedWorkflow()) {
+    if (stepName === 'input' && !(isCoarseGrainedWorkflow() && !coarseGrainedIncludesProtein())) {
       var includedChains = [];
       for (var ch in _chainState) {
         if (_chainState[ch].included) includedChains.push(ch);
@@ -3686,14 +3784,14 @@ async function _doCheckStep(stepName, statusElId, btnId) {
       // chains that have no protein residues, e.g. ligand in chain A
       // while protein is in chain B — without this the filter-pdb
       // endpoint deletes the ligand because its chain isn't in the list).
-      var smols = (state.pdbInfo && state.pdbInfo.small_molecules) || [];
+      var smols = (state.pdbInfo && (state.pdbInfo.selection_info || state.pdbInfo).small_molecules) || [];
       smols.forEach(function(m) {
         if (_smallMolState && _smallMolState[m.resname] && !_smallMolState[m.resname].included) return;
-        if (m.chain && includedChains.indexOf(m.chain) < 0) includedChains.push(m.chain);
+        if (typeof m.chain === 'string' && includedChains.indexOf(m.chain) < 0) includedChains.push(m.chain);
       });
-      // Collect excluded molecule resnames: always-strip (water, ions) +
+      // Collect excluded molecule resnames: replacement water +
       // user-unchecked small molecules
-      var excludedResn = ['HOH', 'SOL', 'WAT', 'TIP', 'TIP3', 'SPC', 'SPCE', 'NA', 'CL', 'K', 'CA', 'ZN', 'MG'];
+      var excludedResn = ['HOH', 'SOL', 'WAT', 'TIP', 'TIP3', 'SPC', 'SPCE'];
       for (var _smr in _smallMolState) {
         if (_smallMolState.hasOwnProperty(_smr) && !_smallMolState[_smr].included) {
           if (excludedResn.indexOf(_smr) < 0) excludedResn.push(_smr);
@@ -3719,21 +3817,38 @@ async function _doCheckStep(stepName, statusElId, btnId) {
     }
 
     var cfg = buildModuleConfig(stepName)[stepName] || {};
+    var chemistryRevision = _structureRevision;
+    var forceFieldRevision = _forceFieldRevision;
     var result = await _apiFetch('/api/step/' + state.taskId + '/' + stepName, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: cfg }),
     });
     if (result.status === 'ok') {
-      if (stepName !== 'cg_system') _checkedSteps.add(stepName);
+      if (stepName === 'input' && inputRevision !== _inputRevision) {
+        throw new Error('Input selection changed while checking. Run Check Upload again.');
+      }
+      if (stepName === 'structure' && chemistryRevision !== _structureRevision) {
+        throw new Error('Chemistry changed while checking. Run Check Structure again.');
+      }
+      if (stepName === 'forcefield' && forceFieldRevision !== _forceFieldRevision) {
+        throw new Error('Force-field settings changed while checking. Confirm the current settings again.');
+      }
+      if (stepName === 'input') {
+        _progressHandle.awaitingPreview = true;
+        GMXPoll.stop(_progressHandle.poll);
+        _progressHandle.poll = null;
+      } else finishStepProgress(_progressHandle, true);
+      if (stepName === 'cg_environment') renderMembraneCompositionWarnings((result.metrics || {}).membrane_composition_warnings || []);
+      _checkedSteps.add(stepName);
       // Snapshot the config that was just validated (prevents drift when user
       // changes DOM values between "Check" and "Build")
       _checkedConfig = _checkedConfig || {};
-      _checkedConfig[stepName] = cfg;
+      _checkedConfig[stepName] = JSON.parse(JSON.stringify(cfg));
       if (statusEl) {
         statusEl.textContent = stepName === 'cg_system'
           ? '✓ Quality gates passed; inspect and confirm below'
-          : '✓ Checked (' + (result.elapsed_s != null ? result.elapsed_s : '?') + 's)';
+          : '';
         statusEl.style.color = '#059669';
       }
       var cgConfirmation = stepName === 'cg_system'
@@ -3747,8 +3862,12 @@ async function _doCheckStep(stepName, statusElId, btnId) {
 
       // Refresh viewer to confirm WYSIWYG — what you see IS what was saved
       if (stepName === 'input') {
+        renderInputReadiness(null);
+        var inputWarnings = ((result.metrics || {}).input_validation || {}).warnings || [];
         var inputModificationReport = (result.metrics || {}).input_modifications || {};
         var standardizedSequences = (result.metrics || {}).input_sequences || [];
+        _savedFragmentConfig = cfg;
+        if ((result.metrics || {}).input_summary) showCheckedInputSummary(result.metrics.input_summary);
         if (standardizedSequences.length && state.pdbInfo) {
           state.pdbInfo.sequences = standardizedSequences;
           loadProcResidues();
@@ -3758,27 +3877,21 @@ async function _doCheckStep(stepName, statusElId, btnId) {
           (result.metrics || {}).input_repair || {}, null, inputModificationReport,
           (result.metrics || {}).input_nucleic_acids || []
         );
-        // Reload viewer PDB from the saved checkpoint to confirm chain filter
-        var vpdb = await _loadStepViewerPdb('input');
-        if (vpdb) {
-          // Update pdb_content and box_nm in state so subsequent
-          // viewers use the module-validated checkpoint data.
-          // (The upload response may contain an unreasonable CRYST1 box;
-          // the module validates and fixes it.)
-          if (state.pdbInfo) {
-            state.pdbInfo.pdb_content = vpdb;
-            // Parse CRYST1 from viewer.pdb to get the validated box
-            var crystMatch = vpdb.match(/^CRYST1\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/m);
-            if (crystMatch) {
-              state.pdbInfo.box_nm = [
-                parseFloat(crystMatch[1]) / 10.0,
-                parseFloat(crystMatch[2]) / 10.0,
-                parseFloat(crystMatch[3]) / 10.0,
-              ];
-            }
-          }
+        appendFeedbackMessages(document.getElementById('input-check-report'), inputWarnings);
+        var reconstruction = (result.metrics || {}).input_reconstruction || {};
+        var notes = [];
+        if ((reconstruction.splits || []).length) notes.push({message:
+          'Created ' + reconstruction.splits.length + ' additional chain fragment(s). ' +
+          'No bonds cross the missing segments; review each fragment’s termini.'});
+        if (reconstruction.renumber_residues) notes.push({message:
+          'Residues are numbered from 1 within each chain. Original identifiers are retained in the saved mapping.'});
+        appendFeedbackMessages(document.getElementById('input-check-report'), notes);
+        if (!isCoarseGrainedWorkflow() || coarseGrainedIncludesProtein()) {
+          _progressHandle.element.querySelector('.step-progress-phase').textContent =
+            'Loading the checked structure preview…';
+          await refreshCheckedInputPreview();
         }
-        redrawPDBViewerWithChainFilter();
+        finishStepProgress(_progressHandle, true);
       } else if (stepName === 'forcefield') {
         applyForceFieldResolution(result.metrics || {});
       } else if (stepName === 'structure') {
@@ -3792,7 +3905,7 @@ async function _doCheckStep(stepName, statusElId, btnId) {
         renderSolvationViewer();
       } else if (stepName.indexOf('cg_') === 0) {
         if (stepName === 'cg_mapping' && statusEl) {
-          statusEl.textContent += ' — downstream box dimensions are derived automatically from this mapped extent';
+          statusEl.textContent = 'Downstream box dimensions are derived automatically from this mapped extent.';
         }
         var cgViewerRendered;
         if (stepName === 'cg_orientation') {
@@ -3817,17 +3930,22 @@ async function _doCheckStep(stepName, statusElId, btnId) {
         }
       }
     } else {
-      if (statusEl) { statusEl.textContent = '✗ ' + (result.error || 'Failed'); statusEl.style.color = '#dc2626'; }
-      if (stepName === 'input') renderInputCheckReport(null, result.error || 'Input check failed');
+      revokeStepPass(result.input_check_required ? 'input' : stepName);
+      finishStepProgress(_progressHandle, false, result.error || 'Failed', result.input_validation);
       if (stepName === 'structure') renderModificationGeometryReport([]);
     }
   } catch(e) {
-    if (statusEl) { statusEl.textContent = '✗ ' + (e.message || 'Network error'); statusEl.style.color = '#dc2626'; }
-    if (stepName === 'input') renderInputCheckReport(null, e.message || 'Network error');
+    revokeStepPass(stepName);
+    finishStepProgress(_progressHandle, false, e.message || 'Network error');
+
     if (stepName === 'structure') renderModificationGeometryReport([]);
   } finally {
     _stepRunning = false;
-    if (btn) btn.disabled = false;
+    if (btn) btn.disabled = stepName === 'forcefield' && !_ffCompatibilityValid;
+    // Safety net: any path that left the bar running closes it here, so a
+    // Check can never leave a bar polling forever.
+    finishUnfinishedStepProgress(_progressHandle);
+    _progressHandle = null;
   }
 }
 
@@ -3852,57 +3970,10 @@ function initCheckButtons() {
 
 /** Apply unified cartoon+stick style to a 3Dmol viewer. */
 function _applyUnifiedStyle(viewer, pdbContent, onlyChains) {
-  var chainSet = new Set();
-  var chainColors = {};
-  (pdbContent || '').split('\n').forEach(function(l) {
-    if (l.indexOf('ATOM') === 0 || l.indexOf('HETATM') === 0) {
-      var ch = (l.substring(21,22)||' ').trim();
-      if (ch) chainSet.add(ch);
-    }
+  GMXStyle.apply(viewer, GMXStyle.pdbAtoms(viewer, pdbContent), {
+    onlyChains: onlyChains,
+    moleculeState: _smallMolState,
   });
-  var ci = 0;
-  if (chainSet.size > 0) {
-    chainSet.forEach(function(ch) {
-      var macaron = (window.GMX && window.GMX.MACARON) || ['0xd4a5c7','0xa5c7d4','0xc7d4a5'];
-      var color = macaron[ci % macaron.length];
-      if (onlyChains && !onlyChains.has(ch)) {
-        viewer.setStyle({chain: ch}, {cartoon: {hidden: true}, line: {hidden: true}});
-      } else {
-        viewer.setStyle({chain: ch}, {cartoon: {color: color, style: 'trace', thickness: 0.28}});
-        chainColors[ch] = color;
-        ci++;
-      }
-    });
-  } else {
-    viewer.setStyle({}, {cartoon: {color: 'spectrum', style: 'trace', thickness: 0.28}});
-  }
-  window._pdbChainColors = chainColors;
-  // ---- small-molecule chain-awareness ----
-  // Visibility is determined by two factors:
-  //   1. The molecule's own checkbox (_smallMolState)
-  //   2. Its parent chain — BUT only when that chain contains protein.
-  //      Small molecules in their own chain (no protein residues) are
-  //      controlled solely by their checkbox; they are not tied to any
-  //      protein chain toggle.
-  var _smVis = (state.pdbInfo && state.pdbInfo.small_molecules) || [];
-  _smVis.forEach(function(m) {
-    var _molOk = !_smallMolState[m.resname] || _smallMolState[m.resname].included;
-    var _isProtChain = _chainState.hasOwnProperty(m.chain);
-    // Only gate on chain inclusion when the chain actually has protein
-    var _chOk = !onlyChains || !_isProtChain || onlyChains.has(m.chain);
-    if (!_chOk || !_molOk) {
-      viewer.setStyle({chain: m.chain, resn: m.resname}, {
-        stick: {hidden: true}, sphere: {hidden: true},
-        line: {hidden: true}, cartoon: {hidden: true}
-      });
-    } else {
-      viewer.setStyle({chain: m.chain, resn: m.resname}, {});
-    }
-  });
-
-  colorSmallMolecules(viewer, onlyChains);
-  viewer.addStyle({resn: ['NA','CL','K','CA','ZN','MG']}, {sphere: {radius: 0.3, color: '0x94a3b8'}});
-  viewer.addStyle({resn: ['HOH','SOL','WAT','TIP','TIP3']}, {sphere: {radius: 0.08, opacity: 0.15}});
 }
 
 function initOrientationStep() {
@@ -3910,14 +3981,16 @@ function initOrientationStep() {
   // Shared viewer — single 3Dmol instance on #orient-viewer.
   // Both Auto and Manual tabs use the same viewer.
   // ====================================================================
-  function _createOrientViewer() {
+  async function _createOrientViewer() {
     if (window._orientViewer) return;
     var el = document.getElementById('orient-viewer');
-    if (!el || typeof $3Dmol === 'undefined') return;
+    if (!el) return;
+    await GMXAssets.viewer();
+    if (window._orientViewer) return;
     window._orientViewer = $3Dmol.createViewer(el, {
-      backgroundColor: '0xffffff', antialias: true,
+      backgroundColor: window.gmxViewerBackground(), antialias: true,
     });
-    window._orientViewer.setBackgroundColor('0xffffff');
+    window._orientViewer.setBackgroundColor(window.gmxViewerBackground());
     window._orientViewer.setSlab(-10000, 10000);
   }
   window._createOrientViewer = _createOrientViewer;
@@ -3948,7 +4021,7 @@ function initOrientationStep() {
     var pdb = await _loadStepViewerPdb('orient');
     if (!pdb || requestId !== _orientPreviewRequestId) return false;
     _orientedPdbContent = pdb;
-    _createOrientViewer();
+    await _createOrientViewer();
     _redrawOrientViewer();
     var previewStatus = document.getElementById('orient-preview-status');
     if (previewStatus) {
@@ -4082,12 +4155,11 @@ function initOrientationStep() {
         if (statusEl) { statusEl.textContent = 'Step already running — please wait'; statusEl.style.color = '#d97706'; }
         return;
       }
+      revokeStepPass('orient');
       _stepRunning = true;
+      var progress = startStepProgress('orient', 'orient-check-btn', 'orient-check-status');
       try {
-        if (statusEl) { statusEl.textContent = 'Running...'; statusEl.style.color = '#d97706'; }
         checkBtn.disabled = true;
-
-        if (statusEl) { statusEl.textContent = 'Running orientation...'; }
         var orientConfig = buildModuleConfig().orient || { method: 'ppm' };
         var resp = await fetch('/api/step/' + state.taskId + '/orient', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4095,6 +4167,7 @@ function initOrientationStep() {
         });
         var result = await resp.json();
         if (result.status === 'ok') {
+          finishStepProgress(progress, true);
           _checkedSteps.add('orient');
           _checkedConfig = _checkedConfig || {};
           _checkedConfig.orient = orientConfig;
@@ -4104,27 +4177,30 @@ function initOrientationStep() {
           if (statusEl) {
             statusEl.textContent = warnings.length
               ? '⚠ Checked with ' + warnings.length + ' scientific warning(s)'
-              : '✓ Oriented (' + (result.elapsed_s != null ? result.elapsed_s : '?') + 's)';
+              : '';
             statusEl.style.color = warnings.length ? '#d97706' : '#059669';
           }
           updateNextButtonState();
           // The saved checkpoint is authoritative. Reload it even though the
           // preview used the same backend module, so Check visibly confirms
           // the exact coordinates that Step 5 will consume.
-          _createOrientViewer();
+          await _createOrientViewer();
           var loaded = await window._loadOrientationCheckpointPreview();
           if (!loaded && statusEl) {
             statusEl.textContent = '⚠ Check saved, but the saved viewer could not be reloaded';
             statusEl.style.color = '#d97706';
           }
         } else {
-          if (statusEl) { statusEl.textContent = '✗ ' + (result.error || 'Failed'); statusEl.style.color = '#dc2626'; }
+          finishStepProgress(progress, false, result.error || 'Failed');
+
         }
       } catch(e) {
-        if (statusEl) { statusEl.textContent = '✗ Network error'; statusEl.style.color = '#dc2626'; }
+        revokeStepPass('orient');
+        finishStepProgress(progress, false, e.message || 'Network error');
       } finally {
         _stepRunning = false;
         checkBtn.disabled = false;
+        finishUnfinishedStepProgress(progress);
       }
     });
   }
@@ -4176,7 +4252,7 @@ async function runPPMAuto() {
     if (tV) tV.textContent = _orientTilt;
     if (pV) pV.textContent = _orientPhi;
 
-    if (window._createOrientViewer) window._createOrientViewer();
+    if (window._createOrientViewer) await window._createOrientViewer();
     if (window._redrawOrientViewer) window._redrawOrientViewer();
     if (previewStatus) {
       previewStatus.textContent = 'Preview matches the coordinates Check will save';
@@ -4342,990 +4418,9 @@ function _drawTiltedBox(viewer, halfXY_A, halfZ_A, zOffset, tiltDeg, phiDeg) {
 }
 
 // ===================================================================
-// ===================================================================
 // Structure Processing — Protonation + Termini + Modifications
+// Implementation lives in app_parts/structure_processing.js.
 // ===================================================================
-
-let _procResidues = [];         // [{resname, chain, resid, index}]
-let _procChains = [];           // sorted unique chain IDs
-let _procAssignments = [];     // protonation results
-// Authoritative fields are index + patch_id.  product_name and charge_shift
-// are presentation metadata derived from the server-side, force-field-specific
-// patch catalogue and must never be submitted as scientific input.
-let _procModifications = [];   // [{index, patch_id, product_name, charge_shift}]
-let _procCrosslinks = [];      // [{type:'disulfide', first_index, second_index}]
-let _procTermini = {};          // { chain_id: { nter: 'ACE'|'', cter: 'NME'|'' } }
-let _procPatchCatalog = [];
-let _procCapCapabilities = {};
-let _procCrosslinkCapabilities = {};
-let _inputModificationReport = {detected: 0, recognized: 0, records: [], warnings: []};
-let _inputModificationCapabilityWarnings = [];
-
-function selectedProteinForceField() {
-  return document.getElementById('ff-protein')?.value || 'charmm36';
-}
-let _procSelectedIdx = -1;
-let _protonationComputed = false;  // blocks Next until true
-let _protonationRunning = false;
-let _protonationRequestId = 0;
-let _computedProtonationInput = null;
-let _lastProtonationResult = null;
-let _systemPH = 7.0;               // recorded for later simulation setup
-let _waterVolume = 0;               // nm³ — computed in solvation step
-let _waterCount = 0;               // number of water molecules
-let _solvChecked = false;
-
-function initStructureProcessing() {
-  // Tab switching
-  document.querySelectorAll('.structproc-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.structproc-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const tabId = tab.dataset.tab;
-      document.getElementById('structproc-protonation').classList.toggle('hidden', tabId !== 'protonation');
-      document.getElementById('structproc-termini').classList.toggle('hidden', tabId !== 'termini');
-      document.getElementById('structproc-modifications').classList.toggle('hidden', tabId !== 'modifications');
-      if (tabId === 'modifications') renderModSequences();
-      if (tabId === 'termini') renderTerminiTab();
-    });
-  });
-
-  // pH input
-  const phInput = document.getElementById('proc-pH');
-  if (phInput) {
-    const validatePHInput = (formatValue) => {
-      let v = Number(phInput.value);
-      if (!Number.isFinite(v) || v < 1.0 || v > 13.0) {
-        invalidateProtonationState('Target pH must be between 1.0 and 13.0; enter a valid value and click Compute.');
-        return false;
-      }
-      const changed = v !== _systemPH;
-      _systemPH = v;
-      if (formatValue) phInput.value = v.toFixed(1);
-      if (changed) invalidateProtonationState('pH changed - click Compute to recalculate protonation.');
-      return true;
-    };
-    phInput.addEventListener('input', () => validatePHInput(false));
-    phInput.addEventListener('blur', () => validatePHInput(true));
-    phInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        runProtonation();
-      }
-    });
-    const initialPH = Number(phInput.value);
-    _systemPH = Number.isFinite(initialPH) && initialPH >= 1.0 && initialPH <= 13.0 ? initialPH : 7.0;
-    phInput.value = _systemPH.toFixed(1);
-  }
-
-  const hisSel = document.getElementById('proc-his-tautomer');
-  if (hisSel) hisSel.addEventListener('change', () => {
-    invalidateProtonationState('Histidine preference changed - click Compute to recalculate protonation.');
-  });
-
-  const runBtn = document.getElementById('proc-run-btn');
-  if (runBtn) runBtn.addEventListener('click', runProtonation);
-
-  const patchCancel = document.getElementById('proc-patch-cancel');
-  const disulfideAdd = document.getElementById('proc-disulfide-add');
-  if (disulfideAdd) disulfideAdd.addEventListener('click', addDisulfideCrosslink);
-  // Skip protonation checkbox
-  const skipCb = document.getElementById("proc-skip-protonation");
-  if (skipCb) {
-    skipCb.addEventListener("change", () => {
-      invalidateProtonationState(
-        skipCb.checked
-          ? 'Protonation will be skipped. Run Check Structure to confirm this choice.'
-          : 'Protonation enabled - click Compute before checking the structure.'
-      );
-      if (skipCb.checked) {
-        _protonationComputed = true;
-        document.getElementById('proc-chain-tables').innerHTML = '<p class="hint">Protonation skipped — original residue names and charges preserved.</p>';
-      }
-      updateNextButtonState();
-    });
-  }
-  if (patchCancel) patchCancel.addEventListener('click', closePatchPicker);
-}
-
-function loadProcResidues() {
-  if (!state.pdbInfo || !state.pdbInfo.sequences) return;
-  _procResidues = [];
-  _procModifications = [];
-  _procCrosslinks = [];
-  _procTermini = {};
-  _procPatchCatalog = [];
-  _procCapCapabilities = {};
-  _procCrosslinkCapabilities = {};
-  _lastProtonationResult = null;
-  const seqs = state.pdbInfo.sequences || [];
-  seqs.forEach(chain => {
-    const ch = chain.chain_id || '';
-    (chain.residues || []).forEach(res => {
-      _procResidues.push({
-        resname: res.resname, chain: ch, resid: res.resid,
-        index: _procResidues.length,
-      });
-    });
-  });
-  // Unique sorted chains
-  _procChains = [...new Set(_procResidues.map(r => r.chain))].sort();
-  // Explicit cap atoms/bonds are not implemented yet. Use the supported
-  // zwitterionic terminal chemistry by default instead of submitting hidden
-  // ACE/NME values from disabled controls.
-  _procChains.forEach(ch => {
-    _procTermini[ch] = { nter: '', cter: '' };
-  });
-  // Load termini and modifications data (rendered on tab switch).
-  // PROPKA is NOT auto-triggered here — that happens once when the
-  // user navigates to the structure step (goToWizardStep), avoiding
-  // duplicate runs from upload→loadProcResidues + step→auto trigger.
-  if (_procResidues.length) {
-    renderTerminiTab();
-    renderModSequences();
-    reloadModificationCatalog();
-    reloadCrosslinkCapabilities();
-    const forceField = encodeURIComponent(selectedProteinForceField());
-    fetch('/api/terminal-capabilities?force_field=' + forceField)
-      .then(function(response) { return response.json(); })
-      .then(function(capabilities) {
-        _procCapCapabilities = capabilities && !capabilities.error ? capabilities : {};
-        renderTerminiTab();
-      })
-      .catch(function() { _procCapCapabilities = {}; renderTerminiTab(); });
-  }
-}
-
-function restoreStructureProcessingConfig(savedConfig) {
-  if (!savedConfig || typeof savedConfig !== 'object' || !_procResidues.length) return;
-  if (savedConfig.termini && typeof savedConfig.termini === 'object') {
-    _procChains.forEach(function(ch) {
-      const saved = savedConfig.termini[ch];
-      if (saved && typeof saved === 'object') {
-        _procTermini[ch] = {
-          nter: String(saved.nter || '').toUpperCase(),
-          cter: String(saved.cter || '').toUpperCase(),
-        };
-      }
-    });
-  }
-  if (Array.isArray(savedConfig.modifications)) {
-    _procModifications = savedConfig.modifications.filter(function(mod) {
-      return mod && Number.isInteger(mod.index) && mod.index >= 0 &&
-        mod.index < _procResidues.length && typeof mod.patch_id === 'string';
-    }).map(function(mod) {
-      return {
-        index: mod.index,
-        patch_id: mod.patch_id,
-        product_name: mod.product_name || '',
-      };
-    });
-  }
-  if (Array.isArray(savedConfig.crosslinks)) {
-    _procCrosslinks = savedConfig.crosslinks.filter(function(item) {
-      return item && item.type === 'disulfide' &&
-        Number.isInteger(item.first_index) && Number.isInteger(item.second_index) &&
-        item.first_index >= 0 && item.second_index >= 0 &&
-        item.first_index < _procResidues.length && item.second_index < _procResidues.length &&
-        item.first_index !== item.second_index;
-    }).map(function(item) {
-      return {
-        type: 'disulfide',
-        first_index: item.first_index,
-        second_index: item.second_index,
-      };
-    });
-  }
-  if (Array.isArray(savedConfig.protonation)) {
-    _procAssignments = [];
-    savedConfig.protonation.forEach(function(assignment) {
-      if (!assignment || !Number.isInteger(assignment.index)) return;
-      _procAssignments[assignment.index] = Object.assign(
-        {is_titratable: true}, assignment
-      );
-    });
-  }
-  const skip = document.getElementById('proc-skip-protonation');
-  if (skip && typeof savedConfig.skip_protonation === 'boolean') {
-    skip.checked = savedConfig.skip_protonation;
-  }
-  renderTerminiTab();
-  renderModSequences();
-  renderDisulfideControls();
-  applyModification(-1, '', '');
-}
-
-function setInputModificationReport(report) {
-  const safe = report && typeof report === 'object' ? report : {};
-  _inputModificationReport = {
-    detected: Number(safe.detected || 0),
-    recognized: Number(safe.recognized || 0),
-    records: Array.isArray(safe.records) ? safe.records : [],
-    warnings: Array.isArray(safe.warnings) ? safe.warnings : [],
-  };
-  _inputModificationReport.records.forEach(function(record) {
-    if (!record || !record.normalized || !record.standard_resname) return;
-    var index = Number(record.residue_index);
-    var residue = Number.isInteger(index) ? _procResidues[index] : null;
-    if (!residue || Number(residue.resid) !== Number(record.resid) ||
-        String(residue.chain || '?') !== String(record.chain || '?')) {
-      residue = _procResidues.find(function(candidate) {
-        return Number(candidate.resid) === Number(record.resid) &&
-          String(candidate.chain || '?') === String(record.chain || '?');
-      });
-    }
-    if (residue) residue.resname = String(record.standard_resname).toUpperCase();
-  });
-  applyDetectedInputModifications();
-  renderDetectedModificationNotice();
-  renderModSequences();
-}
-
-async function reloadModificationCatalog() {
-  const forceField = encodeURIComponent(selectedProteinForceField());
-  try {
-    const response = await fetch('/api/patches?force_field=' + forceField);
-    const patches = await response.json();
-    if (!response.ok || !Array.isArray(patches)) throw new Error('Patch catalogue unavailable');
-    _procPatchCatalog = patches;
-    hydrateModificationMetadata();
-    applyDetectedInputModifications();
-    applyModification(-1, '', '');
-  } catch (error) {
-    _procPatchCatalog = [];
-    _inputModificationCapabilityWarnings = [
-      'The force-field modification catalogue could not be loaded; uploaded modifications were not auto-selected.'
-    ];
-    renderDetectedModificationNotice();
-    renderModSequences();
-  }
-}
-
-async function reloadCrosslinkCapabilities() {
-  const forceField = encodeURIComponent(selectedProteinForceField());
-  try {
-    const response = await fetch('/api/crosslink-capabilities?force_field=' + forceField);
-    const capabilities = await response.json();
-    _procCrosslinkCapabilities = response.ok && !capabilities.error ? capabilities : {};
-  } catch (_error) {
-    _procCrosslinkCapabilities = {};
-  }
-  renderDisulfideControls();
-}
-
-function applyDetectedInputModifications() {
-  _procModifications = _procModifications.filter(function(mod) {
-    return mod.source !== 'input-detection';
-  });
-  _inputModificationCapabilityWarnings = [];
-  if (!_procPatchCatalog.length) return;
-  (_inputModificationReport.records || []).forEach(function(record) {
-    if (!record || record.status !== 'recognized' || !record.patch_id) return;
-    const patch = _procPatchCatalog.find(function(item) {
-      return item && item.id === record.patch_id;
-    });
-    const location = (record.chain || '?') + ':' + record.resid + ' ' +
-      record.original_resname;
-    if (!patch) {
-      _inputModificationCapabilityWarnings.push(
-        location + ': recorded patch ' + record.patch_id + ' is absent from the installed catalogue.'
-      );
-      return;
-    }
-    if (patch.supported === false) {
-      _inputModificationCapabilityWarnings.push(
-        location + ': ' + record.patch_id + ' cannot be restored with ' +
-        selectedProteinForceField() + ' — ' + (patch.support_reason || 'no validated topology is installed') + '.'
-      );
-      return;
-    }
-    const index = Number(record.residue_index);
-    if (!Number.isInteger(index) || index < 0 || index >= _procResidues.length) {
-      _inputModificationCapabilityWarnings.push(
-        location + ': the standardized residue index could not be matched; select the modification manually.'
-      );
-      return;
-    }
-    const existing = _procModifications.find(function(mod) {
-      return mod.index === index && mod.source !== 'input-detection';
-    });
-    if (existing) return;
-    _procModifications = _procModifications.filter(function(mod) {
-      return mod.index !== index;
-    });
-    _procModifications.push({
-      index: index,
-      patch_id: patch.id,
-      product_name: patch.product_name || '',
-      charge_shift: patch.charge_shift,
-      source: 'input-detection',
-    });
-  });
-  renderDetectedModificationNotice();
-}
-
-function renderDetectedModificationNotice() {
-  const notice = document.getElementById('proc-upload-modification-notice');
-  const tab = document.querySelector('.structproc-tab[data-tab="modifications"]');
-  const records = _inputModificationReport.records || [];
-  if (tab) tab.classList.toggle('detected-attention', records.length > 0);
-  if (!notice) return;
-  notice.replaceChildren();
-  if (!records.length) {
-    notice.classList.add('hidden');
-    return;
-  }
-  notice.classList.remove('hidden');
-  const heading = document.createElement('h4');
-  heading.textContent = '\u26a0 Modified residues were detected in the uploaded protein';
-  notice.appendChild(heading);
-  const guidance = document.createElement('p');
-  guidance.textContent =
-    'Recognized residues were converted to their standard parents for safe processing. ' +
-    'Open the Modifications tab and verify that every automatically selected type and site matches the uploaded structure.';
-  notice.appendChild(guidance);
-  const warnings = (_inputModificationReport.warnings || []).concat(
-    _inputModificationCapabilityWarnings || []
-  );
-  if (warnings.length) {
-    const list = document.createElement('ul');
-    warnings.forEach(function(message) {
-      const item = document.createElement('li');
-      item.textContent = message;
-      list.appendChild(item);
-    });
-    notice.appendChild(list);
-  }
-}
-
-function hydrateModificationMetadata() {
-  if (!Array.isArray(_procPatchCatalog) || !_procPatchCatalog.length) return;
-  _procModifications = _procModifications.map(function(mod) {
-    const patch = _procPatchCatalog.find(function(item) {
-      return item && item.id === mod.patch_id;
-    });
-    if (!patch) return mod;
-    return {
-      index: mod.index,
-      patch_id: mod.patch_id,
-      product_name: patch.product_name || '',
-      charge_shift: patch.charge_shift,
-      source: mod.source,
-    };
-  });
-}
-
-function serializeStructureModifications() {
-  return _procModifications.map(function(mod) {
-    return { index: mod.index, patch_id: mod.patch_id };
-  });
-}
-
-function serializeStructureCrosslinks() {
-  return _procCrosslinks.map(function(item) {
-    return {
-      type: 'disulfide',
-      first_index: item.first_index,
-      second_index: item.second_index,
-    };
-  });
-}
-
-// -------------------------------------------------------------------
-// Protonation
-// -------------------------------------------------------------------
-
-function invalidateProtonationState(message) {
-  _protonationRequestId += 1;  // makes any in-flight response stale
-  _protonationRunning = false;
-  _protonationComputed = false;
-  _computedProtonationInput = null;
-  _procAssignments = [];
-  var runButton = document.getElementById('proc-run-btn');
-  var checkButton = document.getElementById('structure-check-btn');
-  if (runButton) runButton.disabled = false;
-  if (checkButton) checkButton.disabled = false;
-  var structureIndex = state.wizardSteps.indexOf('structure');
-  if (structureIndex >= 0) {
-    for (var i = structureIndex; i < state.wizardSteps.length; i++) {
-      state.completedSteps.delete(i);
-      _checkedSteps.delete(state.wizardSteps[i]);
-      if (_checkedConfig) delete _checkedConfig[state.wizardSteps[i]];
-    }
-  }
-  var statusEl = document.getElementById('proc-propka-status');
-  if (statusEl && message) {
-    statusEl.classList.remove('hidden');
-    statusEl.textContent = message;
-    statusEl.style.color = '#d97706';
-  }
-  var checkStatus = document.getElementById('structure-check-status');
-  if (checkStatus) checkStatus.textContent = '';
-  updateNextButtonState();
-  updateStepNavHighlight();
-}
-
-function validateStructureProtonationReady() {
-  var skip = document.getElementById('proc-skip-protonation');
-  if (skip && skip.checked) return '';
-  if (_protonationRunning) return 'Protonation is still computing. Wait for it to finish before checking.';
-  if (!_protonationComputed) return 'Run Compute after choosing the target pH and histidine state.';
-  var displayedPH = Number(document.getElementById('proc-pH')?.value);
-  var displayedHis = document.getElementById('proc-his-tautomer')?.value || 'HSE';
-  if (!Number.isFinite(displayedPH) || displayedPH < 1.0 || displayedPH > 13.0) {
-    return 'Target pH must be a number between 1.0 and 13.0.';
-  }
-  if (!_computedProtonationInput || displayedPH !== _computedProtonationInput.pH ||
-      displayedHis !== _computedProtonationInput.his) {
-    return 'The displayed pH or histidine preference differs from the last calculation. Run Compute again.';
-  }
-  var titratableNames = new Set(['HIS', 'ASP', 'GLU', 'CYS', 'LYS', 'TYR']);
-  var assigned = new Set(
-    _procAssignments.filter(function(a) { return a && a.is_titratable; })
-      .map(function(a) { return Number(a.index); })
-  );
-  var missing = _procResidues.filter(function(r) {
-    return titratableNames.has(String(r.resname || '').toUpperCase()) && !assigned.has(r.index);
-  });
-  if (missing.length) {
-    var preview = missing.slice(0, 6).map(function(r) {
-      return (r.chain || '?') + ':' + r.resid + ' ' + r.resname;
-    }).join(', ');
-    if (missing.length > 6) preview += ', ...';
-    return 'Protonation results are incomplete (' + preview + '). Run Compute again.';
-  }
-  return '';
-}
-
-async function runProtonation() {
-  const phInput = document.getElementById('proc-pH');
-  const pH = Number(phInput ? phInput.value : NaN);
-  const his = document.getElementById('proc-his-tautomer')?.value || 'HSE';
-  const residues = _procResidues.map(r => r.resname);
-  const taskIdParam = state.taskId || '';
-  const statusEl = document.getElementById('proc-propka-status');
-  const runBtn = document.getElementById('proc-run-btn');
-  const checkBtn = document.getElementById('structure-check-btn');
-  const checkStatusEl = document.getElementById('structure-check-status');
-
-  if (!Number.isFinite(pH) || pH < 1.0 || pH > 13.0) {
-    invalidateProtonationState('Target pH must be a number between 1.0 and 13.0; no calculation was run.');
-    if (phInput) phInput.focus();
-    return;
-  }
-  if (!residues.length) {
-    invalidateProtonationState('No protein residues are available for protonation.');
-    return;
-  }
-  if (_protonationRunning) {
-    if (statusEl) {
-      statusEl.classList.remove('hidden');
-      statusEl.textContent = 'Protonation is already computing. Please wait.';
-      statusEl.style.color = '#d97706';
-    }
-    return;
-  }
-
-  const requestId = ++_protonationRequestId;
-  _systemPH = pH;
-  _protonationRunning = true;
-  _protonationComputed = false;
-  _computedProtonationInput = null;
-  _procAssignments = [];
-  _checkedSteps.delete('structure');
-  if (_checkedConfig) delete _checkedConfig.structure;
-  if (checkStatusEl) checkStatusEl.textContent = '';
-  if (runBtn) runBtn.disabled = true;
-  if (checkBtn) checkBtn.disabled = true;
-  if (statusEl) {
-    statusEl.classList.remove('hidden');
-    statusEl.textContent = 'Computing environment-sensitive protonation states...';
-    statusEl.style.color = '#d97706';
-  }
-  updateNextButtonState();
-
-  try {
-    document.getElementById('proc-chain-tables').innerHTML = '<p class="hint">Computing protonation...</p>';
-    const res = await fetch('/api/protonate', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        residues, pH, his_tautomer: his,
-        task_id: taskIdParam,
-        structure_residues: _procResidues,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-    if (requestId !== _protonationRequestId) return;
-    if (Number(data.pH) !== pH) {
-      throw new Error(`The server returned a result for pH ${data.pH}, not the requested pH ${pH}.`);
-    }
-    _procAssignments = data.assignments || [];
-    const returnedIndices = new Set(
-      _procAssignments.filter(function(a) { return a && a.is_titratable; })
-        .map(function(a) { return Number(a.index); })
-    );
-    const expectedNames = new Set(['HIS', 'ASP', 'GLU', 'CYS', 'LYS', 'TYR']);
-    const missingAssignments = _procResidues.filter(function(r) {
-      return expectedNames.has(String(r.resname || '').toUpperCase()) && !returnedIndices.has(r.index);
-    });
-    if (missingAssignments.length) {
-      throw new Error('The server returned incomplete protonation assignments. Run Compute again.');
-    }
-    _protonationComputed = true;
-    _computedProtonationInput = {pH: pH, his: his};
-    const previousResult = _lastProtonationResult;
-    const currentStates = _procAssignments.filter(function(a) {
-      return a && a.is_titratable;
-    }).map(function(a) {
-      return {
-        index: Number(a.index),
-        assigned_name: String(a.assigned_name || ''),
-        charge: Number(a.charge || 0),
-      };
-    });
-    let changedCount = null;
-    if (previousResult) {
-      const previousStates = new Map(previousResult.states.map(function(a) {
-        return [a.index, a.assigned_name + '|' + a.charge];
-      }));
-      changedCount = currentStates.filter(function(a) {
-        return previousStates.get(a.index) !== a.assigned_name + '|' + a.charge;
-      }).length;
-    }
-    data.previous_pH = previousResult ? previousResult.pH : null;
-    data.changed_count = changedCount;
-    data.assigned_charge_e = currentStates.reduce(function(total, a) {
-      return total + a.charge;
-    }, 0);
-    _lastProtonationResult = {pH: pH, his: his, states: currentStates};
-    updateNextButtonState();
-    if (statusEl) {
-      const comparison = changedCount == null
-        ? ''
-        : `; ${changedCount} discrete residue state${changedCount === 1 ? '' : 's'} changed from pH ${previousResult.pH}`;
-      statusEl.classList.remove('hidden');
-      statusEl.textContent = `${data.propka_warning ? '⚠' : '✓'} Recalculated at pH ${pH.toFixed(1)} using ${data.method}${comparison}.` +
-        (data.propka_warning ? ` ${data.propka_warning}` : '');
-      statusEl.style.color = data.propka_warning ? '#d97706' : (data.used_propka ? '#059669' : '#64748b');
-    }
-    renderProtonationTables(data);
-  } catch (e) {
-    if (requestId !== _protonationRequestId) return;
-    _procAssignments = [];
-    _protonationComputed = false;
-    _computedProtonationInput = null;
-    document.getElementById('proc-chain-tables').innerHTML = '<p class="hint">No current protonation result. Correct the issue and click Compute again.</p>';
-    if (statusEl) {
-      statusEl.classList.remove('hidden');
-      statusEl.textContent = 'Protonation failed: ' + (e.message || 'unknown error');
-      statusEl.style.color = '#dc2626';
-    }
-    console.error('Protonation error:', e);
-  } finally {
-    if (requestId === _protonationRequestId) {
-      _protonationRunning = false;
-      if (runBtn) runBtn.disabled = false;
-      if (checkBtn) checkBtn.disabled = false;
-      updateNextButtonState();
-    }
-  }
-}
-
-function renderProtonationTables(data) {
-  const container = document.getElementById('proc-chain-tables');
-  if (!container) return;
-
-  const titratable = new Set();
-  (data.titratable_residues || []).forEach(t => titratable.add(t.index));
-
-  let html = '';
-  if (data.method) {
-    html += `<p class="hint" style="margin-bottom:8px;">Method: <b>${escapeHtml(data.method)}</b> &nbsp;|&nbsp; pH ${escapeHtml(data.pH)} &nbsp;|&nbsp; ${escapeHtml(data.titratable_count)} titratable residues found</p>`;
-    if (data.propka_warning) {
-      html += `<p class="hint" style="margin-bottom:8px;color:#d97706;">⚠ ${escapeHtml(data.propka_warning)}</p>`;
-    }
-    html += `<p class="hint" style="margin-bottom:8px;">Assigned titratable-residue charge: <b>${data.assigned_charge_e >= 0 ? '+' : ''}${data.assigned_charge_e} e</b>`;
-    if (data.changed_count != null) {
-      html += ` &nbsp;|&nbsp; ${data.changed_count} discrete state${data.changed_count === 1 ? '' : 's'} changed since pH ${data.previous_pH}`;
-      if (data.changed_count === 0 && Number(data.previous_pH) !== Number(data.pH)) {
-        html += ' (the calculation did run; no predicted pKa threshold was crossed)';
-      }
-    }
-    html += '</p>';
-  }
-
-  _procChains.forEach(ch => {
-    const chainRes = _procResidues.filter(r => r.chain === ch);
-    const chainTitr = chainRes.filter((_, i) => titratable.has(chainRes[i].index));
-    if (!chainTitr.length) return;
-
-    html += `<h4 style="margin-top:12px;color:#475569;">Chain ${escapeHtml(ch || ' ')} <span class="hint">${chainTitr.length} titratable residues</span></h4>`;
-    html += `<table class="proc-table"><thead><tr><th>Resid</th><th>Original</th><th>Assigned</th><th>Charge</th><th>pKa</th><th>Shift</th><th>State</th><th>Override</th></tr></thead><tbody>`;
-
-    chainRes.forEach((r, localIdx) => {
-      const a = _procAssignments[r.index];
-      if (!a || !a.is_titratable) return;
-      const shift = a.pKa_shift;
-      const shiftStr = shift != null ? (shift >= 0 ? '+' : '') + shift.toFixed(1) : '—';
-      const altOpts = (a.alternatives || []).map(alt =>
-        `<option value="${escapeHtml(alt.name)}" ${alt.name === a.assigned_name ? 'selected' : ''}>${escapeHtml(alt.name)} (${alt.charge >= 0 ? '+' : ''}${escapeHtml(alt.charge)})</option>`
-      ).join('');
-      html += `<tr>
-        <td>${escapeHtml(a.original)} ${escapeHtml(r.resid)}</td>
-        <td><b>${escapeHtml(a.original)}</b></td>
-        <td style="color:#6366f1;font-weight:600;">${escapeHtml(a.assigned_name)}</td>
-        <td>${a.charge >= 0 ? '+' : ''}${a.charge}</td>
-        <td>${escapeHtml(typeof a.pKa === 'number' ? a.pKa.toFixed(1) : a.pKa || '—')}</td>
-        <td style="color:${shift > 0 ? '#dc2626' : shift < 0 ? '#059669' : '#94a3b8'};">${shiftStr}</td>
-        <td style="font-size:11px;">${escapeHtml(a.state_label)}</td>
-        <td><select class="proc-override" data-idx="${r.index}">${altOpts}</select></td>
-      </tr>`;
-    });
-
-    html += '</tbody></table>';
-  });
-
-  container.innerHTML = html || '<p class="hint">No titratable residues found in any chain.</p>';
-
-  // Wire overrides
-  container.querySelectorAll('.proc-override').forEach(sel => {
-    sel.addEventListener('change', () => {
-      const idx = parseInt(sel.dataset.idx);
-      const newName = sel.value;
-      const a = _procAssignments[idx];
-      if (!a) return;
-      const alt = (a.alternatives || []).find(x => x.name === newName);
-      if (alt) {
-        a.assigned_name = alt.name; a.charge = alt.charge; a.state_label = alt.label;
-        const row = sel.closest('tr');
-        row.cells[2].textContent = alt.name;
-        row.cells[3].textContent = (alt.charge >= 0 ? '+' : '') + alt.charge;
-        row.cells[6].textContent = alt.label;
-      }
-    });
-  });
-
-  renderModSequences();
-}
-
-// -------------------------------------------------------------------
-// Termini
-// -------------------------------------------------------------------
-
-function renderTerminiTab() {
-  const container = document.getElementById('proc-termini-chains');
-  if (!container) return;
-
-  let html = '';
-  _procChains.forEach(ch => {
-    const t = _procTermini[ch] || { nter: '', cter: '' };
-    const ace = _procCapCapabilities.ACE || {supported:false, reason:'Capability data is not loaded'};
-    const formyl = _procCapCapabilities.FOR || {supported:false, reason:'Capability data is not loaded'};
-    const nme = _procCapCapabilities.NME || {supported:false, reason:'Capability data is not loaded'};
-    if (t.nter === 'ACE' && !ace.supported) t.nter = '';
-    if (t.nter === 'FOR' && !formyl.supported) t.nter = '';
-    if (t.cter === 'NME' && !nme.supported) t.cter = '';
-    _procTermini[ch] = t;
-    const firstRes = _procResidues.find(r => r.chain === ch);
-    const lastRes = [..._procResidues].reverse().find(r => r.chain === ch);
-    html += `<div class="termini-chain-row">
-      <b style="min-width:60px;">Chain ${escapeHtml(ch || ' ')}</b>
-      <span class="hint">N-ter: ${escapeHtml(firstRes ? firstRes.resname + ' ' + firstRes.resid : '?')}</span>
-      <select class="proc-nter-sel" data-chain="${escapeHtml(ch)}">
-        <option value="" ${!t.nter ? 'selected' : ''}>Standard (NH₃⁺)</option>
-        <option value="ACE" ${t.nter === 'ACE' ? 'selected' : ''} ${ace.supported ? '' : 'disabled'}>ACE${ace.supported ? ' — explicit acetyl cap' : ' — unavailable: ' + escapeHtml(ace.reason)}</option>
-        <option value="FOR" ${t.nter === 'FOR' ? 'selected' : ''} ${formyl.supported ? '' : 'disabled'}>FOR${formyl.supported ? ' — explicit formyl cap' : ' — unavailable: ' + escapeHtml(formyl.reason)}</option>
-      </select>
-      <span class="hint">C-ter: ${escapeHtml(lastRes ? lastRes.resname + ' ' + lastRes.resid : '?')}</span>
-      <select class="proc-cter-sel" data-chain="${escapeHtml(ch)}">
-        <option value="" ${!t.cter ? 'selected' : ''}>Standard (COO⁻)</option>
-        <option value="NME" ${t.cter === 'NME' ? 'selected' : ''} ${nme.supported ? '' : 'disabled'}>NME${nme.supported ? ' — explicit methylamide cap' : ' — unavailable: ' + escapeHtml(nme.reason)}</option>
-      </select>
-    </div>`;
-  });
-  container.innerHTML = html || '<p class="hint">No chains detected.</p>';
-
-  container.querySelectorAll('.proc-nter-sel').forEach(sel => {
-    sel.addEventListener('change', () => {
-      const ch = sel.dataset.chain;
-      if (!_procTermini[ch]) _procTermini[ch] = { nter: '', cter: '' };
-      _procTermini[ch].nter = sel.value;
-    });
-  });
-  container.querySelectorAll('.proc-cter-sel').forEach(sel => {
-    sel.addEventListener('change', () => {
-      const ch = sel.dataset.chain;
-      if (!_procTermini[ch]) _procTermini[ch] = { nter: '', cter: '' };
-      _procTermini[ch].cter = sel.value;
-    });
-  });
-}
-
-// -------------------------------------------------------------------
-// Modifications
-// -------------------------------------------------------------------
-
-function renderModSequences() {
-  const container = document.getElementById('proc-mod-chains');
-  if (!container) return;
-
-  const titratableIdx = new Set();
-  const modifiedIdx = new Set();
-  const crosslinkedIdx = new Set();
-  _procAssignments.forEach(a => { if (a.is_titratable) titratableIdx.add(a.index); });
-  _procModifications.forEach(m => modifiedIdx.add(m.index));
-  _procCrosslinks.forEach(function(item) {
-    crosslinkedIdx.add(item.first_index);
-    crosslinkedIdx.add(item.second_index);
-  });
-
-  let html = '';
-  _procChains.forEach(ch => {
-    const chainRes = _procResidues.filter(r => r.chain === ch);
-    if (!chainRes.length) return;
-    html += `<div class="proc-mod-chain-block"><h4 style="margin:8px 0 4px;color:#475569;">Chain ${escapeHtml(ch || ' ')} <span class="hint">${chainRes.length} residues</span></h4><div class="proc-mod-sequence">`;
-    chainRes.forEach(r => {
-      const i = r.index;
-      const residuePatches = _procPatchCatalog.filter(function(patch) {
-        return (patch.target_residues || []).indexOf(r.resname) >= 0;
-      });
-      const hasSupportedPatch = residuePatches.some(function(patch) {
-        return patch.supported !== false;
-      });
-      let cls = 'proc-mod-res';
-      if (titratableIdx.has(i)) cls += ' titratable';
-      if (modifiedIdx.has(i)) cls += ' modified';
-      if (crosslinkedIdx.has(i)) cls += ' modified';
-      if (hasSupportedPatch && !crosslinkedIdx.has(i)) cls += ' modifiable';
-      else if (residuePatches.length) cls += ' catalog-only';
-      if (_procSelectedIdx === i) cls += ' selected';
-      const capability = hasSupportedPatch ? 'simulation-ready modification available' :
-        (residuePatches.length ? 'catalogue entries exist but are not simulation-ready' : 'no registered modification');
-      html += `<span class="${cls}" data-idx="${i}" data-has-patches="${residuePatches.length ? '1' : '0'}" title="#${i+1} ${escapeHtml(r.resname)} ch ${escapeHtml(ch)} resid ${escapeHtml(r.resid)}; ${escapeHtml(capability)}">${escapeHtml(r.resname)}</span>`;
-    });
-    html += '</div></div>';
-  });
-  container.innerHTML = html || '<p class="hint">No residues loaded.</p>';
-
-  container.querySelectorAll('.proc-mod-res').forEach(el => {
-    el.addEventListener('click', () => {
-      if (el.dataset.hasPatches !== '1') return;
-      _procSelectedIdx = parseInt(el.dataset.idx);
-      renderModSequences();
-      openPatchPicker(_procSelectedIdx);
-    });
-  });
-}
-
-function renderDisulfideControls() {
-  const first = document.getElementById('proc-disulfide-first');
-  const second = document.getElementById('proc-disulfide-second');
-  const add = document.getElementById('proc-disulfide-add');
-  const capability = document.getElementById('proc-disulfide-capability');
-  const list = document.getElementById('proc-disulfide-list');
-  if (!first || !second || !add || !capability || !list) return;
-  const support = _procCrosslinkCapabilities.disulfide || {};
-  const used = new Set();
-  _procCrosslinks.forEach(function(item) {
-    used.add(item.first_index);
-    used.add(item.second_index);
-  });
-  const cysteines = _procResidues.filter(function(residue) {
-    return residue.resname === 'CYS' && !used.has(residue.index) &&
-      !_procModifications.some(function(mod) { return mod.index === residue.index; });
-  });
-  const options = '<option value="">Select CYS…</option>' + cysteines.map(function(residue) {
-    return '<option value="' + residue.index + '">Chain ' + escapeHtml(residue.chain || '?') +
-      ' — CYS ' + escapeHtml(residue.resid) + ' (#' + (residue.index + 1) + ')</option>';
-  }).join('');
-  first.innerHTML = options;
-  second.innerHTML = options;
-  const enabled = support.supported === true && cysteines.length >= 2;
-  first.disabled = !enabled;
-  second.disabled = !enabled;
-  add.disabled = !enabled;
-  if (support.supported === true) {
-    capability.textContent = 'Supported by ' + selectedProteinForceField() +
-      '; SG–SG distance is validated against the force-field target before coordinates change.';
-  } else {
-    capability.textContent = 'Unavailable with ' + selectedProteinForceField() + ': ' +
-      (support.reason || 'no validated paired-residue model is installed') + '.';
-  }
-  list.innerHTML = _procCrosslinks.map(function(item, index) {
-    const left = _procResidues[item.first_index];
-    const right = _procResidues[item.second_index];
-    return '<div class="proc-mod-item">Chain ' + escapeHtml(left.chain || '?') + ':CYS ' + escapeHtml(left.resid) +
-      ' — Chain ' + escapeHtml(right.chain || '?') + ':CYS ' + escapeHtml(right.resid) +
-      ' <span style="color:#64748b;">(disulfide)</span>' +
-      '<button data-crosslink="' + index + '" class="proc-crosslink-remove" title="Remove">×</button></div>';
-  }).join('') || '<p class="hint">No disulfide crosslinks selected.</p>';
-  list.querySelectorAll('.proc-crosslink-remove').forEach(function(button) {
-    button.addEventListener('click', function() {
-      _procCrosslinks.splice(parseInt(button.dataset.crosslink), 1);
-      renderDisulfideControls();
-      renderModSequences();
-    });
-  });
-}
-
-function addDisulfideCrosslink() {
-  const first = document.getElementById('proc-disulfide-first');
-  const second = document.getElementById('proc-disulfide-second');
-  if (!first || !second) return;
-  const firstIndex = Number(first.value);
-  const secondIndex = Number(second.value);
-  if (!Number.isInteger(firstIndex) || !Number.isInteger(secondIndex) ||
-      first.value === '' || second.value === '' || firstIndex === secondIndex) {
-    window.alert('Select two distinct cysteine residues for the disulfide.');
-    return;
-  }
-  _procCrosslinks.push({
-    type: 'disulfide', first_index: firstIndex, second_index: secondIndex,
-  });
-  renderDisulfideControls();
-  renderModSequences();
-}
-
-async function openPatchPicker(idx) {
-  const picker = document.getElementById('proc-patch-picker');
-  const targetEl = document.getElementById('proc-patch-target');
-  const optionsEl = document.getElementById('proc-patch-options');
-  if (!picker || !targetEl || !optionsEl) return;
-  const r = _procResidues[idx];
-  if (!r) return;
-  targetEl.textContent = `${r.resname} ${r.resid} (Chain ${r.chain || '?'}, #${idx+1})`;
-  picker.classList.remove('hidden');
-  try {
-    const res = await fetch(`/api/patches/${encodeURIComponent(r.resname)}?force_field=${encodeURIComponent(selectedProteinForceField())}`);
-    if (!res.ok) { optionsEl.innerHTML = '<p class="hint">No patches available.</p>'; return; }
-    const patches = await res.json();
-    if (!patches.length) { optionsEl.innerHTML = '<p class="hint">No modifications available.</p>'; return; }
-    const supportedPatches = patches.filter(p => p.supported !== false);
-    const capabilityNotice = supportedPatches.length ? '' :
-      '<p class="hint" style="color:#b45309;margin-bottom:8px;">No simulation-ready modification is available for this residue. Catalogue entries below are disabled because complete atoms and bonded parameters are not yet implemented.</p>';
-    optionsEl.innerHTML = capabilityNotice + patches.map(p =>
-      `<div class="proc-patch-option" data-patch="${escapeHtml(p.id)}" data-supported="${p.supported !== false}"
-            aria-disabled="${p.supported === false}" style="${p.supported === false ? 'opacity:.5;cursor:not-allowed;' : ''}">
-        <span class="patch-name">${escapeHtml(p.name)}</span> → ${escapeHtml(p.product_name)}
-        <span style="color:#64748b;font-size:11px;">(${escapeHtml(p.description)}; net charge shift ${p.charge_shift > 0 ? '+' : ''}${escapeHtml(p.charge_shift)}${p.supported === false ? '; unavailable: ' + escapeHtml(p.support_reason) : ''})</span>
-      </div>`).join('');
-    optionsEl.querySelectorAll('.proc-patch-option').forEach(opt => {
-      opt.addEventListener('click', () => {
-        const patch = patches.find(p => p.id === opt.dataset.patch);
-        if (patch && patch.supported !== false) { applyModification(idx, patch.id, patch.product_name, patch.charge_shift); closePatchPicker(); }
-      });
-    });
-  } catch (e) { optionsEl.innerHTML = '<p class="hint">Error.</p>'; }
-}
-
-function closePatchPicker() {
-  const picker = document.getElementById('proc-patch-picker');
-  if (picker) picker.classList.add('hidden');
-}
-
-function applyModification(idx, patchId, productName, chargeShift, source) {
-  _procModifications = _procModifications.filter(m => m.index !== idx);
-  if (patchId) _procModifications.push({ index: idx, patch_id: patchId, product_name: productName, charge_shift: chargeShift, source: source || 'user' });
-  const listEl = document.getElementById('proc-mod-list');
-  if (listEl) {
-    listEl.innerHTML = _procModifications.map(m => {
-      const rr = _procResidues[m.index];
-      return `<div class="proc-mod-item">
-        Chain ${escapeHtml(rr.chain)} — <b>${escapeHtml(rr.resname)} ${escapeHtml(rr.resid)}</b> → <b>${escapeHtml(m.product_name)}</b>
-        <span style="color:#64748b;">(${escapeHtml(m.patch_id)})</span>
-        <button data-idx="${m.index}" class="proc-mod-remove" title="Remove">×</button>
-      </div>`;
-    }).join('') || '<p class="hint">No modifications applied yet.</p>';
-    listEl.querySelectorAll('.proc-mod-remove').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const rmIdx = parseInt(btn.dataset.idx);
-        _procModifications = _procModifications.filter(m => m.index !== rmIdx);
-        applyModification(rmIdx, '', '');  // calls renderModSequences() internally
-      });
-    });
-  }
-  _procSelectedIdx = -1;
-  renderModSequences();
-}
-
-
-/** Compute net system charge from protonation + modifications + termini. */
-window._getSystemNetCharge = function() {
-  var charge = 0;
-  if (_procAssignments && _procAssignments.length) {
-    _procAssignments.forEach(function(a) {
-      if (typeof a.charge === "number") charge += a.charge;
-    });
-  }
-  if (_procTermini) {
-    Object.keys(_procTermini).forEach(function(ch) {
-      var t = _procTermini[ch];
-      if (!t.nter) charge += 1;
-      if (!t.cter) charge -= 1;
-    });
-  }
-  if (_procModifications && _procModifications.length) {
-    _procModifications.forEach(function(m) {
-      var pid = m.patch_id || "";
-      if (typeof m.charge_shift === "number") charge += m.charge_shift;
-      else if (pid.indexOf("PHOS1") === 0) charge -= 1;
-      else if (pid.indexOf("PHOS") === 0) charge -= 2;
-      else if (pid.indexOf("ACET") === 0 || pid.indexOf("SUCC") === 0 ||
-               pid.indexOf("CBM") === 0 || pid.indexOf("CRO") === 0 ||
-               pid.indexOf("BUT") === 0 || pid.indexOf("PRO") === 0 ||
-               pid.indexOf("MAL") === 0 || pid.indexOf("GLR") === 0) charge -= 1;
-      else if (pid.indexOf("CIT") === 0) charge -= 1;
-      else if (pid.indexOf("CSO") === 0 || pid.indexOf("CSD") === 0 ||
-               pid.indexOf("CSX") === 0) charge -= 1;
-      else if (pid.indexOf("TYS") === 0) charge -= 1;
-      else if (pid.indexOf("DEA") === 0 || pid.indexOf("DEG") === 0) charge -= 1;
-      else if (pid.indexOf("PCA") === 0) charge -= 1;
-    });
-  }
-  // Constitutively charged residues (always ionised at physiological pH)
-  if (_procResidues && _procResidues.length) {
-    _procResidues.forEach(function(r) {
-      if (r.resname === "ARG") charge += 1;  // guanidinium, pKa ~12.5
-    });
-  }
-
-  // Membrane lipid charges — estimate from composition
-  if (_mixUpper && _mixUpper.length && _lipidPickerData && _lipidPickerData.lipids) {
-    var lipids = _lipidPickerData.lipids;
-    var nPerLeaflet = 100;
-    // Try to read actual count from the membrane count table
-    var countTables = document.querySelectorAll(".count-table");
-    if (countTables.length > 0) {
-      var boldEls = countTables[0].querySelectorAll("td b");
-      boldEls.forEach(function(b) {
-        var val = parseInt(b.textContent);
-        if (!isNaN(val) && val > 0) { nPerLeaflet = val; }
-      });
-    }
-    // Upper leaflet charge
-    var upperCharge = 0;
-    _mixUpper.forEach(function(m) {
-      var lipid = lipids.find(function(l) { return l.name === m.name; });
-      if (lipid && typeof lipid.charge === "number") {
-        upperCharge += lipid.charge * (m.ratio / 100);
-      }
-    });
-    charge += Math.round(upperCharge * nPerLeaflet);
-    // Lower leaflet
-    var lowerCharge = 0;
-    var lowerMix = _asymmetric && _mixLower ? _mixLower : _mixUpper;
-    lowerMix.forEach(function(m) {
-      var lipid = lipids.find(function(l) { return l.name === m.name; });
-      if (lipid && typeof lipid.charge === "number") {
-        lowerCharge += lipid.charge * (m.ratio / 100);
-      }
-    });
-    charge += Math.round(lowerCharge * nPerLeaflet);
-  }
-
-  return charge;
-};
 
 
 // ===================================================================
@@ -5428,1597 +4523,33 @@ function _pdbMembraneZBoundsAngstrom(pdbContent) {
 }
 
 async function renderSolvationViewer() {
-  var el = document.getElementById('solvation-3d-viewer');
-  if (!el) return;
-  if (el.offsetWidth === 0 || el.offsetHeight === 0) return;
-  if (typeof $3Dmol === 'undefined') return;
-
-  // Load the membrane system PDB from checkpoint — this contains the
-  // protein at the correct (saved) orientation and lipids built around it.
-  // Do NOT fall back to _orientedPdbContent which is the PPM reference
-  // model (may differ from the actual checkpoint coordinates).
-  var pdbContent = null;
-  var checkpointStep = 'membrane';
-  if (state.taskId) {
-    // Do not show an older Solvation checkpoint after its inputs or an
-    // upstream step changed.  Until the current config is checked, preview
-    // the membrane checkpoint in the coordinate frame Solvator will create.
-    if (_solvChecked) {
-      pdbContent = await _loadStepViewerPdb('solvation');
-      if (pdbContent) checkpointStep = 'solvation';
-    }
-    if (!pdbContent) pdbContent = await _loadStepViewerPdb('membrane');
-  }
-  if (!pdbContent) return;
-
-  // Parse box from CRYST1 record in the checkpoint PDB (coordinates are in shifted frame)
-  var boxA = 100, boxB = 100, boxC = 100;
-  var lines = pdbContent.split('\n');
-  for (var li = 0; li < lines.length; li++) {
-    var l = lines[li];
-    if (l.indexOf('CRYST1') === 0) {
-      boxA = parseFloat(l.substring(6, 15)) || 100;
-      boxB = parseFloat(l.substring(15, 24)) || 100;
-      boxC = parseFloat(l.substring(24, 33)) || 100;
-      break;
-    }
-  }
-  var boxOrigin = {x: 0, y: 0, z: 0};
-  if (checkpointStep === 'membrane') {
-    // Match the future Solvator transform without moving the preview model:
-    // XY is centred in the periodic box. Z padding starts at the two
-    // lipid-water interfaces and the membrane midplane remains centred;
-    // asymmetric protein protrusions do not move the membrane in the box.
-    var bounds = _pdbCoordinateBoundsAngstrom(pdbContent);
-    var paddingInput = document.getElementById('box-padding');
-    var paddingNm = Number(paddingInput ? paddingInput.value : 2.0);
-    if (!Number.isFinite(paddingNm) || paddingNm < 0) paddingNm = 2.0;
-    var paddingA = paddingNm * 10.0;
-    if (bounds) {
-      boxOrigin.x = (bounds.minX + bounds.maxX) / 2.0 - boxA / 2.0;
-      boxOrigin.y = (bounds.minY + bounds.maxY) / 2.0 - boxB / 2.0;
-    }
-    var membraneBounds = _pdbMembraneZBoundsAngstrom(pdbContent);
-    if (membraneBounds) {
-      var membraneMidZ = (membraneBounds.minZ + membraneBounds.maxZ) / 2.0;
-      boxC = membraneBounds.maxZ - membraneBounds.minZ + 2.0 * paddingA;
-      boxOrigin.z = membraneMidZ - boxC / 2.0;
-    } else {
-      var interfaceThicknessNm = Number(_dominantLipidDHH);
-      if (!Number.isFinite(interfaceThicknessNm) || interfaceThicknessNm <= 0) {
-        interfaceThicknessNm = 3.8;
-      }
-      boxC = interfaceThicknessNm * 10.0 + 2.0 * paddingA;
-      boxOrigin.z = -boxC / 2.0;
-    }
-  }
-
-  if (_solvationViewer) { try { _solvationViewer.clear(); } catch(e) {} _solvationViewer = null; }
-  while (el.firstChild) { el.removeChild(el.firstChild); }
-
-  _solvationViewer = $3Dmol.createViewer(el, {backgroundColor: '0xffffff', antialias: true});
-  _solvationViewer.setBackgroundColor('0xffffff');
-  _solvationViewer.setSlab(-100000, 100000);
-  var v = _solvationViewer;
-
-  // 1. Full solvated system
-  v.addModel(pdbContent, 'pdb');
-  _applyUnifiedStyle(v, pdbContent);
-
-  // 2. Water: small semi-transparent blue spheres
-  v.setStyle({resn: ['SOL', 'HOH', 'WAT', 'TIP', 'TIP3', 'SPC', 'SPCE']},
-    {sphere: {radius: 0.15, opacity: 0.25, color: '0x3b82f6'}});
-
-  // 3. Ions: visible spheres
-  v.setStyle({resn: ['NA', 'CL', 'K', 'CA', 'ZN', 'MG']},
-    {sphere: {radius: 0.4, opacity: 0.8}});
-
-  // 4. Draw the physical periodic box in the checkpoint's coordinate frame.
-  drawOrthogonalBox(v, boxA, boxB, boxC, boxOrigin);
-
-  // Checked Solvation coordinates live in the positive [0,L] box frame.
-  // Recompute the camera target after loading them so rotation is centred on
-  // the system rather than on the global coordinate origin.
-  v.zoomTo();
-  v.render();
-  v.setSlab(-100000, 100000);
-  var label = document.getElementById('solvation-viewer-label');
-  if (label) {
-    var prefix = checkpointStep === 'solvation' ? 'Checked box: ' : 'Preview box: ';
-    label.textContent = prefix + (boxA/10).toFixed(1) + '×' +
-      (boxB/10).toFixed(1) + '×' + (boxC/10).toFixed(1) + ' nm';
-  }
-}
-
-
-// ===================================================================
-// Simulation Parameters — dynamic stage cards
-// ===================================================================
-
-var _simStages = [];       // stage configs
-var _prodIters = [];       // production iteration configs
-var _simHardware = {};
-
-// Default restraint decay schedule (standard protocol, 6 stages)
-var _DEFAULT_EM_BASE = {
-  nsteps: 50000, emtol: 1000.0, emstep: 0.01, nstlist: 10,
-  constraints: "h-bonds", bb: 4000, sc: 2000, lipid: 1000, dih: 1000,
-  mdp_overrides_text: ""
-};
-var _DEFAULT_EM = Object.assign({}, _DEFAULT_EM_BASE);
-var _DEFAULT_OUTPUT = {
-  nstxout_compressed: 5000, nstxout: 0, nstvout: 0, nstfout: 0,
-  nstcalcenergy: 100, nstenergy: 1000, nstlog: 1000,
-  enabled: true, nstlist: 20, comm_mode: "linear", comm_grps: "SOLU_MEMB SOLV",
-  constraints: "h-bonds", temperature: 310.15,
-  mdp_overrides_text: ""
-};
-var _MEMBRANE_SCHEDULE = [
-  { bb:4000, sc:2000, lipid:1000, dih:1000, dt:1.0, nsteps:125000, ensemble:"nvt",  tcoupl:"v-rescale", tau_t:"1.0", nstcomm:100, comm_grps:"SOLU_MEMB SOLV" },
-  { bb:2000, sc:1000, lipid:400,  dih:400,  dt:1.0, nsteps:125000, ensemble:"nvt",  tcoupl:"v-rescale", tau_t:"1.0", nstcomm:100, comm_grps:"SOLU_MEMB SOLV" },
-  { bb:1000, sc:500,  lipid:400,  dih:200,  dt:1.0, nsteps:125000, ensemble:"npt",  tcoupl:"v-rescale", tau_t:"1.0", tau_p:"5.0", ref_p:"1.0", compress:"4.5e-5", nstcomm:100, pcoupl:"C-rescale", comm_grps:"SOLU_MEMB SOLV" },
-  { bb:500,  sc:200,  lipid:200,  dih:200,  dt:2.0, nsteps:250000, ensemble:"npt",  tcoupl:"v-rescale", tau_t:"1.0", tau_p:"5.0", ref_p:"1.0", compress:"4.5e-5", nstcomm:100, pcoupl:"C-rescale", comm_grps:"SOLU_MEMB SOLV" },
-  { bb:200,  sc:50,   lipid:40,   dih:100,  dt:2.0, nsteps:250000, ensemble:"npt",  tcoupl:"v-rescale", tau_t:"1.0", tau_p:"5.0", ref_p:"1.0", compress:"4.5e-5", nstcomm:100, pcoupl:"C-rescale", comm_grps:"SOLU_MEMB SOLV" },
-  { bb:50,   sc:0,    lipid:0,    dih:0,    dt:2.0, nsteps:250000, ensemble:"npt",  tcoupl:"v-rescale", tau_t:"1.0", tau_p:"5.0", ref_p:"1.0", compress:"4.5e-5", nstcomm:100, pcoupl:"C-rescale", comm_grps:"SOLU_MEMB SOLV" },
-];
-var _SOLUTION_SCHEDULE = [
-  { bb:400, sc:40, lipid:0, dih:0, dt:1.0, nsteps:250000, ensemble:"nvt",
-    tcoupl:"v-rescale", tau_t:"1.0", nstcomm:100, comm_grps:"SOLU SOLV" },
-];
-
-function isSolutionProtocol() {
-  var pipeline = state.taskType && state.taskType.pipeline;
-  return pipeline === "solvator" || pipeline === "liquid";
-}
-
-function syncMdpNonbondDefaults() {
-  var forceField = String(document.getElementById("ff-protein")?.value || "amber14sb").toLowerCase();
-  var isCharmm = forceField.indexOf("charmm") === 0;
-  var defaults = {
-    rlist: isCharmm ? 1.2 : 1.0,
-    vdw_modifier: isCharmm ? "Force-switch" : "Potential-shift",
-    rvdw_switch: isCharmm ? 1.0 : null,
-    rvdw: isCharmm ? 1.2 : 1.0,
-    rcoulomb: isCharmm ? 1.2 : 1.0,
-    fourierspacing: 0.12,
-    dispcorr: isCharmm ? "no" : "EnerPres"
-  };
-  [_DEFAULT_EM].concat(_simStages, _prodIters).forEach(function(stage) {
-    Object.assign(stage, defaults);
-  });
-}
-
-function initSimParams() {
-  // Never carry one resumed task's minimization settings into a newly
-  // selected task in the same browser session.
-  var solution = isSolutionProtocol();
-  _DEFAULT_EM = Object.assign({}, _DEFAULT_EM_BASE, {
-    nsteps: solution ? 5000 : 50000,
-    constraints: "h-bonds",
-    bb: solution ? 400 : 4000,
-    sc: solution ? 40 : 2000,
-    lipid: solution ? 0 : 1000,
-    dih: solution ? 0 : 1000
-  });
-  var schedule = solution ? _SOLUTION_SCHEDULE : _MEMBRANE_SCHEDULE;
-  _simStages = schedule.map(function(stage) {
-    return Object.assign({}, _DEFAULT_OUTPUT, {
-      pcoupl_type: solution ? "isotropic" : "semisotropic",
-      gen_seed: -1
-    }, stage);
-  });
-  _prodIters = [Object.assign({}, _DEFAULT_OUTPUT, {
-    nsteps: solution ? 500000 : 5000000,
-    repeat: solution ? 10 : 5,
-    dt: 2.0, nstxout_compressed: solution ? 50000 : 10000,
-    tcoupl: "v-rescale", tau_t: "1.0", tau_p: "5.0", ref_p: "1.0",
-    compress: "4.5e-5", nstcomm: 100, pcoupl: "C-rescale",
-    pcoupl_type: solution ? "isotropic" : "semisotropic",
-    comm_grps: solution ? "SOLU SOLV" : "SOLU_MEMB SOLV"
-  })];
-  _simHardware = {
-    mode: "thread-mpi", cpu_threads: 1, mpi_ranks: 1,
-    use_gpu: false, gpu_count: 1, gpu_ids: "0", gmx_command: "gmx",
-    mpi_launcher: "mpirun", pin: "auto"
-  };
-  syncMdpNonbondDefaults();
-  renderSimStages();
-}
-
-function mdpOverridesToText(value) {
-  if (!value || typeof value !== "object") return "";
-  return Object.keys(value).map(function(key) {
-    return key + " = " + value[key];
-  }).join("\n");
-}
-
-function restoreSimulationParams(saved, execution) {
-  if (!saved || typeof saved !== "object") {
-    renderSimStages();
-    return;
-  }
-  if (execution && typeof execution === "object") {
-    _simHardware = Object.assign({}, _simHardware, execution);
-    if (Array.isArray(_simHardware.gpu_ids)) {
-      _simHardware.gpu_ids = _simHardware.gpu_ids.join(",");
-    }
-    if (!_simHardware.use_gpu && Number(_simHardware.gpu_count) === 0) {
-      _simHardware.gpu_count = 1;
-    }
-  }
-  var legacyStageDefaults = {};
-  ["pcoupl_type", "gen_seed", "rlist", "vdw_modifier", "rvdw_switch",
-   "rvdw", "rcoulomb", "fourierspacing", "dispcorr"].forEach(function(key) {
-    if (saved[key] !== undefined) legacyStageDefaults[key] = saved[key];
-  });
-  var legacyOverrides = saved.mdp_overrides || {};
-  if (Array.isArray(saved.eq_stages)) {
-    _simStages = saved.eq_stages.map(function(stage) {
-      var restored = Object.assign({}, _DEFAULT_OUTPUT, legacyStageDefaults, stage);
-      restored.mdp_overrides_text = mdpOverridesToText(
-        Object.assign({}, legacyOverrides, stage.mdp_overrides || {})
-      );
-      return restored;
-    });
-  }
-  if (Array.isArray(saved.prod_iters)) {
-    _prodIters = saved.prod_iters.map(function(stage) {
-      var restored = Object.assign({}, _DEFAULT_OUTPUT, legacyStageDefaults, stage);
-      restored.mdp_overrides_text = mdpOverridesToText(
-        Object.assign({}, legacyOverrides, stage.mdp_overrides || {})
-      );
-      return restored;
-    });
-  }
-  var minimization = saved.minimization || {};
-  if (saved.em_nsteps !== undefined) minimization.nsteps = saved.em_nsteps;
-  if (saved.em_ftol !== undefined) minimization.emtol = saved.em_ftol;
-  if (saved.em_step !== undefined) minimization.emstep = saved.em_step;
-  if (saved.em_nstlist !== undefined) minimization.nstlist = saved.em_nstlist;
-  if (saved.em_constraints !== undefined) minimization.constraints = saved.em_constraints;
-  Object.assign(_DEFAULT_EM, legacyStageDefaults, minimization);
-  if (minimization.mdp_overrides || saved.em_overrides) {
-    _DEFAULT_EM.mdp_overrides_text = mdpOverridesToText(
-      minimization.mdp_overrides || saved.em_overrides
-    );
-  }
-  renderSimStages();
-}
-
-function renderNonbondFields(prefix, values, includeNstlist) {
-  var html = '<div class="param-row">';
-  if (includeNstlist) {
-    html += paramNumber(prefix + "-nstlist", "Neighbor-list interval", values.nstlist, 1, 1000, 1, "wide");
-  }
-  html += paramNumber(prefix + "-rlist", "rlist (nm)", values.rlist, 0.1, 5, 0.01, "narrow");
-  html += paramSelect(prefix + "-vdw-modifier", "LJ modifier", [["Potential-shift","Potential shift"],["Force-switch","Force switch"],["Potential-switch","Potential switch"],["none","None"]], values.vdw_modifier);
-  html += paramNumber(prefix + "-rvdw-switch", "LJ switch (nm)", values.rvdw_switch, 0, 5, 0.01, "narrow");
-  html += paramNumber(prefix + "-rvdw", "LJ cutoff (nm)", values.rvdw, 0.1, 5, 0.01, "narrow");
-  html += paramNumber(prefix + "-rcoulomb", "PME real cutoff (nm)", values.rcoulomb, 0.1, 5, 0.01, "narrow");
-  html += paramNumber(prefix + "-fourierspacing", "PME spacing (nm)", values.fourierspacing, 0.01, 1, 0.01, "narrow");
-  html += paramSelect(prefix + "-dispcorr", "Dispersion correction", [["EnerPres","Energy + pressure"],["Ener","Energy"],["no","None"]], values.dispcorr);
-  return html + '</div>';
-}
-
-function renderSimStages() {
-  var container = document.getElementById("simparams-stages");
-  if (!container) return;
-
-  var html = "";
-
-  // ---- Execution hardware (run script only; never changes MDP physics) ----
-  var ompThreads = Math.max(
-    1, Math.floor(_simHardware.cpu_threads / Math.max(_simHardware.mpi_ranks, 1))
-  );
-  html += '<div class="sim-stage-card" style="border-color:#2563eb;">';
-  html += '<div class="sim-stage-header open" onclick="toggleStageCard(this)">';
-  html += '<span class="sim-stage-icon" style="color:#2563eb;">&#9889;</span>';
-  html += '<span class="sim-stage-title" style="color:#2563eb;">Execution Hardware</span>';
-  html += '<span class="sim-stage-summary">Defaults written to run_md.sh; MDP physics is unchanged</span></div>';
-  html += '<div class="sim-stage-body open">';
-  html += '<div class="param-row">';
-  html += paramSelect("sim-hw-mode", "MPI mode", [["thread-mpi","Thread-MPI (single node)"],["external-mpi","External MPI / scheduler"]], _simHardware.mode);
-  html += paramNumber("sim-hw-cpu", "Total CPU threads", _simHardware.cpu_threads, 1, 4096, 1, "wide");
-  html += paramNumber("sim-hw-mpi", "MPI ranks", _simHardware.mpi_ranks, 1, 4096, 1, "wide");
-  html += '<span class="param-item"><label>OpenMP threads/rank</label><output id="sim-hw-omp">' + ompThreads + '</output></span>';
-  html += paramSelect("sim-hw-pin", "Thread pinning", [["auto","Automatic"],["on","On"],["off","Off"]], _simHardware.pin);
-  html += '</div><div class="param-row">';
-  html += '<span class="param-item"><label>GPU execution</label><label class="hint"><input type="checkbox" id="sim-hw-use-gpu"' + (_simHardware.use_gpu ? ' checked' : '') + '> Enable GPU IDs</label></span>';
-  html += paramNumber("sim-hw-gpu-count", "GPU count", _simHardware.gpu_count, 1, 256, 1, "narrow");
-  html += paramText("sim-hw-gpu-ids", "Logical GPU IDs", _simHardware.gpu_ids, "narrow");
-  html += paramText("sim-hw-gmx", "GROMACS command", _simHardware.gmx_command, "wide");
-  html += paramSelect("sim-hw-launcher", "External MPI launcher", [["mpirun","mpirun"],["mpiexec","mpiexec"],["srun","Slurm srun"]], _simHardware.mpi_launcher);
-  html += '</div>';
-  html += '<p class="hint">Total CPU threads must be exactly divisible by MPI ranks. For external MPI use an MPI-enabled GROMACS executable, usually gmx_mpi. GPU count must equal the number of unique logical GPU IDs and cannot exceed MPI ranks. GROMACS retains automatic task placement across the selected devices.</p>';
-  html += '</div></div>';
-
-  // ---- Energy Minimization ----
-  var emTime = _DEFAULT_EM.nsteps + " steps";
-  html += '<div class="sim-stage-card" style="border-color:#f59e0b;">';
-  html += '<div class="sim-stage-header" data-stage="em" onclick="toggleStageCard(this)">';
-  html += '<span class="sim-stage-icon" style="color:#f59e0b;">&#9673;</span>';
-  html += '<span class="sim-stage-title" style="color:#f59e0b;">Energy Minimization</span>';
-  html += '<span class="sim-stage-summary">' + _DEFAULT_EM.nsteps.toLocaleString() + ' steps &nbsp;|&nbsp; emtol=' + _DEFAULT_EM.emtol.toFixed(0) + '</span>';
-  html += '</div>';
-  html += '<div class="sim-stage-body" data-stage="em">';
-  html += '<div class="param-row">';
-  html += paramSelect("em-integrator", "Method", [["steep","Steepest Descent"],["cg","Conjugate Gradient"]], _DEFAULT_EM.integrator || "steep");
-  html += paramNumber("em-nsteps", "Max Steps", _DEFAULT_EM.nsteps, 100, 100000, 1000, "wide");
-  html += paramNumber("em-emtol", "Force Tolerance (kJ/mol/nm)", _DEFAULT_EM.emtol, 10, 10000, 100, "wide");
-  html += paramNumber("em-emstep", "Step size (nm)", _DEFAULT_EM.emstep, 0.0001, 1, 0.001, "narrow");
-  html += paramNumber("em-nstlist", "nstlist", _DEFAULT_EM.nstlist, 1, 100, 1, "narrow");
-  html += paramSelect("em-constraints", "Constraints", [["none","None"],["h-bonds","H-bonds"],["all-bonds","All bonds"],["h-angles","H + angles"],["all-angles","All angles"]], _DEFAULT_EM.constraints);
-  html += '</div>';
-  html += '<div class="param-row">';
-  html += paramNumber("em-bb", "BB restraint", _DEFAULT_EM.bb, 0, 10000, 50, "narrow");
-  html += paramNumber("em-sc", "SC restraint", _DEFAULT_EM.sc, 0, 10000, 50, "narrow");
-  html += paramNumber("em-lipid", "Lipid restraint", _DEFAULT_EM.lipid, 0, 10000, 50, "narrow");
-  html += paramNumber("em-dih", "DIH restraint", _DEFAULT_EM.dih, 0, 10000, 50, "narrow");
-  html += '</div>';
-  html += renderNonbondFields("em", _DEFAULT_EM, false);
-  html += paramTextarea("em-mdp-overrides", "Minimization overrides", _DEFAULT_EM.mdp_overrides_text,
-    "Use for expert GROMACS directives that are not shown above.");
-  html += '</div></div>';
-
-  // ---- Equilibration stages ----
-    // ---- Equilibration stages ----
-  _simStages.forEach(function(st, i) {
-    var stageEnabled = st.enabled !== false;
-    var ensembleLabel = st.ensemble.toUpperCase();
-    if (st.ensemble === "nvt") ensembleLabel = "NVT (no pressure coupling)";
-    else if (st.ensemble === "npt") ensembleLabel = "NPT (semi-isotropic)";
-    
-    var timeNs = st.nsteps * st.dt / 1000000;
-    var dtDisplay = st.dt.toFixed(1) + " fs";
-    
-    html += '<div class="sim-stage-card" data-run-card="eq' + i + '" style="opacity:' + (stageEnabled ? '1' : '0.55') + ';">';
-    html += '<div class="sim-stage-header" data-stage="eq' + i + '" onclick="toggleStageCard(this)">';
-    html += '<span class="sim-stage-icon">' + (i === 0 ? '&#9678;' : '&#9674;') + '</span>';
-    html += '<span class="sim-stage-title">Equilibration ' + (i+1) + '</span>';
-    html += '<span class="sim-stage-summary">' + st.nsteps.toLocaleString() + ' steps × ' + dtDisplay + ' = ' + timeNs.toFixed(1) + ' ns &nbsp;|&nbsp; BB=' + st.bb + ' SC=' + st.sc + ' Lipid=' + st.lipid + '</span>';
-    html += stageEnabledControl("eq-enabled-" + i, stageEnabled);
-    html += '</div>';
-    html += '<div class="sim-stage-body" data-stage="eq' + i + '">';
-
-    // Row 1: Basic
-    html += '<div class="param-row">';
-    html += paramNumber("eq-dt-" + i, "Timestep (fs)", st.dt, 0.5, 5.0, 0.5, "narrow");
-    html += paramNumber("eq-nsteps-" + i, "Steps", st.nsteps, 1000, 10000000, 1000, "wide");
-    html += paramNumber("eq-gen-seed-" + i, "Velocity seed (if first)", st.gen_seed, -1, 2147483647, 1, "wide");
-    html += '<span class="hint" style="align-self:flex-end;margin-bottom:2px;" id="eq-time-' + i + '">' + timeNs.toFixed(1) + ' ns</span>';
-    html += '</div>';
-
-    // Row 2: Restraints
-    html += '<div class="param-row">';
-    html += paramNumber("eq-bb-" + i, "BB (kJ/mol/nm²)", st.bb, 0, 10000, 50, "narrow");
-    html += paramNumber("eq-sc-" + i, "SC", st.sc, 0, 10000, 50, "narrow");
-    html += paramNumber("eq-lipid-" + i, "Lipid", st.lipid, 0, 10000, 50, "narrow");
-    html += paramNumber("eq-dih-" + i, "DIH", st.dih, 0, 10000, 50, "narrow");
-    html += '</div>';
-
-    // Row 3: Thermostat + COM removal
-    html += '<div class="param-row">';
-    html += paramSelect("eq-ensemble-" + i, "Ensemble", [["nvt","NVT"],["npt","NPT"]], st.ensemble);
-    html += paramSelect("eq-tcoupl-" + i, "T-coupl", [["v-rescale","V-rescale"],["nose-hoover","Nose-Hoover"],["berendsen","Berendsen"]], st.tcoupl);
-    html += paramText("eq-tau-t-" + i, "τ_t", st.tau_t, "narrow");
-    html += paramNumber("eq-temperature-" + i, "Ref T (K)", st.temperature, 1, 1000, 1, "narrow");
-    html += paramSelect("eq-comm-mode-" + i, "COM removal", [["linear","Linear translation"],["angular","Angular"],["none","Disabled"]], st.comm_mode);
-    html += paramSelect("eq-comm-grps-" + i, "COM group(s)", commGroupOptions(), st.comm_grps);
-    html += paramNumber("eq-nstcomm-" + i, "COM interval", st.nstcomm, 0, 1000000, 1, "wide");
-    html += paramSelect("eq-constraints-" + i, "Constraints", [["none","None"],["h-bonds","H-bonds"],["all-bonds","All bonds"],["h-angles","H + angles"],["all-angles","All angles"]], st.constraints);
-    html += '</div>';
-
-    // NPT-only row (shown for NPT stages)
-    if (st.ensemble === "npt") {
-      html += '<div class="param-row npt-params">';
-      html += paramSelect("eq-pcoupl-" + i, "P-coupl", [["C-rescale","C-rescale"],["berendsen","Berendsen"],["Parrinello-Rahman","P-R"]], st.pcoupl || "C-rescale");
-      html += paramSelect("eq-pcoupl-type-" + i, "Pressure geometry", [["semisotropic","Semi-isotropic"],["isotropic","Isotropic"]], st.pcoupl_type);
-      html += paramText("eq-tau-p-" + i, "τ_p", st.tau_p || "5.0", "narrow");
-      html += paramText("eq-ref-p-" + i, "Ref P (bar)", st.ref_p || "1.0", "narrow");
-      html += paramText("eq-compress-" + i, "Compress (bar⁻¹)", st.compress || "4.5e-5", "wide");
-      html += '</div>';
-    }
-
-    html += '<div class="param-row">';
-    html += paramNumber("eq-nstxout-compressed-" + i, "XTC interval", st.nstxout_compressed, 0, 100000000, 100, "wide");
-    html += paramNumber("eq-nstxout-" + i, "Full coord interval", st.nstxout, 0, 100000000, 100, "wide");
-    html += paramNumber("eq-nstvout-" + i, "Velocity interval", st.nstvout, 0, 100000000, 100, "wide");
-    html += paramNumber("eq-nstfout-" + i, "Force interval", st.nstfout, 0, 100000000, 100, "wide");
-    html += paramNumber("eq-nstcalcenergy-" + i, "Energy calc", st.nstcalcenergy, 1, 100000000, 1, "wide");
-    html += paramNumber("eq-nstenergy-" + i, "Energy output", st.nstenergy, 0, 100000000, 100, "wide");
-    html += paramNumber("eq-nstlog-" + i, "Log interval", st.nstlog, 0, 100000000, 100, "wide");
-    html += '</div>';
-    html += renderNonbondFields("eq-" + i, st, true);
-    html += paramTextarea("eq-mdp-overrides-" + i, "Stage-specific advanced overrides", st.mdp_overrides_text || "",
-      "One key = value per line. These values apply only to this stage.");
-
-    html += '</div></div>';
-  });
-
-  // ---- Production ----
-  _prodIters.forEach(function(pr, pi) {
-    var productionEnabled = pr.enabled !== false;
-    var repeats = Math.max(1, pr.repeat || 1);
-    var segmentNs = pr.nsteps * pr.dt / 1000000;
-    var timeNs = segmentNs * repeats;
-    var frames = Math.floor(pr.nsteps / Math.max(pr.nstxout_compressed || 1, 1)) * repeats;
-    html += '<div class="sim-stage-card" data-run-card="prod' + pi + '" style="border-color:#6366f1;opacity:' + (productionEnabled ? '1' : '0.55') + ';">';
-    html += '<div class="sim-stage-header open" data-stage="prod' + pi + '" onclick="toggleStageCard(this)">';
-    html += '<span class="sim-stage-icon" style="color:#6366f1;">&#9679;</span>';
-    html += '<span class="sim-stage-title" style="color:#6366f1;">Production' + (_prodIters.length > 1 ? ' #' + (pi+1) : '') + '</span>';
-    html += '<span class="sim-stage-summary">' + repeats + ' segment' + (repeats === 1 ? '' : 's') + ' × ' + segmentNs.toFixed(1) + ' ns = ' + timeNs.toFixed(1) + ' ns &nbsp;|&nbsp; ' + frames.toLocaleString() + ' frames</span>';
-    html += stageEnabledControl("prod-enabled-" + pi, productionEnabled);
-    html += '</div>';
-    html += '<div class="sim-stage-body open" data-stage="prod' + pi + '">';
-
-    html += '<div class="param-row">';
-    html += paramNumber("prod-dt-" + pi, "Timestep (fs)", pr.dt, 0.5, 5.0, 0.5, "narrow");
-    html += paramNumber("prod-nsteps-" + pi, "Steps per segment", pr.nsteps, 10000, 500000000, 10000, "wide");
-    html += paramNumber("prod-repeat-" + pi, "Segments", repeats, 1, 100, 1, "narrow");
-    html += '<span class="hint" style="align-self:flex-end;margin-bottom:2px;" id="prod-time-' + pi + '">' + timeNs.toFixed(1) + ' ns total</span>';
-    html += '</div>';
-
-    html += '<div class="param-row">';
-    html += paramNumber("prod-nstxout-compressed-" + pi, "XTC interval", pr.nstxout_compressed, 0, 100000000, 100, "wide");
-    html += '<span class="hint" style="align-self:flex-end;margin-bottom:2px;" id="prod-frames-' + pi + '">' + frames.toLocaleString() + ' frames</span>';
-    html += paramSelect("prod-tcoupl-" + pi, "T-coupl", [["v-rescale","V-rescale"],["nose-hoover","Nose-Hoover"]], pr.tcoupl);
-    html += paramText("prod-tau-t-" + pi, "τ_t", pr.tau_t, "narrow");
-    html += paramNumber("prod-temperature-" + pi, "Ref T (K)", pr.temperature, 1, 1000, 1, "narrow");
-    html += paramSelect("prod-constraints-" + pi, "Constraints", [["none","None"],["h-bonds","H-bonds"],["all-bonds","All bonds"],["h-angles","H + angles"],["all-angles","All angles"]], pr.constraints);
-    html += '</div>';
-
-    html += '<div class="param-row">';
-    html += paramSelect("prod-pcoupl-" + pi, "P-coupl", [["C-rescale","C-rescale"],["Parrinello-Rahman","P-R"]], pr.pcoupl || "C-rescale");
-    html += paramSelect("prod-pcoupl-type-" + pi, "Pressure geometry", [["semisotropic","Semi-isotropic"],["isotropic","Isotropic"]], pr.pcoupl_type);
-    html += paramText("prod-tau-p-" + pi, "τ_p", pr.tau_p, "narrow");
-    html += paramText("prod-ref-p-" + pi, "Ref P (bar)", pr.ref_p, "narrow");
-    html += paramText("prod-compress-" + pi, "Compress", pr.compress, "wide");
-    html += paramSelect("prod-comm-mode-" + pi, "COM removal", [["linear","Linear translation"],["angular","Angular"],["none","Disabled"]], pr.comm_mode);
-    html += paramSelect("prod-comm-grps-" + pi, "COM group(s)", commGroupOptions(), pr.comm_grps);
-    html += paramNumber("prod-nstcomm-" + pi, "COM interval", pr.nstcomm, 0, 1000000, 1, "wide");
-    html += '</div>';
-
-    html += '<div class="param-row">';
-    html += paramNumber("prod-nstxout-" + pi, "Full coord interval", pr.nstxout, 0, 100000000, 100, "wide");
-    html += paramNumber("prod-nstvout-" + pi, "Velocity interval", pr.nstvout, 0, 100000000, 100, "wide");
-    html += paramNumber("prod-nstfout-" + pi, "Force interval", pr.nstfout, 0, 100000000, 100, "wide");
-    html += paramNumber("prod-nstcalcenergy-" + pi, "Energy calc", pr.nstcalcenergy, 1, 100000000, 1, "wide");
-    html += paramNumber("prod-nstenergy-" + pi, "Energy output", pr.nstenergy, 0, 100000000, 100, "wide");
-    html += paramNumber("prod-nstlog-" + pi, "Log interval", pr.nstlog, 0, 100000000, 100, "wide");
-    html += '</div>';
-    html += renderNonbondFields("prod-" + pi, pr, true);
-    html += paramTextarea("prod-mdp-overrides-" + pi, "Iteration-specific advanced overrides", pr.mdp_overrides_text || "",
-      "One key = value per line. These values apply only to this production definition.");
-
-    html += '</div></div>';
-  });
-
-  // Add iteration button
-  html += '<button type="button" class="btn" id="add-prod-iter-btn" style="margin-top:4px;font-size:12px;">+ Add Production Iteration</button>';
-  html += '<p class="hint">Segments run strictly in sequence. Each segment receives the previous segment checkpoint and writes a separate MDP/output prefix for safe restart.</p>';
-
-  container.innerHTML = html;
-
-  // Wire iteration button
-  var addBtn = document.getElementById("add-prod-iter-btn");
-  if (addBtn) {
-    addBtn.addEventListener("click", function() {
-      var last = _prodIters[_prodIters.length - 1] || Object.assign({}, _DEFAULT_OUTPUT, { nsteps: 5000000, repeat: 1, dt: 2.0, nstxout_compressed: 10000, tcoupl: "v-rescale", tau_t: "1.0", tau_p: "5.0", ref_p: "1.0", compress: "4.5e-5", nstcomm: 100 });
-      var added = JSON.parse(JSON.stringify(last));
-      added.enabled = true;
-      added.repeat = 1;
-      _prodIters.push(added);
-      renderSimStages();
-    });
-  }
-
-  // Wire all stage inputs for real-time updates
-  wireStageInputs();
-  updateAllTimeDisplays();
-}
-
-function paramNumber(id, label, value, min, max, step, cls) {
-  return '<span class="param-item"><label>' + label + '</label><input type="number" id="' + id + '" value="' + escapeHtml(value) + '" min="' + min + '" max="' + max + '" step="' + step + '" class="' + (cls||'') + '"></span>';
-}
-
-function paramText(id, label, value, cls) {
-  return '<span class="param-item"><label>' + label + '</label><input type="text" id="' + id + '" value="' + escapeHtml(value) + '" class="' + (cls||'') + '"></span>';
-}
-
-function paramSelect(id, label, options, selected) {
-  var opts = options.map(function(o) {
-    return '<option value="' + o[0] + '"' + (o[0] === selected ? ' selected' : '') + '>' + o[1] + '</option>';
-  }).join("");
-  return '<span class="param-item"><label>' + label + '</label><select id="' + id + '">' + opts + '</select></span>';
-}
-
-function stageEnabledControl(id, enabled) {
-  return '<label class="hint" style="margin-left:auto;display:flex;align-items:center;gap:5px;" onclick="event.stopPropagation();">' +
-    '<input type="checkbox" id="' + id + '"' + (enabled ? ' checked' : '') + '> Run stage</label>';
-}
-
-function commGroupOptions() {
-  var options = [["System", "System — all atoms"]];
-  var modules = (state.taskType && state.taskType.visible_modules) || [];
-  if (modules.indexOf("membrane") >= 0) {
-    options.push(["SOLU_MEMB SOLV", "SOLU_MEMB + SOLV"]);
-    options.push(["SOLU MEMB SOLV", "SOLU + MEMB + SOLV"]);
-  } else {
-    options.push(["SOLU SOLV", "SOLU + SOLV"]);
-  }
-  return options;
-}
-
-function escapeHtml(value) {
-  return String(value == null ? "" : value)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
-function paramTextarea(id, label, value, hint) {
-  return '<div class="param-textarea"><label for="' + id + '">' + label + '</label>' +
-    '<textarea id="' + id + '" rows="3" spellcheck="false" placeholder="example: nstlist = 20">' + escapeHtml(value) + '</textarea>' +
-    '<span class="hint">' + hint + '</span></div>';
-}
-
-function toggleStageCard(header) {
-  var body = header.nextElementSibling;
-  if (!body) return;
-  var open = body.classList.toggle("open");
-  header.classList.toggle("open", open);
-}
-
-function wireStageInputs() {
-  // Collect all number/text inputs in the simparams panel
-  var container = document.getElementById("simparams-stages");
-  if (!container) return;
-  container.querySelectorAll("input, select, textarea").forEach(function(el) {
-    el.addEventListener("input", function() { readStageParams(); updateAllTimeDisplays(); });
-    el.addEventListener("change", function() {
-      readStageParams();
-      updateAllTimeDisplays();
-      if (el.id.indexOf("eq-ensemble-") === 0) renderSimStages();
-    });
-  });
-}
-
-function readStageParams() {
-  function numberValue(id, fallback) {
-    var value = parseFloat(getVal(id));
-    return Number.isFinite(value) ? value : fallback;
-  }
-  function integerValue(id, fallback) {
-    var value = Number(getVal(id));
-    return Number.isInteger(value) ? value : fallback;
-  }
-  function readNonbondFields(prefix, target, includeNstlist) {
-    if (includeNstlist) {
-      target.nstlist = integerValue(prefix + "-nstlist", target.nstlist);
-    }
-    target.rlist = numberValue(prefix + "-rlist", target.rlist);
-    target.vdw_modifier = getVal(prefix + "-vdw-modifier") || target.vdw_modifier;
-    target.rvdw_switch = numberValue(prefix + "-rvdw-switch", target.rvdw_switch);
-    target.rvdw = numberValue(prefix + "-rvdw", target.rvdw);
-    target.rcoulomb = numberValue(prefix + "-rcoulomb", target.rcoulomb);
-    target.fourierspacing = numberValue(prefix + "-fourierspacing", target.fourierspacing);
-    target.dispcorr = getVal(prefix + "-dispcorr") || target.dispcorr;
-  }
-  _simHardware.mode = getVal("sim-hw-mode") || _simHardware.mode;
-  _simHardware.cpu_threads = integerValue(
-    "sim-hw-cpu", _simHardware.cpu_threads
-  );
-  _simHardware.mpi_ranks = integerValue(
-    "sim-hw-mpi", _simHardware.mpi_ranks
-  );
-  _simHardware.gpu_count = integerValue(
-    "sim-hw-gpu-count", _simHardware.gpu_count
-  );
-  _simHardware.use_gpu =
-    document.getElementById("sim-hw-use-gpu")?.checked === true;
-  _simHardware.gpu_ids = getVal("sim-hw-gpu-ids") || "";
-  _simHardware.gmx_command = getVal("sim-hw-gmx") || _simHardware.gmx_command;
-  _simHardware.mpi_launcher =
-    getVal("sim-hw-launcher") || _simHardware.mpi_launcher;
-  _simHardware.pin = getVal("sim-hw-pin") || _simHardware.pin;
-  var ompOutput = document.getElementById("sim-hw-omp");
-  if (ompOutput) {
-    ompOutput.textContent = (
-      _simHardware.cpu_threads > 0 &&
-      _simHardware.mpi_ranks > 0 &&
-      _simHardware.cpu_threads % _simHardware.mpi_ranks === 0
-    ) ? String(_simHardware.cpu_threads / _simHardware.mpi_ranks) : "invalid";
-  }
-  // Read EM
-  _DEFAULT_EM.integrator = getVal("em-integrator") || _DEFAULT_EM.integrator || "steep";
-  _DEFAULT_EM.nsteps = integerValue("em-nsteps", _DEFAULT_EM.nsteps);
-  _DEFAULT_EM.emtol = numberValue("em-emtol", _DEFAULT_EM.emtol);
-  _DEFAULT_EM.emstep = numberValue("em-emstep", _DEFAULT_EM.emstep);
-  _DEFAULT_EM.nstlist = integerValue("em-nstlist", _DEFAULT_EM.nstlist);
-  _DEFAULT_EM.constraints = getVal("em-constraints") || _DEFAULT_EM.constraints;
-  _DEFAULT_EM.bb = numberValue("em-bb", _DEFAULT_EM.bb);
-  _DEFAULT_EM.sc = numberValue("em-sc", _DEFAULT_EM.sc);
-  _DEFAULT_EM.lipid = numberValue("em-lipid", _DEFAULT_EM.lipid);
-  _DEFAULT_EM.dih = numberValue("em-dih", _DEFAULT_EM.dih);
-  readNonbondFields("em", _DEFAULT_EM, false);
-  _DEFAULT_EM.mdp_overrides_text = getVal("em-mdp-overrides") || "";
-  // Read EQ stages
-  for (var i = 0; i < _simStages.length; i++) {
-    var st = _simStages[i];
-    st.enabled = document.getElementById("eq-enabled-" + i)?.checked !== false;
-    st.dt = numberValue("eq-dt-" + i, st.dt);
-    st.nsteps = integerValue("eq-nsteps-" + i, st.nsteps);
-    st.gen_seed = integerValue("eq-gen-seed-" + i, st.gen_seed);
-    st.bb = numberValue("eq-bb-" + i, st.bb);
-    st.sc = numberValue("eq-sc-" + i, st.sc);
-    st.lipid = numberValue("eq-lipid-" + i, st.lipid);
-    st.dih = numberValue("eq-dih-" + i, st.dih);
-    st.ensemble = getVal("eq-ensemble-" + i) || st.ensemble;
-    st.tcoupl = getVal("eq-tcoupl-" + i) || st.tcoupl;
-    st.tau_t = getVal("eq-tau-t-" + i) || st.tau_t;
-    st.temperature = numberValue("eq-temperature-" + i, st.temperature);
-    st.comm_mode = getVal("eq-comm-mode-" + i) || st.comm_mode;
-    st.comm_grps = getVal("eq-comm-grps-" + i) || st.comm_grps;
-    st.nstcomm = integerValue("eq-nstcomm-" + i, st.nstcomm);
-    st.constraints = getVal("eq-constraints-" + i) || st.constraints;
-    ["nstxout_compressed","nstxout","nstvout","nstfout","nstcalcenergy","nstenergy","nstlog"].forEach(function(key) {
-      st[key] = integerValue("eq-" + key.replace(/_/g, "-") + "-" + i, st[key]);
-    });
-    st.mdp_overrides_text = getVal("eq-mdp-overrides-" + i) || "";
-    if (st.ensemble === "npt") {
-      st.pcoupl = getVal("eq-pcoupl-" + i) || st.pcoupl;
-      st.pcoupl_type = getVal("eq-pcoupl-type-" + i) || st.pcoupl_type;
-      st.tau_p = getVal("eq-tau-p-" + i) || st.tau_p;
-      st.ref_p = getVal("eq-ref-p-" + i) || st.ref_p;
-      st.compress = getVal("eq-compress-" + i) || st.compress;
-    }
-    readNonbondFields("eq-" + i, st, true);
-  }
-  // Read prod stages
-  for (var p = 0; p < _prodIters.length; p++) {
-    var pr = _prodIters[p];
-    pr.enabled = document.getElementById("prod-enabled-" + p)?.checked !== false;
-    pr.dt = numberValue("prod-dt-" + p, pr.dt);
-    pr.nsteps = integerValue("prod-nsteps-" + p, pr.nsteps);
-    pr.repeat = integerValue("prod-repeat-" + p, pr.repeat || 1);
-    ["nstxout_compressed","nstxout","nstvout","nstfout","nstcalcenergy","nstenergy","nstlog"].forEach(function(key) {
-      pr[key] = integerValue("prod-" + key.replace(/_/g, "-") + "-" + p, pr[key]);
-    });
-    pr.tcoupl = getVal("prod-tcoupl-" + p) || pr.tcoupl;
-    pr.tau_t = getVal("prod-tau-t-" + p) || pr.tau_t;
-    pr.temperature = numberValue("prod-temperature-" + p, pr.temperature);
-    pr.constraints = getVal("prod-constraints-" + p) || pr.constraints;
-    pr.tau_p = getVal("prod-tau-p-" + p) || pr.tau_p;
-    pr.ref_p = getVal("prod-ref-p-" + p) || pr.ref_p;
-    pr.compress = getVal("prod-compress-" + p) || pr.compress;
-    pr.pcoupl = getVal("prod-pcoupl-" + p) || pr.pcoupl;
-    pr.pcoupl_type = getVal("prod-pcoupl-type-" + p) || pr.pcoupl_type;
-    pr.comm_mode = getVal("prod-comm-mode-" + p) || pr.comm_mode;
-    pr.comm_grps = getVal("prod-comm-grps-" + p) || pr.comm_grps;
-    pr.nstcomm = integerValue("prod-nstcomm-" + p, pr.nstcomm);
-    readNonbondFields("prod-" + p, pr, true);
-    pr.mdp_overrides_text = getVal("prod-mdp-overrides-" + p) || "";
-  }
-}
-
-function parseMdpOverrides(text, label) {
-  var result = {};
-  String(text || "").split(/\r?\n/).forEach(function(raw, index) {
-    var line = raw.trim();
-    if (!line || line.charAt(0) === ";" || line.charAt(0) === "#") return;
-    var match = line.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(\S(?:.*\S)?)$/);
-    if (!match) throw new Error(label + ", line " + (index + 1) + ": expected key = value");
-    if (Object.prototype.hasOwnProperty.call(result, match[1])) {
-      throw new Error(label + ": duplicate key " + match[1]);
-    }
-    result[match[1]] = match[2];
-  });
-  return result;
-}
-
-function collectSimulationParams() {
-  readStageParams();
-  var eq = _simStages.map(function(stage, index) {
-    var copy = Object.assign({}, stage);
-    copy.dt_unit = "fs";
-    copy.mdp_overrides = copy.enabled === false ? {} : parseMdpOverrides(
-      copy.mdp_overrides_text, "Equilibration " + (index + 1) + " overrides"
-    );
-    delete copy.mdp_overrides_text;
-    return copy;
-  });
-  var prod = _prodIters.map(function(stage, index) {
-    var copy = Object.assign({}, stage);
-    copy.dt_unit = "fs";
-    copy.mdp_overrides = copy.enabled === false ? {} : parseMdpOverrides(
-      copy.mdp_overrides_text, "Production " + (index + 1) + " overrides"
-    );
-    delete copy.mdp_overrides_text;
-    return copy;
-  });
-  if (!eq.some(function(stage) { return stage.enabled !== false; })) {
-    throw new Error("Enable at least one equilibration stage so velocities and continuation are initialized safely.");
-  }
-  if (!prod.some(function(stage) { return stage.enabled !== false; })) {
-    throw new Error("Enable at least one production stage.");
-  }
-  return {
-    schema_version: 2,
-    minimization: {
-      integrator: _DEFAULT_EM.integrator || "steep",
-      nsteps: _DEFAULT_EM.nsteps,
-      emtol: _DEFAULT_EM.emtol,
-      emstep: _DEFAULT_EM.emstep,
-      nstlist: _DEFAULT_EM.nstlist,
-      constraints: _DEFAULT_EM.constraints,
-      bb: _DEFAULT_EM.bb,
-      sc: _DEFAULT_EM.sc,
-      lipid: _DEFAULT_EM.lipid,
-      dih: _DEFAULT_EM.dih,
-      rlist: _DEFAULT_EM.rlist,
-      vdw_modifier: _DEFAULT_EM.vdw_modifier,
-      rvdw_switch: _DEFAULT_EM.rvdw_switch,
-      rvdw: _DEFAULT_EM.rvdw,
-      rcoulomb: _DEFAULT_EM.rcoulomb,
-      fourierspacing: _DEFAULT_EM.fourierspacing,
-      dispcorr: _DEFAULT_EM.dispcorr,
-      mdp_overrides: parseMdpOverrides(_DEFAULT_EM.mdp_overrides_text, "Minimization overrides")
-    },
-    eq_stages: eq,
-    prod_iters: prod
-  };
-}
-
-function collectExecutionHardware() {
-  readStageParams();
-  if (!Number.isInteger(_simHardware.cpu_threads) || _simHardware.cpu_threads < 1) {
-    throw new Error("Total CPU threads must be a positive integer.");
-  }
-  if (!Number.isInteger(_simHardware.mpi_ranks) || _simHardware.mpi_ranks < 1 ||
-      _simHardware.cpu_threads % _simHardware.mpi_ranks !== 0) {
-    throw new Error("MPI ranks must be a positive exact divisor of total CPU threads.");
-  }
-  if (_simHardware.use_gpu &&
-      !/^[0-9]+(,[0-9]+)*$/.test(String(_simHardware.gpu_ids).trim())) {
-    throw new Error("GPU IDs must be comma-separated logical integers, for example 0 or 0,1.");
-  }
-  if (_simHardware.use_gpu) {
-    var gpuIds = String(_simHardware.gpu_ids).trim().split(",");
-    if (!Number.isInteger(_simHardware.gpu_count) || _simHardware.gpu_count < 1 ||
-        _simHardware.gpu_count !== gpuIds.length) {
-      throw new Error("GPU count must equal the number of selected GPU IDs.");
-    }
-    if (new Set(gpuIds).size !== gpuIds.length) {
-      throw new Error("GPU IDs must be unique.");
-    }
-    if (_simHardware.gpu_count > _simHardware.mpi_ranks) {
-      throw new Error("MPI ranks must be at least the selected GPU count.");
-    }
-  }
-  if (!/^[A-Za-z0-9_./+-]+$/.test(String(_simHardware.gmx_command).trim())) {
-    throw new Error("GROMACS command must be one executable name or path without shell syntax.");
-  }
-  return {
-    mode: _simHardware.mode,
-    cpu_threads: _simHardware.cpu_threads,
-    mpi_ranks: _simHardware.mpi_ranks,
-    use_gpu: _simHardware.use_gpu,
-    gpu_count: _simHardware.use_gpu ? _simHardware.gpu_count : 0,
-    gpu_ids: _simHardware.use_gpu ? String(_simHardware.gpu_ids).trim() : "",
-    gmx_command: String(_simHardware.gmx_command).trim(),
-    mpi_launcher: _simHardware.mpi_launcher,
-    pin: _simHardware.pin
-  };
-}
-
-function getVal(id) {
-  var el = document.getElementById(id);
-  return el ? el.value : null;
-}
-
-function updateAllTimeDisplays() {
-  // EQ stages
-  for (var i = 0; i < _simStages.length; i++) {
-    var st = _simStages[i];
-    var ns = st.nsteps * st.dt / 1000000;
-    var el = document.getElementById("eq-time-" + i);
-    if (el) el.textContent = ns.toFixed(1) + " ns";
-    // Update header summary
-    var card = document.querySelector('[data-stage="eq' + i + '"]');
-    if (card && card.classList.contains("sim-stage-header")) {
-      var runCard = card.closest(".sim-stage-card");
-      if (runCard) runCard.style.opacity = st.enabled === false ? "0.55" : "1";
-      var summary = card.querySelector(".sim-stage-summary");
-      if (summary) summary.textContent = (st.enabled === false ? "SKIPPED | " : "") + st.nsteps.toLocaleString() + " steps × " + st.dt.toFixed(1) + " fs = " + ns.toFixed(1) + " ns  |  BB=" + st.bb + " SC=" + st.sc + " Lipid=" + st.lipid;
-    }
-  }
-  // Prod stages
-  for (var p = 0; p < _prodIters.length; p++) {
-    var pr = _prodIters[p];
-    var repeats = Math.max(1, pr.repeat || 1);
-    var segmentNs = pr.nsteps * pr.dt / 1000000;
-    var ns = segmentNs * repeats;
-    var frames = Math.floor(pr.nsteps / Math.max(pr.nstxout_compressed || 1, 1)) * repeats;
-    var timeEl = document.getElementById("prod-time-" + p);
-    var frameEl = document.getElementById("prod-frames-" + p);
-    if (timeEl) timeEl.textContent = ns.toFixed(1) + " ns total";
-    if (frameEl) frameEl.textContent = frames.toLocaleString() + " frames";
-    // Update header
-    var card = document.querySelector('[data-stage="prod' + p + '"]');
-    if (card && card.classList.contains("sim-stage-header")) {
-      var productionCard = card.closest(".sim-stage-card");
-      if (productionCard) productionCard.style.opacity = pr.enabled === false ? "0.55" : "1";
-      var summary = card.querySelector(".sim-stage-summary");
-      if (summary) summary.textContent = (pr.enabled === false ? "SKIPPED | " : "") + repeats + " segment" + (repeats === 1 ? "" : "s") + " × " + segmentNs.toFixed(1) + " ns = " + ns.toFixed(1) + " ns  |  " + frames.toLocaleString() + " frames";
+  if (!state.taskId) return;
+  const checked = _checkedSteps.has('solvation') && pureMembraneIncludesSolvent();
+  const source = checked ? 'solvation' :
+    (state.taskType?.pipeline === 'solvator' ? 'structure' : 'membrane');
+  const data = await GMXViewer.render('solvation-3d-viewer', source);
+  if (data) {
+    const label = document.getElementById('solvation-viewer-label');
+    if (label) {
+      label.textContent = source === 'structure'
+        ? 'Checked solute; compute solvent to create the box with the requested padding.'
+        : (checked ? 'Checked solvent box: ' : 'Checked membrane box; compute solvent to add padding: ') +
+          data.box_nm.map(row=>Math.hypot(...row).toFixed(2)).join(' × ') + ' nm';
     }
   }
 }
 
 
 // ===================================================================
-// System Verification Viewer
+// Simulation Parameters live in app_parts/simulation.js.
+// It is loaded immediately after this classic script to preserve shared globals.
 // ===================================================================
 
-// ---- Capture viewer metrics for comparison ----
-let _previewConfig = null;  // stored for inclusion in build payload
 
-function _captureViewerMetrics() {
-  var pdbContent = _orientedPdbContent || (state.pdbInfo && state.pdbInfo.pdb_content);
-  if (!pdbContent) return null;
-
-  // ---- Box dimensions (matching renderSystemViewer computation) ----
-  // Use CA-only atoms for protein metrics (robust against protonation/H addition)
-  var xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-  var zMin = Infinity, zMax = -Infinity;
-  var xMinCA = Infinity, xMaxCA = -Infinity, yMinCA = Infinity, yMaxCA = -Infinity;
-  var zMinCA = Infinity, zMaxCA = -Infinity;
-  var lines = pdbContent.split('\n');
-  for (var li = 0; li < lines.length; li++) {
-    var l = lines[li];
-    if (l.indexOf('ATOM') === 0 || l.indexOf('HETATM') === 0) {
-      var atomName = l.substring(12, 16).trim();
-      var px = parseFloat(l.substring(30, 38)) / 10.0;  // Å → nm
-      var py = parseFloat(l.substring(38, 46)) / 10.0;
-      var pz = parseFloat(l.substring(46, 54)) / 10.0;
-      if (!isNaN(px) && !isNaN(py) && !isNaN(pz)) {
-        // All-atom extent (for box calculation)
-        if (px < xMin) xMin = px; if (px > xMax) xMax = px;
-        if (py < yMin) yMin = py; if (py > yMax) yMax = py;
-        if (pz < zMin) zMin = pz; if (pz > zMax) zMax = pz;
-        // CA-only extent (for protein metrics comparison)
-        if (atomName === 'CA') {
-          if (px < xMinCA) xMinCA = px; if (px > xMaxCA) xMaxCA = px;
-          if (py < yMinCA) yMinCA = py; if (py > yMaxCA) yMaxCA = py;
-          if (pz < zMinCA) zMinCA = pz; if (pz > zMaxCA) zMaxCA = pz;
-        }
-      }
-    }
-  }
-
-  var isSolvator = state.taskType && state.taskType.pipeline === 'solvator';
-  // Box dimensions use ALL-atom extent (for box calculation)
-  var protXY = isFinite(xMin) ? Math.max(xMax - xMin, yMax - yMin) : 3.0;
-  var protZ = isFinite(zMin) ? (zMax - zMin) : 6.0;
-
-  // Protein metrics use CA-only (robust against protonation/H changes)
-  // Fall back to all-atom if no CA atoms found
-  var useCA = isFinite(xMinCA);
-  var protComX = useCA ? (xMinCA + xMaxCA) / 2.0 : (xMin + xMax) / 2.0;
-  var protComY = useCA ? (yMinCA + yMaxCA) / 2.0 : (yMin + yMax) / 2.0;
-  var protComZ = useCA ? (zMinCA + zMaxCA) / 2.0 : (zMin + zMax) / 2.0;
-  var protExtX = useCA ? (xMaxCA - xMinCA) : (xMax - xMin);
-  var protExtY = useCA ? (yMaxCA - yMinCA) : (yMax - yMin);
-  var protExtZ = useCA ? (zMaxCA - zMinCA) : (zMax - zMin);
-
-  var protein = {
-    center_of_mass_nm: [roundTo(protComX, 3), roundTo(protComY, 3), roundTo(protComZ, 3)],
-    min_nm: [roundTo(useCA ? xMinCA : xMin, 3), roundTo(useCA ? yMinCA : yMin, 3), roundTo(useCA ? zMinCA : zMin, 3)],
-    max_nm: [roundTo(useCA ? xMaxCA : xMax, 3), roundTo(useCA ? yMaxCA : yMax, 3), roundTo(useCA ? zMaxCA : zMax, 3)],
-    extent_nm: [roundTo(protExtX, 3), roundTo(protExtY, 3), roundTo(protExtZ, 3)],
-  };
-
-  // Box dimensions
-  var mPadEl = document.getElementById('membrane-pad');
-  var mPad = 2.0; if (mPadEl) { var mpv = parseFloat(mPadEl.value); if (!isNaN(mpv)) mPad = mpv; }
-  var zPad; { var zv = parseFloat(document.getElementById('box-padding')?.value); zPad = isNaN(zv) ? 2.0 : zv; }
-  var dhZ = (_dominantLipidDHH || 3.8);
-  var boxXY = Math.max(protXY + 2 * mPad, 4.0);
-  var boxZ;
-  if (isSolvator) {
-    boxXY = Math.max(protXY + 2 * zPad, 4.0);
-    boxZ = Math.max(protZ, 6.0) + 2 * zPad;
-  } else {
-    boxZ = Math.max(protZ, dhZ * 1.8) + 2 * zPad;
-  }
-
-  // Membrane metrics
-  var membrane = null;
-  if (!isSolvator) {
-    var halfThick = dhZ * 0.5;
-    membrane = {
-      midplane_z_nm: roundTo(_orientZOffset || 0, 3),
-      half_thickness_nm: roundTo(halfThick, 3),
-    };
-  }
-
-  return {
-    box_dimensions_nm: [roundTo(boxXY, 3), roundTo(boxXY, 3), roundTo(boxZ, 3)],
-    protein: protein,
-    membrane: membrane,
-  };
-}
-
-function roundTo(val, decimals) {
-  var p = Math.pow(10, decimals);
-  return Math.round(val * p) / p;
-}
-
-function initSystemVerification() {
-  var btn = document.getElementById("verify-check-btn");
-  if (btn) {
-    btn.addEventListener("click", async function() {
-      // ---- Capture viewer metrics ----
-      _previewConfig = _captureViewerMetrics();
-      var pdbContent = _orientedPdbContent || (state.pdbInfo && state.pdbInfo.pdb_content);
-
-      // ---- Send preview to backend ----
-      if (_previewConfig && state.taskId) {
-        try {
-          var payload = {
-            task_id: state.taskId,
-            oriented_pdb: pdbContent || "",
-            box_dimensions_nm: _previewConfig.box_dimensions_nm,
-            protein: _previewConfig.protein,
-            membrane: _previewConfig.membrane,
-          };
-          var resp = await fetch('/api/preview-pdb', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          var result = await resp.json();
-          if (result.status === 'ok') {
-            console.log('Preview PDB saved:', result.preview_resource);
-          }
-        } catch (e) {
-          console.warn('Failed to save preview PDB:', e);
-          // Non-fatal — build can still proceed without preview comparison
-        }
-      }
-
-      _systemVerified = true;
-      _checkedSteps.add('verify');
-      document.getElementById("verify-status").textContent = "✓ System verified. You may now proceed to Force Field.";
-      document.getElementById("verify-status").style.color = "#059669";
-      updateNextButtonState();
-    });
-  }
-}
-
-
-/** Build a valid PDB HETATM line with correct column alignment. */
-function pdbHetatm(serial, atomName, resName, chain, resid, x, y, z, element) {
-  // PDB format columns:
-  // 1-6: "HETATM", 7-11: serial, 12: space, 13-16: atomName, 17: altLoc,
-  // 18-20: resName, 21: space, 22: chain, 23-26: resid, 27-30: spaces,
-  // 31-38: x, 39-46: y, 47-54: z, 55-60: occ, 61-66: temp, 77-78: element
-  var line = "HETATM" + String(serial).padStart(5, " ") +
-    " " + String(atomName || "P").padEnd(4, " ") +
-    String(resName || "LIP").padStart(3, " ") +
-    " " + String(chain || "A") +
-    String(resid || 1).toString().padStart(4, " ") +
-    "    " +
-    parseFloat(x).toFixed(3).padStart(8, " ") +
-    parseFloat(y).toFixed(3).padStart(8, " ") +
-    parseFloat(z).toFixed(3).padStart(8, " ") +
-    "  1.00  0.00           " +
-    String(element || "P").padStart(2, " ") +
-    "\n";
-  return line;
-}
-
-function renderSystemViewer() {
-  var el = document.getElementById("verify-viewer");
-  if (!el) return;
-  if (!state.pdbInfo || !state.pdbInfo.pdb_content) {
-    setTimeout(renderSystemViewer, 300);
-    return;
-  }
-  if (typeof $3Dmol === "undefined") {
-    window._cdmRetries3D = (window._cdmRetries3D || 0) + 1;
-    if (window._cdmRetries3D > 30) { console.error('The bundled 3Dmol.js asset failed to load'); return; }
-    setTimeout(renderSystemViewer, 500); return;
-  }
-  if (el.offsetWidth === 0 || el.offsetHeight === 0) {
-    setTimeout(renderSystemViewer, 200);
-    return;
-  }
-
-  // Destroy old viewer (cylinders/spheres are shapes, not cleared by removeAllModels)
-  if (window._verifyViewer) {
-    try { window._verifyViewer.clear(); } catch(e) {}
-    window._verifyViewer = null;
-  }
-  while (el.firstChild) { el.removeChild(el.firstChild); }
-
-  window._verifyViewer = $3Dmol.createViewer(el, { backgroundColor: "0xffffff", antialias: true });
-  window._verifyViewer.setBackgroundColor('0xffffff');
-  window._verifyViewer.setSlab(-100000, 100000);
-  var v = window._verifyViewer;
-
-  var isSolvator = state.taskType && state.taskType.pipeline === 'solvator';
-
-  // ---- 1. Protein (oriented if PPM was run) ----
-  var pdbForVerify = _orientedPdbContent || (state.pdbInfo && state.pdbInfo.pdb_content);
-  v.addModel(pdbForVerify, "pdb");
-  _applyUnifiedStyle(v, pdbForVerify);
-
-  // ---- 2. Membrane (consistent with other viewers) ----
-  if (!isSolvator) {
-    var halfThick = (_dominantLipidDHH || 3.8) * 0.5;
-    drawMembranePlane(v, 0.0, halfThick, 0.0, 0.0);
-    v.setStyle({elem: 'X'}, {sphere: {radius: 1.2, color: '0x6b7280', opacity: 0.55}});
-  }
-
-  // ---- 3. Box wireframe (from actual configured parameters) ----
-  var xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-  var lines = pdbForVerify.split('\n');
-  for (var li = 0; li < lines.length; li++) {
-    var l = lines[li];
-    if (l.indexOf('ATOM') === 0 || l.indexOf('HETATM') === 0) {
-      var px = parseFloat(l.substring(30, 38)) / 10.0;
-      var py = parseFloat(l.substring(38, 46)) / 10.0;
-      if (!isNaN(px) && !isNaN(py)) { if (px<xMin)xMin=px; if (px>xMax)xMax=px; if (py<yMin)yMin=py; if (py>yMax)yMax=py; }
-    }
-  }
-  var protXY = isFinite(xMin) ? Math.max(xMax-xMin, yMax-yMin) : 3.0;
-  var mPadEl = document.getElementById('membrane-pad');
-  var mPad = 2.0; if (mPadEl) { var mpv=parseFloat(mPadEl.value); if (!isNaN(mpv)) mPad=mpv; }
-  var boxXY = Math.max(protXY + 2*mPad, 4.0);
-  var zPad; { var zv=parseFloat(document.getElementById('box-padding')?.value); zPad=isNaN(zv)?2.0:zv; }
-  var protExtZ = _proteinExtent(pdbForVerify).z; var dhZ = (_dominantLipidDHH || 3.8); var boxZ = Math.max(protExtZ, dhZ * 1.8) + 2 * zPad;
-  if (isSolvator) {
-    boxXY = Math.max(protXY + 2*zPad, 4.0);
-    boxZ = Math.max(protExtZ, 6.0) + 2*zPad;
-  }
-  var halfXY_A = (boxXY / 2.0) * 10.0;
-  var halfZ_A = (boxZ / 2.0) * 10.0;
-
-  // Apply PPM tilt + z_offset to box corners
-  _drawTiltedBox(v, halfXY_A, halfZ_A, _orientZOffset * 10, _orientTilt, _orientPhi);
-
-  // ---- 4. Ions (in water regions only — exclude membrane interior) ----
-  if (!isSolvator) {
-    var ionColors = {NA:'0x3b82f6',K:'0x8b5cf6',CL:'0xef4444',CA:'0x22c55e',MG:'0x10b981',ZN:'0x64748b'};
-    var cations = window._getIonCations ? window._getIonCations() : (console.warn('ions.js not loaded - falling back to default cations ["NA"]'), ['NA']);
-    var anions  = window._getIonAnions  ? window._getIonAnions()  : (console.warn('ions.js not loaded - falling back to default anions ["CL"]'), ['CL']);
-    var nIon = 8;
-    // Membrane occupies ±halfThick_A in Z; ions go above/below
-    var halfThickA = halfThick * 10.0;  // Å
-    function _randomIonZ() {
-      // Pick upper or lower water region
-      if (Math.random() < 0.5) {
-        return -(halfThickA + Math.random() * (halfZ_A - halfThickA));  // below membrane
-      } else {
-        return halfThickA + Math.random() * (halfZ_A - halfThickA);     // above membrane
-      }
-    }
-    for (var ci = 0; ci < nIon; ci++) {
-      cations.forEach(function(cat) {
-        var col = ionColors[cat] || '0x3b82f6';
-        var rad = (cat==='CA'||cat==='MG'||cat==='ZN') ? 0.7 : 1.0;
-        v.addSphere({center:{x:(Math.random()-0.5)*halfXY_A*2,y:(Math.random()-0.5)*halfXY_A*2,z:_randomIonZ()},radius:rad,color:col,opacity:0.65});
-      });
-      anions.forEach(function(ani) {
-        var col = ionColors[ani] || '0xef4444';
-        v.addSphere({center:{x:(Math.random()-0.5)*halfXY_A*2,y:(Math.random()-0.5)*halfXY_A*2,z:_randomIonZ()},radius:0.8,color:col,opacity:0.65});
-      });
-    }
-  }
-
-  v.zoomTo();
-  v.render();
-  v.setSlab(-100000, 100000);
-}
-
-// Lipid Mixing / Composition Editor
 // ===================================================================
-
-let _mixUpper = [{ name: 'POPC', ratio: 100 }];  // { name, ratio }
-let _mixLower = [{ name: 'POPC', ratio: 100 }];
-let _asymmetric = false;
-let _compositionChecked = false;
-let _compositionErrors = [];
-function _invalidateMembraneBuild() {
-  _compositionChecked = false;
-  _membraneCheckpointPdb = null;
-  _membraneActualBox = null;
-}
-
-function initLipidMixing() {
-  const asymToggle = document.getElementById('asymmetric-bilayer');
-  if (asymToggle) {
-    asymToggle.addEventListener('change', () => {
-      _asymmetric = asymToggle.checked;
-      document.getElementById('lower-leaflet-section').classList.toggle('hidden', !_asymmetric);
-      updateLeafletLabels();
-      _invalidateMembraneBuild();
-      updateCompositionStatus();
-      if (!_asymmetric) {
-        _mixLower = _mixUpper.map(m => ({...m}));
-      }
-      renderMixList('upper');
-      renderMixList('lower');
-      updateLipidCounts();
-    });
-  }
-
-  // Add-lipid buttons
-  document.querySelectorAll('.add-lipid-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const leaflet = btn.dataset.leaflet;
-      const mix = leaflet === 'upper' ? _mixUpper : _mixLower;
-      // Pick first lipid not already in the list
-      const existing = new Set(mix.map(m => m.name));
-      const selectedSource = selectedLipidParameterSource();
-      const available = (_lipidPickerData.lipids || []).filter(l =>
-        !existing.has(l.name) && (!selectedSource || (l.parameterizations || []).indexOf(selectedSource) >= 0)
-      );
-      if (!available.length) {
-        alert('No additional validated lipids are available with ' + lipidParameterSourceLabel(selectedSource) + '.');
-        return;
-      }
-      const pick = available[0].name;
-      mix.push({ name: pick, ratio: 0 });
-      _invalidateMembraneBuild();
-      updateCompositionStatus();
-      if (!_asymmetric && leaflet === 'upper') {
-        _mixLower = _mixUpper.map(m => ({...m}));
-      }
-      normalizeRatios(leaflet === 'upper' ? _mixUpper : _mixLower);
-      renderMixList('upper');
-      renderMixList('lower');
-    });
-  });
-
-  // Lipids-per-leaflet changes → clear check + refresh viewer
-  const nLipidsEl = document.getElementById('n-lipids-per-leaflet');
-  if (nLipidsEl) {
-    nLipidsEl.addEventListener('input', () => { _invalidateMembraneBuild(); updateCompositionStatus(); renderMembraneViewer(); });
-  }
-
-  // Check button
-  const checkBtn = document.getElementById('check-composition-btn');
-  if (checkBtn) {
-    checkBtn.addEventListener('click', () => checkComposition());
-  }
-
-  renderMixList('upper');
-  renderMixList('lower');
-
-  // Initialize 3D viewer after DOM settles
-  setTimeout(function() { renderMembraneViewer(); }, 500);
-}
-
-// ---- 3D viewer: protein + box wireframe ----
-var _membraneViewer = null;
-var _membraneCheckpointPdb = null;  // set by checkComposition for WYSIWYG refresh
-var _membraneActualBox = null;       // [box_x, box_y, box_z] in nm from checkpoint
-
-function weightedLeafletAPL(mix, lipids) {
-  var weighted = 0;
-  var totalRatio = 0;
-  mix.forEach(function(m) {
-    var lipid = lipids.find(function(candidate) { return candidate.name === m.name; });
-    if (lipid && m.ratio > 0) {
-      weighted += lipid.area_per_lipid * m.ratio;
-      totalRatio += m.ratio;
-    }
-  });
-  return totalRatio > 0 ? weighted / totalRatio : 0.65;
-}
-
-function previewBilayerAPL(lipids) {
-  var upperAPL = weightedLeafletAPL(_mixUpper, lipids);
-  if (!_asymmetric) return upperAPL;
-  return Math.max(upperAPL, weightedLeafletAPL(_mixLower, lipids));
-}
-
-// Mirror MembraneBuilder._assign_lipids for the pre-Check count preview.
-function allocatePreviewLipidCounts(nLipids, mix) {
-  var requested = mix.filter(function(m) { return m.ratio > 0; }).map(function(m) {
-    return {name: m.name, ratio: m.ratio, count: Math.max(1, Math.round(nLipids * m.ratio / 100))};
-  });
-  var remaining = nLipids;
-  requested.forEach(function(item) {
-    item.count = Math.min(item.count, remaining);
-    remaining -= item.count;
-  });
-  if (remaining > 0 && requested.length) {
-    var dominant = requested[0];
-    requested.forEach(function(item) {
-      if (item.ratio > dominant.ratio) dominant = item;
-    });
-    dominant.count += remaining;
-  }
-  return requested;
-}
-
-async function renderMembraneViewer() {
-  var el = document.getElementById('membrane-3d-viewer');
-  if (!el) return;
-  if (el.offsetWidth === 0 || el.offsetHeight === 0) return;
-  if (typeof $3Dmol === 'undefined') return;
-
-  // Use the membrane checkpoint PDB if available (set by checkComposition
-  // after a successful build), otherwise the orient reference model.
-  var hasCheckpoint = !!_membraneCheckpointPdb;
-  var pdbContent = _membraneCheckpointPdb || _orientedPdbContent || (state.pdbInfo && state.pdbInfo.pdb_content);
-  var isPureMembrane = state.taskType && state.taskType.pipeline === 'pure_membrane';
-  if (!pdbContent && isPureMembrane) {
-    pdbContent = 'CRYST1   40.000   40.000   70.000  90.00  90.00  90.00 P 1           1\nEND\n';
-  }
-  if (!pdbContent) return;
-
-  // Box dimensions: use checkpoint values when available (WYSIWYG),
-  // otherwise estimate from protein extent + padding (preview).
-  var boxXY, boxZ;
-  if (hasCheckpoint && _membraneActualBox) {
-    boxXY = _membraneActualBox[0];
-    boxZ = _membraneActualBox[2];
-  } else {
-    // Preview: compute box XY from user-specified lipids-per-leaflet
-    var nLipids = 150;
-    var nLipidsEl = document.getElementById('n-lipids-per-leaflet');
-    if (nLipidsEl) { var nv = parseInt(nLipidsEl.value); if (!isNaN(nv) && nv >= 64) nLipids = nv; }
-    var lipids = _lipidPickerData.lipids || [];
-    var avgAPL = previewBilayerAPL(lipids);
-    // Protein XY extent
-    var xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    var lines = pdbContent.split('\n');
-    for (var li = 0; li < lines.length; li++) {
-      var l = lines[li];
-      if (l.indexOf('ATOM') === 0 || l.indexOf('HETATM') === 0) {
-        var px = parseFloat(l.substring(30, 38)) / 10.0;
-        var py = parseFloat(l.substring(38, 46)) / 10.0;
-        if (!isNaN(px) && !isNaN(py)) {
-          if (px < xMin) xMin = px; if (px > xMax) xMax = px;
-          if (py < yMin) yMin = py; if (py > yMax) yMax = py;
-        }
-      }
-    }
-    var protXY = isFinite(xMin) ? Math.max(xMax - xMin, yMax - yMin) : (isPureMembrane ? 0.0 : 3.0);
-    // Mirror the backend construction fill factor (1.00).
-    var lipidArea = nLipids * avgAPL;
-    var protArea = protXY * protXY;
-    boxXY = Math.max(Math.sqrt(lipidArea + protArea), 4.0);
-    var protExt = isPureMembrane ? {z: 0.0} : _proteinExtent(pdbContent);
-    var dh = (_dominantLipidDHH || 3.8);
-    boxZ = Math.max(protExt.z, dh * 1.8);
-  }
-
-  var halfXY_A = (boxXY / 2.0) * 10.0;
-  var halfThick = (_dominantLipidDHH || 3.8) * 0.5;
-  var membraneHalfZ_A = boxZ / 2.0 * 10.0;
-
-  // Destroy old viewer (cylinders = shapes, not cleared by removeAllModels)
-  if (_membraneViewer) {
-    try { _membraneViewer.clear(); } catch(e) {}
-    _membraneViewer = null;
-  }
-  while (el.firstChild) { el.removeChild(el.firstChild); }
-
-  _membraneViewer = $3Dmol.createViewer(el, {backgroundColor: '0xffffff', antialias: true});
-  _membraneViewer.setBackgroundColor('0xffffff');
-  _membraneViewer.setSlab(-100000, 100000);
-  var v = _membraneViewer;
-
-  // Protein + lipids (checkpoint PDB) or just protein (preview)
-  v.addModel(pdbContent, 'pdb');
-  _applyUnifiedStyle(v, pdbContent);
-
-  // Membrane plane — when checkpoint PDB is loaded the lipids are already
-  // in their final positions (membrane midplane at Z=0 in the oriented
-  // Membrane plane spheres — only in preview mode (before Check).
-  // After Check the actual lipid molecules are visible in the PDB.
-  if (!hasCheckpoint) {
-    drawMembranePlane(v, 0.0, halfThick, 0.0, 0.0);
-    v.setStyle({elem: 'X'}, {sphere: {radius: 1.2, color: '0x6b7280', opacity: 0.55}});
-  }
-
-  // Box wireframe
-  // The preview protein coordinates already include orientation transforms;
-  // the membrane box is the fixed laboratory-frame reference.
-  var boxZOff = 0;
-  var boxTilt = 0;
-  var boxPhi = 0;
-  _drawTiltedBox(v, halfXY_A, membraneHalfZ_A, boxZOff * 10, boxTilt, boxPhi);
-
-  v.render();
-  var label = document.getElementById('membrane-viewer-label');
-  if (label) {
-    var nLipidsLabel = 150;
-    var nLipidsEl2 = document.getElementById('n-lipids-per-leaflet');
-    if (nLipidsEl2) { var nv2 = parseInt(nLipidsEl2.value); if (!isNaN(nv2)) nLipidsLabel = nv2; }
-    label.textContent = 'Box: ' + boxXY.toFixed(1) + '×' + boxXY.toFixed(1) + '×' + boxZ.toFixed(1)
-      + ' nm  (n=' + (hasCheckpoint ? 'built' : nLipidsLabel) + '/leaflet)';
-  }
-}
-
-function updateLeafletLabels() {
-  const upperLabel = document.getElementById('leaflet-upper-label');
-  if (upperLabel) {
-    if (_asymmetric) {
-      upperLabel.innerHTML = 'Upper Leaflet <span class="hint">(extracellular / outer)</span>';
-    } else {
-      upperLabel.innerHTML = 'Bilayer <span class="hint">(same composition both leaflets — count shown is per leaflet)</span>';
-    }
-  }
-}
-
-function renderMixList(leaflet) {
-  const listEl = document.getElementById(`${leaflet}-lipid-list`);
-  if (!listEl) return;
-  const mix = leaflet === 'upper' ? _mixUpper : _mixLower;
-
-  listEl.innerHTML = '';
-  const lipids = _lipidPickerData.lipids || [];
-
-  mix.forEach((entry, idx) => {
-    const row = document.createElement('div');
-    row.className = 'lipid-mix-row';
-
-    // Lipid picker trigger (replaces plain <select>)
-    const selWrap = document.createElement('div');
-    selWrap.className = 'mix-lipid-picker';
-    const trigger = document.createElement('button');
-    trigger.type = 'button';
-    trigger.className = 'mix-lipid-trigger';
-    const lip = lipids.find(l => l.name === entry.name);
-    trigger.innerHTML = `<span class="mix-lipid-trigger-name">${entry.name}</span><span class="mix-lipid-trigger-cat">${lip ? lip.category : ''}</span><span class="mix-lipid-trigger-arrow">&#9662;</span>`;
-    trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const dropdown = document.getElementById('lipid-picker-dropdown');
-      const isOpen = dropdown && !dropdown.classList.contains('hidden');
-      if (isOpen && _pickerTarget && _pickerTarget.leaflet === leaflet && _pickerTarget.idx === idx) {
-        closeLipidDropdown();
-      } else {
-        _pickerTarget = { leaflet, idx };
-        openLipidDropdown(trigger);
-      }
-    });
-    selWrap.appendChild(trigger);
-    row.appendChild(selWrap);
-
-    // Ratio number input
-    const ratioWrap = document.createElement('div');
-    ratioWrap.className = 'mix-ratio';
-    const numInput = document.createElement('input');
-    numInput.type = 'number';
-    numInput.min = 0;
-    numInput.max = 100;
-    numInput.step = 1;
-    numInput.value = entry.ratio;
-    numInput.className = 'mix-ratio-input';
-    // On input: update data in-place, update display label, keep focus
-    numInput.addEventListener('input', () => {
-      const v = parseInt(numInput.value) || 0;
-      mix[idx].ratio = Math.max(0, Math.min(100, v));
-      _invalidateMembraneBuild();
-      updateCompositionStatus();
-    });
-    // On blur/change: re-render to apply normalization if needed
-    numInput.addEventListener('change', () => {
-      renderMixList('upper');
-      renderMixList('lower');
-    });
-    ratioWrap.appendChild(numInput);
-    const pctLabel = document.createElement('span');
-    pctLabel.className = 'mix-pct';
-    pctLabel.textContent = '%';
-    ratioWrap.appendChild(pctLabel);
-    row.appendChild(ratioWrap);
-
-    // Remove button (disabled if only 1)
-    const rmBtn = document.createElement('button');
-    rmBtn.className = 'mix-remove';
-    rmBtn.textContent = '×';
-    rmBtn.disabled = mix.length <= 1;
-    rmBtn.addEventListener('click', () => {
-      if (mix.length <= 1) return;
-      mix.splice(idx, 1);
-      _invalidateMembraneBuild();
-      updateCompositionStatus();
-      normalizeRatios(mix);
-      if (!_asymmetric && leaflet === 'upper') {
-        _mixLower = _mixUpper.map(m => ({...m}));
-      }
-      renderMixList('upper');
-      renderMixList('lower');
-    });
-    row.appendChild(rmBtn);
-
-    listEl.appendChild(row);
-  });
-}
-
-function normalizeRatios(mix) {
-  const total = mix.reduce((s, m) => s + m.ratio, 0);
-  if (total === 0) {
-    const eq = Math.floor(100 / mix.length);
-    mix.forEach((m, i) => { m.ratio = i === mix.length - 1 ? 100 - eq * (mix.length - 1) : eq; });
-  } else if (total !== 100) {
-    const scale = 100 / total;
-    let sum = 0;
-    mix.forEach((m, i) => {
-      if (i === mix.length - 1) {
-        m.ratio = 100 - sum;
-      } else {
-        m.ratio = Math.round(m.ratio * scale);
-        sum += m.ratio;
-      }
-    });
-  }
-}
-
-/** Refresh all ratio display values for a leaflet and re-render. */
-function refreshAllRatios() {
-  renderMixList('upper');
-  renderMixList('lower');
-}
-
-async function checkComposition() {
-  var errors = [];
-  const upperSum = _mixUpper.reduce((s, m) => s + m.ratio, 0);
-  const lowerSum = _asymmetric ? _mixLower.reduce((s, m) => s + m.ratio, 0) : upperSum;
-  if (upperSum !== 100 || lowerSum !== 100) {
-    errors.push('Lipid ratios must sum to 100%');
-  }
-
-  // Validate lipids per leaflet
-  var nLipidsEl = document.getElementById('n-lipids-per-leaflet');
-  var totalLipids = nLipidsEl ? parseInt(nLipidsEl.value) : 150;
-  if (isNaN(totalLipids) || totalLipids < 64) {
-    errors.push('Minimum 64 lipids per leaflet required (recommended ≥100).');
-  }
-
-  if (errors.length > 0) {
-    _invalidateMembraneBuild(); _compositionErrors = errors;
-  } else {
-    // Run membrane step on server
-    var statusEl = document.getElementById('composition-status');
-    if (statusEl) { statusEl.textContent = 'Running...'; statusEl.style.color = '#d97706'; }
-    try {
-      var cfg = buildModuleConfig().membrane || {};
-      var resp = await fetch('/api/step/' + state.taskId + '/membrane', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: cfg }),
-      });
-      var result = await resp.json();
-      if (result.status === 'ok') {
-        _compositionChecked = true; _compositionErrors = [];
-        _checkedSteps.add('membrane');
-        var elapsed = (result.elapsed_s != null) ? result.elapsed_s + 's' : '?s';
-        if (statusEl) { statusEl.textContent = '✓ Checked (' + elapsed + ')'; statusEl.style.color = '#059669'; }
-        // Capture actual box dimensions from the server — the builder may
-        // shrink the box after lipid placement and relaxation (WYSIWYG).
-        if (result.metrics && result.metrics.box_dimensions_nm) {
-          _membraneActualBox = result.metrics.box_dimensions_nm;
-        }
-        // Load the membrane checkpoint PDB so the viewer shows the actual
-        // built membrane (WYSIWYG).  _membraneCheckpointPdb is used by
-        // renderMembraneViewer — if set, it takes precedence over the
-        // orient reference model.
-        _membraneCheckpointPdb = await _loadStepViewerPdb('membrane') || null;
-        if (typeof renderMembraneViewer === 'function') { renderMembraneViewer(); }
-      } else {
-        _invalidateMembraneBuild();
-        _compositionErrors = [result.error || 'Server error'];
-        if (statusEl) { statusEl.textContent = '✗ ' + (result.error || 'Failed'); statusEl.style.color = '#dc2626'; }
-      }
-    } catch(e) {
-      _invalidateMembraneBuild();
-      if (statusEl) { statusEl.textContent = '✗ Network error'; statusEl.style.color = '#dc2626'; }
-    }
-  }
-  updateLipidCounts();
-  updateCompositionStatus();
-}
-
-function updateCompositionStatus() {
-  const el = document.getElementById('composition-status');
-  if (!el) return;
-  if (_compositionChecked && _compositionErrors.length === 0) {
-    // Keep the elapsed time if already set by checkComposition
-    if (!el.textContent || el.textContent.indexOf('✓') !== 0) {
-      el.textContent = '✓ Composition valid';
-      el.style.color = 'var(--success)';
-    }
-  } else if (_compositionErrors && _compositionErrors.length > 0) {
-    el.innerHTML = _compositionErrors.map(function(e){return '⚠ '+e;}).join('<br>');
-    el.style.color = 'var(--error, #dc2626)';
-  } else {
-    el.textContent = 'Click to validate ratios';
-    el.style.color = 'var(--text-muted)';
-  }
-  updateNextButtonState();
-}
-
-/** Enable/disable the Next button based on current step requirements. */
-function updateNextButtonState() {
-  // Find the currently active panel's next button
-  const activePanel = document.querySelector('.panel.active');
-  if (!activePanel) return;
-  const nextBtn = activePanel.querySelector('.next-btn');
-  if (!nextBtn) return;
-
-  const fulfilled = isCurrentStepFulfilled();
-  nextBtn.disabled = !fulfilled;
-  nextBtn.style.opacity = fulfilled ? '' : '0.45';
-  nextBtn.style.cursor = fulfilled ? '' : 'not-allowed';
-  nextBtn.title = fulfilled ? '' : 'Complete the current step before proceeding';
-}
-
-/** Compute and display per-lipid molecule counts for each leaflet. */
-function updateLipidCounts() {
-  var upperCountsEl=document.getElementById('upper-lipid-counts');
-  var lowerCountsEl=document.getElementById('lower-lipid-counts');
-  if(!upperCountsEl)return;
-
-  var pdbContent=_orientedPdbContent||(state.pdbInfo&&state.pdbInfo.pdb_content)||'';
-  var xMin=Infinity,xMax=-Infinity,yMin=Infinity,yMax=-Infinity;
-  var lines=pdbContent.split('\n');
-  for(var li=0;li<lines.length;li++){
-    var l=lines[li];
-    if(l.indexOf('ATOM')===0||l.indexOf('HETATM')===0){
-      var px=parseFloat(l.substring(30,38))/10.0;
-      var py=parseFloat(l.substring(38,46))/10.0;
-      if(!isNaN(px)&&!isNaN(py)){if(px<xMin)xMin=px;if(px>xMax)xMax=px;if(py<yMin)yMin=py;if(py>yMax)yMax=py;}
-    }
-  }
-  var isPureMembrane = state.taskType && state.taskType.pipeline === 'pure_membrane';
-  var protXY=isFinite(xMin)?Math.max(xMax-xMin,yMax-yMin):(isPureMembrane?0.0:3.0);
-  var protArea=protXY*protXY;
-
-  var nLipidsEl=document.getElementById('n-lipids-per-leaflet');
-  var nLipids=nLipidsEl?parseInt(nLipidsEl.value):150;
-  if(isNaN(nLipids)||nLipids<64)nLipids=150;
-
-  var lipids=_lipidPickerData.lipids||[];
-
-  function computeCounts(mix){
-    return{avgAPL:weightedLeafletAPL(mix,lipids),counts:allocatePreviewLipidCounts(nLipids,mix)};
-  }
-
-  var avgAPL2=previewBilayerAPL(lipids);
-  var lipidArea=nLipids*avgAPL2;
-  var boxXY=Math.max(Math.sqrt(lipidArea+protArea),4.0);
-  var memArea=boxXY*boxXY;
-
-  function renderTable(el,mix,label){
-    var r=computeCounts(mix);
-    var sumOK=mix.reduce(function(s,m){return s+m.ratio;},0)===100;
-    var html='<table class="count-table">';
-    html+='<tr><td colspan="3" class="count-summary">';
-    html+='Lipids/leaflet: <b>'+nLipids+'</b> &nbsp;|&nbsp; Box XY: <b>'+boxXY.toFixed(1)+' nm</b> &nbsp;|&nbsp; Area: <b>'+memArea.toFixed(1)+' nm²</b> &nbsp;|&nbsp; APL: <b>'+r.avgAPL.toFixed(3)+' nm²</b>';
-    if(!sumOK)html+=' <span class="error-text">⚠ Ratios sum to '+mix.reduce(function(s,m){return s+m.ratio;},0)+'%, not 100%</span>';
-    if(nLipids<64)html+=' <span class="error-text">⚠ Min 64 required</span>';
-    html+='</td></tr>';
-    html+='<tr><th>Lipid</th><th>Ratio</th><th>Count</th></tr>';
-    r.counts.forEach(function(c){html+='<tr><td>'+c.name+'</td><td>'+c.ratio+'%</td><td><b>'+c.count+'</b></td></tr>';});
-    html+='</table>';
-    el.innerHTML=html;
-    el.classList.remove('hidden');
-  }
-
-  renderTable(upperCountsEl,_mixUpper,'Upper');
-  var totalBilayer = nLipids * 2;  // proteins per leaflet × 2 leaflets
-  if(_asymmetric&&lowerCountsEl){renderTable(lowerCountsEl,_mixLower,'Lower');lowerCountsEl.classList.remove('hidden');}
-  else if(lowerCountsEl){lowerCountsEl.classList.add('hidden');}
-  if(!_asymmetric){
-    var us=upperCountsEl.querySelector('.count-summary');
-    if(us){us.innerHTML+=' &nbsp;|&nbsp; <b>Bilayer total: '+totalBilayer+' lipids</b>';}
-  }
-}
+// System Verification Viewer and membrane composition
+// Implementation lives in app_parts/system_verification.js.
+// ===================================================================
 function setupUpload() {
   const zone = document.getElementById('upload-zone');
   const input = document.getElementById('pdb-file');
@@ -7043,6 +4574,7 @@ function setupUpload() {
 }
 
 async function handleFile(file) {
+  if (state.uploadRunning) return;
   var fnameLower = file.name.toLowerCase();
   var structurePattern = /\.(?:pdb|ent|cif|mmcif)(?:\.gz)?$/i;
   if (!structurePattern.test(fnameLower)) {
@@ -7050,7 +4582,16 @@ async function handleFile(file) {
     return;
   }
 
-  // Show upload progress bar
+  state.uploadRunning = true;
+  state.pdbInfo = null;
+  invalidateInputCheckpoint();
+  document.getElementById('upload-info').classList.add('hidden');
+  document.getElementById('validation-info').classList.add('hidden');
+  const uploadControls = ['browse-btn', 'pdb-file', 'input-check-btn'].map(id => document.getElementById(id)).filter(Boolean);
+  const disabledBeforeUpload = uploadControls.map(el => el.disabled);
+  uploadControls.forEach(el => { el.disabled = true; });
+  document.getElementById('upload-zone').setAttribute('aria-busy', 'true');
+  // Show upload progress outside the initially hidden structure summary.
   var uploadSection = document.getElementById('upload-progress');
   var uploadBar = document.getElementById('upload-progress-fill');
   var uploadText = document.getElementById('upload-progress-text');
@@ -7063,13 +4604,13 @@ async function handleFile(file) {
       uploadSection.innerHTML = '<div class="progress-bar" style="height:6px;background:#e2e8f0;border-radius:3px;margin-top:8px">' +
         '<div id="upload-progress-fill" style="height:100%;width:0;background:#3b82f6;border-radius:3px;transition:width 0.2s"></div></div>' +
         '<div id="upload-progress-text" style="font-size:12px;color:#64748b;margin-top:4px"></div>';
-      infoSection.appendChild(uploadSection);
+      infoSection.before(uploadSection);
       uploadBar = document.getElementById('upload-progress-fill');
       uploadText = document.getElementById('upload-progress-text');
     }
   }
   if (uploadSection) uploadSection.style.display = 'block';
-  if (uploadBar) uploadBar.style.width = '0%';
+  if (uploadBar) { uploadBar.style.width = '0%'; uploadBar.style.background = '#3b82f6'; }
   if (uploadText) uploadText.textContent = 'Uploading ' + (file.size/1024/1024).toFixed(1) + ' MB...';
 
   const formData = new FormData();
@@ -7081,7 +4622,7 @@ async function handleFile(file) {
 
   // Use XHR for upload progress tracking
   try {
-    const data = await new Promise((resolve, reject) => {
+    const initialResponse = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload-pdb');
       xhr.upload.onprogress = function(e) {
@@ -7092,28 +4633,57 @@ async function handleFile(file) {
         }
       };
       xhr.onload = function() {
-        try { resolve(JSON.parse(xhr.responseText)); }
-        catch(e) { reject(new Error('Invalid response')); }
+        if (!xhr.status) { reject(new Error('Upload connection closed')); return; }
+        try {
+          resolve(new Response(xhr.responseText, {status:xhr.status, headers:{
+            'Content-Type':xhr.getResponseHeader('Content-Type') || 'application/json',
+            'X-GMXBUILDER-Operation':xhr.getResponseHeader('X-GMXBUILDER-Operation') || ''
+          }}));
+        } catch (error) { reject(error); }
       };
       xhr.onerror = function() { reject(new Error('Upload failed')); };
       xhr.send(formData);
     });
-    if (data.error || data.validation_errors) {
+    if (initialResponse.status === 202 && uploadText) uploadText.textContent = 'Upload received; processing structure…';
+    const finalResponse = await window.resolveManagedResponse(initialResponse, {requestUrl:'/api/upload-pdb'});
+    let data;
+    try {
+      data = await finalResponse.json();
+    } catch (_error) {
+      if (finalResponse.ok) throw new Error('The server returned an invalid upload response. Please retry.');
+      data = {error:'Upload failed (HTTP ' + finalResponse.status + '). Please retry.'};
+    }
+    if (!finalResponse.ok || data.error || (data.validation_errors && data.validation_errors.length)) {
       if (uploadBar) uploadBar.style.background = '#dc2626';
       if (uploadText) uploadText.textContent = 'Upload failed';
-      if (data.validation_errors) {
+      if (data.validation_errors && data.validation_errors.length) {
         showValidationErrors(data.validation_errors, data.validation_warnings || []);
       } else {
-        alert('Upload error: ' + (data.error || 'Unknown error'));
+        const details = (data.parse_issues || []).map(issue => {
+          const identity = issue.chain !== undefined
+            ? `${issue.chain || '?'}:${issue.resid}${issue.insertion_code || ''}`
+            : (issue.residue || []).join(':');
+          return `${identity} ${issue.resname || ''} ${issue.atom || ''}: ` +
+            `${issue.code === 'invalid_occupancy' ? 'invalid occupancy' : 'unknown element'} ` +
+            `${issue.value ?? issue.element ?? ''}`;
+        });
+        if ((data.parse_issue_count || 0) > details.length)
+          details.push(`Showing ${details.length} of ${data.parse_issue_count} affected atoms.`);
+        showValidationErrors([data.error || 'Upload failed (HTTP ' + finalResponse.status + ')'].concat(details), []);
       }
       return;
     }
+    if (!data.task_id || !Number.isFinite(data.num_atoms) || data.num_atoms <= 0 || !data.pdb_content) throw new Error('The server did not return a complete structure. Resume the Task ID or retry the upload.');
     if (uploadBar) { uploadBar.style.background = '#22c55e'; uploadBar.style.width = '100%'; }
     if (uploadText) uploadText.textContent = 'Upload complete — ' + (file.size/1024/1024).toFixed(1) + ' MB';
     setTimeout(function() { if (uploadSection) uploadSection.style.display = 'none'; }, 2000);
 
     state.pdbInfo = data;
     state.taskId = data.task_id;
+    resetLigandPHState();
+    _charmmCompatSmiles = {};
+    _charmmCompatResearch = false;
+    _restoredLigandBackend = null;
     setTimeout(loadTaskCustomLipids, 0);
     syncTaskRoute(state.currentStepIdx, true);
     _smallMolState = {};
@@ -7127,7 +4697,14 @@ async function handleFile(file) {
     updateNextButtonState();
     showUploadInfo(data);
   } catch (err) {
-    alert('Upload failed: ' + err.message);
+    if (uploadBar) uploadBar.style.background = '#dc2626';
+    if (uploadText) uploadText.textContent = 'Upload failed';
+    showValidationErrors([err.message], []);
+  } finally {
+    state.uploadRunning = false;
+    uploadControls.forEach((el, idx) => { el.disabled = disabledBeforeUpload[idx]; });
+    document.getElementById('upload-zone').removeAttribute('aria-busy');
+    updateNextButtonState();
   }
 }
 
@@ -7138,6 +4715,10 @@ function showValidationErrors(errors, warnings) {
   if (!valInfo) return;
 
   valInfo.classList.remove('hidden');
+  [errDiv, warnDiv].forEach(function(el) { if (el) { el.replaceChildren(); el.classList.add('hidden'); } });
+  errors = uniqueFeedbackMessages(errors);
+  var errorKeys = new Set(errors);
+  warnings = uniqueFeedbackMessages(warnings).filter(function(warning) { return !errorKeys.has(warning); });
 
   if (errDiv && errors.length) {
     errDiv.classList.remove('hidden');
@@ -7161,6 +4742,16 @@ function showValidationErrors(errors, warnings) {
 }
 
 function showUploadInfo(info) {
+  ['input-allow-incomplete', 'input-renumber-residues'].forEach(function(id) {
+    var control = document.getElementById(id);
+    if (control) {
+      control.checked = false;
+      control.addEventListener('change', resetInputFragmentEditor);
+    }
+  });
+  renderInputReadiness(info.input_validation || (info.input_status?.readiness === 'not_checked'
+    ? {warnings: ['File read successfully. Workflow preparation is not yet checked. Run Check Upload before continuing.']}
+    : null));
   const zone = document.getElementById('upload-zone');
   const box = document.getElementById('upload-info');
   if (!zone || !box) return;
@@ -7175,7 +4766,8 @@ function showUploadInfo(info) {
   document.getElementById('info-atoms').textContent = info.num_atoms;
   document.getElementById('info-chains').textContent = (info.chains || []).join(', ') || '—';
   document.getElementById('info-box').textContent =
-    (info.box_nm || []).map(v => v.toFixed(1) + ' nm').join(' × ') || '—';
+    ((info.box_nm || []).map(v => v.toFixed(1) + ' nm').join(' × ') || '—') +
+    (info.cell_info?.box_source === 'estimated' ? ' (estimated display envelope)' : '');
 
   // Show non-blocking validation warnings
   if (info.validation_warnings && info.validation_warnings.length) {
@@ -7192,11 +4784,21 @@ function showUploadInfo(info) {
     }
   }
 
+  _fragmentState = {}; _savedFragmentConfig = {}; _inputFragmentEditing = false;
+  setCheckedInputDisplay(false);
+  document.getElementById('edit-input-selection').addEventListener('click', resetInputFragmentEditor);
+
   // Render chain sequences with checkboxes and rename inputs
-  renderChainSequences(info.sequences || [], info.chains || []);
+  var selectionInfo = info.selection_info || info;
+  renderChainSequences(selectionInfo.sequences || [], selectionInfo.chains || [], selectionInfo.chain_mapping || {});
+  if (!info.selection_info) info.selection_info = {
+    num_atoms: info.num_atoms, box_nm: info.box_nm,
+    sequences: info.sequences || [], chains: info.chains || [], pdb_content: info.pdb_content,
+    small_molecules: info.small_molecules || [], chain_mapping: info.chain_mapping || {},
+  };
 
   // Render small molecules
-  renderSmallMolecules(info.small_molecules || []);
+  renderSmallMolecules(selectionInfo.small_molecules || []);
 
   // Render 3D viewer
   renderPDBViewer(info.pdb_content || '');
@@ -7210,7 +4812,82 @@ function showUploadInfo(info) {
   updateOrientSliderRanges();
 }
 
+function renderInputSummaryFields(info) {
+  document.getElementById('info-atoms').textContent = info.num_atoms ?? '—';
+  document.getElementById('info-chains').textContent = (info.chains || []).join(', ') || '—';
+  const sequences = info.sequences || [];
+  if (sequences.some(chain => chain.fragment_count > 1)) {
+    const sources = new Set(sequences.map(chain => chain.source_chain || chain.chain_id));
+    document.getElementById('info-chains').textContent +=
+      ` — ${sources.size} source polymer(s), ${sequences.length} coordinate fragments`;
+  }
+  document.getElementById('info-box').textContent =
+    ((info.box_nm || []).map(v => v.toFixed(1) + ' nm').join(' × ') || '—') +
+    (info.cell_info?.box_source === 'estimated' ? ' (estimated display envelope)' : '');
+}
+
+function restoreInputSelection(selection) {
+  Object.keys(_chainState).forEach(chain => {
+    _chainState[chain].included = !Array.isArray(selection.include_chains) || selection.include_chains.includes(chain);
+  });
+  document.querySelectorAll('#chain-sequences input[data-chain]').forEach(control => {
+    control.checked = _chainState[control.dataset.chain].included;
+  });
+  Object.keys(_smallMolState).forEach(name => {
+    _smallMolState[name].included = !(selection.exclude_resnames || []).includes(name);
+  });
+  document.querySelectorAll('#small-molecules input[data-smres]').forEach(control => {
+    control.checked = _smallMolState[control.dataset.smres].included;
+  });
+}
+
+function setCheckedInputDisplay(checked) {
+  document.getElementById('input-selection-details').classList.toggle('hidden', checked);
+  document.getElementById('checked-input-details').classList.toggle('hidden', !checked);
+  document.getElementById('edit-input-selection').classList.toggle('hidden', !checked);
+  document.getElementById('input-details-hint').textContent = checked
+    ? '— select fragments to include; double-click a name to rename. Changes require Check Upload.'
+    : '— select which to include, double-click name to rename';
+}
+
+function showCheckedInputSummary(summary) {
+  // Display saved results without replacing the source IDs used by the next Check.
+  if (state.pdbInfo) {
+    state.pdbInfo.checked_sequences = summary.sequences || [];
+    state.pdbInfo.fragment_choices = summary.fragment_choices || summary.sequences || [];
+    ['num_atoms', 'chains', 'box_nm', 'small_molecules'].forEach(key => {
+      if (summary[key] !== undefined) state.pdbInfo[key] = summary[key];
+    });
+  }
+  renderInputSummaryFields(summary);
+  const choices = summary.fragment_choices || summary.sequences || [];
+  const saved = _savedFragmentConfig;
+  _fragmentState = {};
+  choices.forEach(chain => {
+    const key = chain.fragment_key || `${chain.source_chain || chain.chain_id}:${chain.fragment_index || 1}`;
+    chain.fragment_key = key;
+    _fragmentState[key] = {included: !(saved.exclude_fragments || []).includes(key),
+      name: (saved.fragment_names || {})[key] || chain.chain_id, original: chain.chain_id};
+  });
+  _inputFragmentEditing = true;
+  renderChainSequences(choices, summary.chains || [], null, true);
+  // Keep excluded molecules available for re-inclusion.
+  renderSmallMolecules(state.pdbInfo?.selection_info?.small_molecules || summary.small_molecules || [], true);
+  setCheckedInputDisplay(true);
+}
+
 // ---- Chain inclusion / rename state ----
+let _fragmentState = {};
+let _savedFragmentConfig = {};
+let _inputFragmentEditing = false;
+let _inputRevision = 0;
+
+function resetInputFragmentEditor() {
+  if (state.pdbInfo?.selection_info) renderSmallMolecules(state.pdbInfo.selection_info.small_molecules || []);
+  _fragmentState = {}; _savedFragmentConfig = {}; _inputFragmentEditing = false;
+  invalidateInputCheckpoint();
+}
+
 let _chainState = {};  // { chain_id: { included: true, name: original_id } }
 // Small-molecule visibility state (keyed by resname — small molecules are
 // not protein chains; they have their own checkboxes in the Small Molecules section)
@@ -7219,6 +4896,18 @@ let _smallMolState = {};  // { resname: { included: true, name: original_name } 
 window._smallMolState = _smallMolState;
 
 function invalidateInputCheckpoint() {
+  _inputRevision++;
+  if (state.pdbInfo) delete state.pdbInfo.checked_sequences;
+  if (!_inputFragmentEditing && state.pdbInfo && state.pdbInfo.selection_info) {
+    Object.assign(state.pdbInfo, state.pdbInfo.selection_info);
+    renderInputSummaryFields(state.pdbInfo);
+  }
+  setCheckedInputDisplay(_inputFragmentEditing);
+  if (_inputFragmentEditing) document.getElementById('input-details-hint').textContent =
+    '— selection changed; run Check Upload to update the saved structure and viewer';
+  renderInputReadiness(null);
+  document.getElementById('input-check-report').classList.add('hidden');
+  clearStepProgress('input');
   var inputIndex = state.wizardSteps.indexOf('input');
   if (inputIndex < 0) inputIndex = 0;
   for (var i = inputIndex; i < state.wizardSteps.length; i++) {
@@ -7234,6 +4923,7 @@ function invalidateInputCheckpoint() {
   }
   updateNextButtonState();
   updateStepNavHighlight();
+  if (!_inputFragmentEditing) redrawPDBViewerWithChainFilter();
 }
 
 function commitSmallMoleculeLabel(resname, candidate) {
@@ -7264,6 +4954,30 @@ function commitSmallMoleculeLabel(resname, candidate) {
   return label;
 }
 
+function wireRenameTrigger(trigger, beginRename) {
+  trigger.addEventListener('click', function(event) {
+    // Keyboard and assistive-technology activation generates a click with no
+    // mouse detail. Mouse users retain the existing double-click gesture.
+    if (event.detail === 0) beginRename();
+  });
+  trigger.addEventListener('dblclick', function(event) {
+    event.preventDefault();
+    beginRename();
+  });
+}
+
+function createSmallMoleculeRenameTrigger(resname, label) {
+  var trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'smallmol-name';
+  trigger.dataset.smres = resname;
+  trigger.textContent = label;
+  trigger.title = 'Double-click or press Enter to rename';
+  trigger.setAttribute('aria-label', 'Rename small molecule ' + label);
+  wireRenameTrigger(trigger, function() { beginSmallMoleculeRename(trigger); });
+  return trigger;
+}
+
 function beginSmallMoleculeRename(span) {
   var resname = span.dataset.smres;
   var input = document.createElement('input');
@@ -7275,32 +4989,26 @@ function beginSmallMoleculeRename(span) {
   input.focus();
   input.select();
   var finished = false;
-  function finish(cancelled) {
+  function finish(cancelled, restoreFocus) {
     if (finished) return;
     finished = true;
     var label = cancelled
       ? ((_smallMolState[resname] && _smallMolState[resname].name) || resname)
       : commitSmallMoleculeLabel(resname, input.value);
-    var replacement = document.createElement('span');
-    replacement.className = 'smallmol-name';
-    replacement.dataset.smres = resname;
-    replacement.textContent = label;
-    replacement.title = 'Double-click to rename';
-    replacement.addEventListener('dblclick', function() {
-      beginSmallMoleculeRename(replacement);
-    });
+    var replacement = createSmallMoleculeRenameTrigger(resname, label);
     input.replaceWith(replacement);
+    if (restoreFocus) replacement.focus();
   }
-  input.addEventListener('blur', function() { finish(false); });
+  input.addEventListener('blur', function() { finish(false, false); });
   input.addEventListener('keydown', function(event) {
-    if (event.key === 'Enter') input.blur();
-    if (event.key === 'Escape') finish(true);
+    if (event.key === 'Enter') { event.preventDefault(); finish(false, true); }
+    if (event.key === 'Escape') { event.preventDefault(); finish(true, true); }
   });
 }
 
-function renderSmallMolecules(molecules) {
-  const container = document.getElementById('small-molecules');
-  const header = document.getElementById('smallmol-header');
+function renderSmallMolecules(molecules, checkedView = false) {
+  const container = document.getElementById(checkedView ? 'checked-small-molecules' : 'small-molecules');
+  const header = document.getElementById(checkedView ? 'checked-smallmol-header' : 'smallmol-header');
   if (!container || !header) return;
 
   if (!molecules.length) {
@@ -7327,8 +5035,10 @@ function renderSmallMolecules(molecules) {
     var _existing = _smallMolState[m.resname];
     _newSmState[m.resname] = _existing || { included: true, name: m.resname };
   });
-  _smallMolState = _newSmState;
-  window._smallMolState = _smallMolState;
+  if (!checkedView) {
+    _smallMolState = _newSmState;
+    window._smallMolState = _smallMolState;
+  }
 
   const cards = Object.entries(grouped).map(([resname, instances]) => {
     const totalAtoms = instances.reduce((s, m) => s + m.atom_count, 0);
@@ -7344,7 +5054,7 @@ function renderSmallMolecules(molecules) {
           '<input type="checkbox" ' + checked + ' data-smres="' + escapeHtml(resname) + '">' +
           '<b>' + escapeHtml(resname) + '</b>' +
         '</label>' +
-        '<span class="smallmol-name" data-smres="' + escapeHtml(resname) + '" title="Double-click to rename">' + escapeHtml(_smallMolState[resname] ? _smallMolState[resname].name : resname) + '</span>' +
+        '<button type="button" class="smallmol-name" data-smres="' + escapeHtml(resname) + '" title="Double-click or press Enter to rename" aria-label="Rename small molecule ' + escapeHtml(_smallMolState[resname] ? _smallMolState[resname].name : resname) + '">' + escapeHtml(_smallMolState[resname] ? _smallMolState[resname].name : resname) + '</button>' +
       '</div>' +
       '<div class="smallmol-info">' +
         'Formula: ' + escapeHtml(formula) + ' | Copies: ' + instances.length +
@@ -7363,15 +5073,13 @@ function renderSmallMolecules(molecules) {
         _smallMolState[smres].included = this.checked;
       }
       invalidateInputCheckpoint();
-      redrawPDBViewerWithChainFilter();
+      if (!_inputFragmentEditing) redrawPDBViewerWithChainFilter();
     });
   });
 
-  // Wire up rename on double-click
+  // Keep the existing mouse gesture and add native keyboard activation.
   container.querySelectorAll('.smallmol-name').forEach(span => {
-    span.addEventListener('dblclick', function() {
-      beginSmallMoleculeRename(span);
-    });
+    wireRenameTrigger(span, function() { beginSmallMoleculeRename(span); });
   });
 }
 
@@ -7395,37 +5103,138 @@ function classifyResidue(resname) {
   return 'other';
 }
 
-function renderChainSequences(sequences, chains) {
-  const container = document.getElementById('chain-sequences');
+function createChainRenameTrigger(chainId, label, fragmentKey) {
+  var trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'chain-rename';
+  trigger.dataset.chain = chainId;
+  if (fragmentKey) trigger.dataset.fragmentKey = fragmentKey;
+  trigger.textContent = label;
+  trigger.title = 'Double-click or press Enter to rename';
+  trigger.setAttribute('aria-label', 'Rename chain ' + (chainId || 'unnamed'));
+  wireRenameTrigger(trigger, function() { beginChainRename(trigger); });
+  return trigger;
+}
+
+function beginChainRename(trigger) {
+  var chainId = trigger.dataset.chain;
+  var fragmentKey = trigger.dataset.fragmentKey;
+  var entries = fragmentKey ? _fragmentState : _chainState;
+  var entryKey = fragmentKey || chainId;
+  var original = trigger.textContent;
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.value = original;
+  input.className = 'chain-rename-input';
+  input.style.width = '40px';
+  trigger.replaceWith(input);
+  input.focus();
+  input.select();
+  var finished = false;
+  function finish(cancelled, restoreFocus) {
+    if (finished) return;
+    finished = true;
+    var label = cancelled ? original : (input.value.trim() || original);
+    if (!cancelled && (!/^[A-Za-z0-9]$/.test(label) || Object.keys(entries).some(function(key) {
+      return key !== entryKey && entries[key].name === label;
+    }))) {
+      input.setCustomValidity('Use one unique letter or digit for the chain ID.');
+      input.reportValidity();
+      finished = false;
+      return;
+    }
+    if (entries[entryKey]) entries[entryKey].name = label;
+    if (label !== original) invalidateInputCheckpoint();
+    var replacement = createChainRenameTrigger(chainId, label, fragmentKey);
+    input.replaceWith(replacement);
+    if (restoreFocus) replacement.focus();
+  }
+  input.addEventListener('blur', function() { finish(false, false); });
+  input.addEventListener('keydown', function(event) {
+    if (event.key === 'Enter') { event.preventDefault(); finish(false, true); }
+    if (event.key === 'Escape') { event.preventDefault(); finish(true, true); }
+  });
+}
+
+function renderChainSequences(sequences, chains, mapping, checkedView = false) {
+  const container = document.getElementById(checkedView ? 'checked-chain-sequences' : 'chain-sequences');
   if (!container) return;
   container.innerHTML = '';
 
   // Init chain state for new upload
-  _chainState = {};
-  (chains || []).forEach(ch => { _chainState[ch] = { included: true, name: ch }; });
+  if (!checkedView) {
+    _chainState = {};
+    (chains || []).forEach(ch => { _chainState[ch] = { included: true, name: ch || 'Unnamed chain' }; });
+  }
 
   if (!sequences.length) {
     container.innerHTML = '<p class="hint">No residue data detected.</p>';
     return;
   }
 
+  const sourceGroups = new Map();
   sequences.forEach(chain => {
     const chId = chain.chain_id || '';
-    const st = _chainState[chId] || { included: true, name: chId };
+    const st = (checkedView ? _fragmentState[chain.fragment_key] : _chainState[chId]) || { included: true, name: chId };
 
     const card = document.createElement('div');
     card.className = 'chain-card';
 
     const header = document.createElement('div');
     header.className = 'chain-header';
-    const chainLabel = chId ? `Chain ${chId}` : 'Chain';
+    const isFragment = checkedView && chain.fragment_count > 1;
+    let destination = container;
+    if (isFragment) {
+      if (!sourceGroups.has(chain.source_chain)) {
+        const group = document.createElement('section');
+        group.className = 'source-protein-group';
+        const title = document.createElement('h4');
+        title.textContent = `Source protein ${chain.source_chain} — ${chain.fragment_count} coordinate fragments`;
+        const note = document.createElement('p');
+        note.className = 'fragment-model-warning';
+        note.textContent = 'These fragments belong to one source protein. Missing connections are not rebuilt. ' +
+          'Independent topology ends form an approximate model; charged or capped ends do not restore the missing loop.';
+        group.append(title, note);
+        const parts = sequences.filter(row => row.source_chain === chain.source_chain);
+        const gaps = document.createElement('p');
+        gaps.className = 'hint';
+        gaps.textContent = parts.slice(1).map((part, index) => {
+          const left = parts[index].residues.slice(-1)[0], right = part.residues[0];
+          return `Coordinate gap: ${left.resname} ${left.author_resid ?? left.resid}${left.insertion_code || ''} → ${right.resname} ${right.author_resid ?? right.resid}${right.insertion_code || ''} (deposited numbering)`;
+        }).join('; ');
+        group.appendChild(gaps);
+        container.appendChild(group);
+        sourceGroups.set(chain.source_chain, group);
+      }
+      destination = sourceGroups.get(chain.source_chain);
+    }
+    const chainLabel = chId ? `${isFragment ? 'Fragment' : 'Chain'} ${chId}` : 'Unnamed chain';
     header.innerHTML =
       `<label class="chain-check">` +
         `<input type="checkbox" data-chain="${escapeHtml(chId)}" ${st.included ? 'checked' : ''}>` +
         `<b>${escapeHtml(chainLabel)}</b>` +
       `</label>` +
-      `<span class="chain-rename" data-chain="${escapeHtml(chId)}" title="Double-click to rename">${escapeHtml(st.name || chId)}</span>` +
+      `<button type="button" class="chain-rename" data-chain="${escapeHtml(chId)}" title="Double-click or press Enter to rename" aria-label="Rename chain ${escapeHtml(chId || 'unnamed')}">${escapeHtml(st.name || chId)}</button>` +
       `<span class="chain-len">${chain.length} residues</span>`;
+    if (checkedView) {
+      header.querySelector('input').dataset.fragmentKey = chain.fragment_key;
+      header.querySelector('button').dataset.fragmentKey = chain.fragment_key;
+      if (chain.author_chain !== undefined) {
+        const origin = document.createElement('span');
+        origin.className = 'hint';
+        origin.textContent = ` · Deposited chain: ${chain.author_chain || 'unnamed'}`;
+        header.appendChild(origin);
+      }
+    }
+    if (mapping) {
+      var sourceChain = Object.keys(mapping).find(function(key) { return mapping[key] === chId; });
+      if (sourceChain !== undefined && sourceChain !== chId) {
+        var origin = document.createElement('span');
+        origin.className = 'hint';
+        origin.textContent = ' · Source chain: ' + (sourceChain || 'unnamed');
+        header.appendChild(origin);
+      }
+    }
     card.appendChild(header);
 
     // Flex-wrap sequence display — no horizontal scrolling
@@ -7463,6 +5272,9 @@ function renderChainSequences(sequences, chains) {
           tag.classList.add(cls);
           tag.textContent = residues[idx].resname;
           tag.title = residues[idx].resname + ' ' + residues[idx].resid;
+          if (residues[idx].author_resid !== undefined) {
+            tag.title += ` · Deposited: ${residues[idx].author_chain || 'unnamed'}:${residues[idx].author_resid}${residues[idx].insertion_code || ''}`;
+          }
         }
         tagRow.appendChild(tag);
       }
@@ -7471,7 +5283,7 @@ function renderChainSequences(sequences, chains) {
     }
     seqWrap.appendChild(rowWrap);
     card.appendChild(seqWrap);
-    container.appendChild(card);
+    destination.appendChild(card);
   });
 
   // Wire up chain checkboxes to toggle 3D viewer visibility
@@ -7479,53 +5291,18 @@ function renderChainSequences(sequences, chains) {
     cb.addEventListener('change', () => {
       const ch = cb.dataset.chain;
       const included = cb.checked;
-      if (_chainState[ch]) _chainState[ch].included = included;
+      var entries = checkedView ? _fragmentState : _chainState;
+      var key = checkedView ? cb.dataset.fragmentKey : ch;
+      if (entries[key]) entries[key].included = included;
+      invalidateInputCheckpoint();
       // Refresh the PDB viewer
-      redrawPDBViewerWithChainFilter();
+      if (!_inputFragmentEditing) redrawPDBViewerWithChainFilter();
     });
   });
 
-  // Wire up chain rename on double-click
+  // Keep the existing mouse gesture and add native keyboard activation.
   container.querySelectorAll('.chain-rename').forEach(span => {
-    span.addEventListener('dblclick', () => {
-      const ch = span.dataset.chain;
-      const orig = span.textContent;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = orig;
-      input.className = 'chain-rename-input';
-      input.style.width = '40px';
-      span.replaceWith(input);
-      input.focus();
-      input.select();
-      const commit = () => {
-        const val = input.value.trim() || orig;
-        const newSpan = document.createElement('span');
-        newSpan.className = 'chain-rename';
-        newSpan.dataset.chain = ch;
-        newSpan.textContent = val;
-        newSpan.title = 'Double-click to rename';
-        if (_chainState[ch]) _chainState[ch].name = val;
-        input.replaceWith(newSpan);
-        newSpan.addEventListener('dblclick', () => {
-          const inp2 = document.createElement('input');
-          inp2.type = 'text'; inp2.value = val;
-          inp2.className = 'chain-rename-input'; inp2.style.width = '40px';
-          newSpan.replaceWith(inp2); inp2.focus(); inp2.select();
-          inp2.addEventListener('blur', () => {
-            const v2 = inp2.value.trim() || val;
-            const ns2 = document.createElement('span');
-            ns2.className = 'chain-rename'; ns2.dataset.chain = ch;
-            ns2.textContent = v2; ns2.title = 'Double-click to rename';
-            if (_chainState[ch]) _chainState[ch].name = v2;
-            inp2.replaceWith(ns2);
-          });
-          inp2.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp2.blur(); });
-        });
-      };
-      input.addEventListener('blur', commit);
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
-    });
+    wireRenameTrigger(span, function() { beginChainRename(span); });
   });
 }
 
@@ -7538,39 +5315,11 @@ const AA3TO1 = {
   HOH:'w',SOL:'w',WAT:'w',NA:'+',CL:'-',K:'+',CA:'2',ZN:'2',MG:'2',
 };
 
-var _SMALLMOL_COLORS = [
-  "0xf59e0b", "0xef4444", "0x10b981", "0x8b5cf6", "0x06b6d4",
-  "0xf97316", "0xec4899", "0x6366f1", "0x14b8a6", "0x84cc16",
-  "0xeab308", "0xd946ef", "0x0ea5e9", "0x78716c", "0x65a30d",
-];
-
-function colorSmallMolecules(viewer, onlyChains) {
-  // onlyChains is accepted for API consistency but small-molecule visibility
-  // is controlled solely by _smallMolState checkboxes — not by protein chain
-  // toggles, because small molecules often reside in their own chain (different
-  // from protein chains) and would be incorrectly hidden by the chain filter.
-  if (!state.pdbInfo || !state.pdbInfo.small_molecules) return;
-  var mols = state.pdbInfo.small_molecules;
-  var seen = {};
-  var ci = 0;
-  if (typeof _smallMolState === 'undefined') _smallMolState = {};
-  mols.forEach(function(m) {
-    // Skip if this molecule's resname is unchecked in _smallMolState
-    if (_smallMolState[m.resname] && !_smallMolState[m.resname].included) return;
-    if (!seen[m.resname]) {
-      seen[m.resname] = _SMALLMOL_COLORS[ci % _SMALLMOL_COLORS.length];
-      ci++;
-    }
-    viewer.addStyle({resn: m.resname}, {stick: {radius: 0.18, color: seen[m.resname]}});
-    viewer.addStyle({resn: m.resname}, {sphere: {radius: 0.25, color: seen[m.resname], opacity: 0.8}});
-  });
-}
-
 // ===================================================================
 // 3Dmol.js Viewer
 // ===================================================================
 
-function renderPDBViewer(pdbContent) {
+async function renderPDBViewer(pdbContent) {
   const viewerEl = document.getElementById('pdb-viewer');
   if (!viewerEl) return;
 
@@ -7582,25 +5331,20 @@ function renderPDBViewer(pdbContent) {
     return;
   }
 
-  if (typeof $3Dmol === 'undefined') {
-    window._cdmRetriesPDB = (window._cdmRetriesPDB || 0) + 1;
-    if (window._cdmRetriesPDB > 30) {
-      viewerEl.innerHTML = '<p style="color:#c00;text-align:center;padding-top:180px;">The bundled 3Dmol.js viewer failed to load</p>';
-      return;
-    }
-    viewerEl.innerHTML = '<p style="color:#888;text-align:center;padding-top:180px;">3Dmol.js loading...</p>';
-    setTimeout(() => renderPDBViewer(pdbContent), 500);
-    return;
-  }
+  try { await GMXAssets.viewer(); }
+  catch (error) { viewerEl.textContent = error.message; return; }
 
   try {
     const viewer = $3Dmol.createViewer(viewerEl, {
-      backgroundColor: '0xffffff',
+      backgroundColor: window.gmxViewerBackground(),
       antialias: true,
     });
-    viewer.setBackgroundColor('0xffffff'); viewer.setSlab(-10000, 10000);
+    viewer.setBackgroundColor(window.gmxViewerBackground()); viewer.setSlab(-10000, 10000);
 
     viewer.addModel(pdbContent, 'pdb');
+    // Records what is loaded so a later visibility change can restyle rather
+    // than reparse. See redrawPDBViewerWithChainFilter.
+    viewer.__gmxLoadedPdb = pdbContent;
     _applyUnifiedStyle(viewer, pdbContent);
 
     viewer.zoomTo();
@@ -7631,8 +5375,21 @@ function redrawPDBViewerWithChainFilter() {
   var pdbContent = state.pdbInfo && state.pdbInfo.pdb_content;
   var viewer = window._pdbViewer;
   if (!pdbContent || !viewer) return;
-  viewer.removeAllModels();
-  viewer.addModel(pdbContent, 'pdb');
+
+  // Ticking a chain checkbox changes what is *shown*, not what is loaded, and
+  // this runs on every tick. Re-parsing the structure and rebuilding all of
+  // its geometry to hide one chain was the entire cost of the operation, so
+  // the model is reloaded only when the coordinates themselves changed.
+  var reloaded = viewer.__gmxLoadedPdb !== pdbContent;
+  if (reloaded) {
+    viewer.removeAllModels();
+    viewer.addModel(pdbContent, 'pdb');
+    viewer.__gmxLoadedPdb = pdbContent;
+  } else {
+    // Styles set for the previous selection would otherwise survive on atoms
+    // the new selection does not mention.
+    viewer.setStyle({}, {});
+  }
 
   // Build set of included protein chains.
   // Small molecules in non-protein chains are handled independently
@@ -7642,13 +5399,20 @@ function redrawPDBViewerWithChainFilter() {
     if (_chainState[c].included) includedChains.add(c);
   }
 
+  if (_checkedSteps.has('input') && state.pdbInfo) {
+    // The checkpoint already contains the selected and reconstructed fragments.
+    (state.pdbInfo.sequences || []).forEach(function(chain) { includedChains.add(chain.chain_id); });
+  }
+
   if (includedChains.size === 0) {
     viewer.setStyle({}, {cartoon: {hidden: true}, stick: {hidden: true}, sphere: {hidden: true}, line: {hidden: true}});
   } else {
     // Pass onlyChains so _applyUnifiedStyle only styles included chains
     _applyUnifiedStyle(viewer, pdbContent, includedChains);
   }
-  viewer.zoomTo();
+  // Framing follows the structure, not the selection: re-zooming would throw
+  // away the user's camera every time they tick a box.
+  if (reloaded) viewer.zoomTo();
   viewer.render();
   viewer.setSlab(-10000, 10000);
 }
@@ -7663,6 +5427,12 @@ function setupRunButton() {
 }
 
 function mergeCheckedModuleConfig(config) {
+  if (config.structure && _checkedConfig && _checkedConfig.structure &&
+      JSON.stringify(config.structure) !== JSON.stringify(_checkedConfig.structure)) {
+    invalidateStructureChemistry();
+    throw new Error('Chemistry differs from the checked structure. Run Check Structure again.');
+  }
+
   if (_checkedConfig) {
     for (var key in _checkedConfig) {
       if (_checkedConfig.hasOwnProperty(key)) {
@@ -7671,6 +5441,22 @@ function mergeCheckedModuleConfig(config) {
     }
   }
   return config;
+}
+
+function inputReconstructionConfig() {
+  var names = {};
+  Object.keys(_chainState).forEach(function(chain) {
+    var item = _chainState[chain];
+    if (item.included && item.name !== chain && item.name !== 'Unnamed chain') names[chain] = item.name;
+  });
+  return {
+    allow_incomplete_protein: Boolean(document.getElementById('input-allow-incomplete')?.checked),
+    renumber_residues: Boolean(document.getElementById('input-renumber-residues')?.checked),
+    chain_names: names,
+    fragment_names: Object.fromEntries(Object.entries(_fragmentState)
+      .map(([key, item]) => [key, item.name])),
+    exclude_fragments: Object.keys(_fragmentState).filter(key => !_fragmentState[key].included),
+  };
 }
 
 function buildModuleConfig(focusStep) {
@@ -7682,7 +5468,7 @@ function buildModuleConfig(focusStep) {
     var includeProtein = coarseGrainedIncludesProtein();
     var wants = function(step) { return !focusStep || focusStep === step; };
     if (wants('input')) {
-      config.input = {include_protein: includeProtein, environment: environment};
+      config.input = {include_protein: includeProtein, environment: environment, ...inputReconstructionConfig()};
     }
     if (wants('cg_model')) {
       config.cg_model = {model: 'martini3', water_model: 'W'};
@@ -7746,7 +5532,7 @@ function buildModuleConfig(focusStep) {
   // Input
   if (taskModules.includes('input')) {
     if (state.taskId) {
-      config.input = { task_id: state.taskId };
+      config.input = { task_id: state.taskId, ...inputReconstructionConfig() };
     }
   }
 
@@ -7755,9 +5541,10 @@ function buildModuleConfig(focusStep) {
     var skipProtonation = document.getElementById("proc-skip-protonation") ? document.getElementById("proc-skip-protonation").checked : false;
     config.structure = {
       protonation: skipProtonation ? [] : _procAssignments.filter(function(a) { return a.is_titratable; }).map(function(a) {
-        return { index: a.index, original: a.original, assigned_name: a.assigned_name, charge: a.charge };
+        return { index: a.index, target: procResidueTarget(a.index), original: a.original, prediction_source: a.prediction_source, assigned_name: a.assigned_name, charge: a.charge, force_field_lacks_state: Boolean(a.force_field_lacks_state), state_override: Boolean(a.state_override) };
       }),
       modifications: serializeStructureModifications(),
+      input_modification_decisions: _procInputRemovals,
       crosslinks: serializeStructureCrosslinks(),
       termini: _procTermini,
       pH: _systemPH,
@@ -7789,12 +5576,15 @@ function buildModuleConfig(focusStep) {
   if (taskModules.includes('membrane')) {
     const nLipidsEl = document.getElementById('n-lipids-per-leaflet');
     const nLipids = nLipidsEl ? parseInt(nLipidsEl.value) : 150;
+    if (!Number.isInteger(nLipids) || nLipids < 64 || nLipids > 5000) {
+      throw new Error('Lipids per leaflet must be a whole number from 64 to 5000.');
+    }
     config.membrane = {
       lipid_composition: {
         upper: _mixUpper.map(m => ({...m})),
         lower: _asymmetric ? _mixLower.map(m => ({...m})) : null,
       },
-      n_lipids_per_leaflet: Math.max(nLipids || 150, 64),
+      n_lipids_per_leaflet: nLipids,
     };
   }
 
@@ -7833,6 +5623,9 @@ function buildModuleConfig(focusStep) {
 
   // Force field selection (early step — saves to metadata)
   if (taskModules.includes('forcefield')) {
+    if (!Number.isFinite(_systemPH) || _systemPH < 1 || _systemPH > 13) {
+      throw new Error('Enter a solution pH between 1.0 and 13.0 before checking the force field.');
+    }
     var isPureMembrane = state.taskType && state.taskType.pipeline === 'pure_membrane';
     var isSolution = state.taskType && state.taskType.pipeline === 'solvator';
     config.forcefield = {
@@ -7842,6 +5635,10 @@ function buildModuleConfig(focusStep) {
       ligand_charges: isPureMembrane ? {} : collectLigandCharges(),
       ligand_pH: _systemPH,
       cgenff_parameters: isPureMembrane ? {} : collectCGenFFParameters(),
+      charmm_compat_smiles: isPureMembrane ? {} : collectCharmmCompatSmiles(),
+      charmm_compat_mol2: isPureMembrane ? {} : collectCharmmCompatMol2(),
+      charmm_compat_allow_research: !isPureMembrane &&
+        document.getElementById('ff-ligand')?.value === 'charmm_compat' && _charmmCompatResearch,
       water_model: document.getElementById('ff-water-model')?.value || 'tip3p',
       lipid_names: isSolution ? [] : currentMembraneLipidNames(),
       system_name: document.getElementById('system-name')?.value || 'membrane_system',
@@ -7872,15 +5669,16 @@ function buildModuleConfig(focusStep) {
 }
 
 function _showBuildResult(result) {
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
   const resultSection = document.getElementById('result-section');
-  progressFill.style.width = '100%';
-  progressText.textContent = 'Complete!';
+  finishBuildProgress(true);
   resultSection.classList.remove('hidden');
 
   const details = document.getElementById('result-details');
   details.innerHTML = '';
+  details.classList.remove('input-check-report', 'error');
+  document.getElementById('result-heading').textContent = 'Build complete';
+  resultSection.dataset.state = 'done';
+  document.getElementById('download-link').classList.remove('hidden');
 
   // ---- Verification warnings ----
   var verifyWarnings = [];
@@ -7922,18 +5720,60 @@ function _showBuildResult(result) {
   });
   table.appendChild(trTotal);
 
-  const logP = document.createElement('p'); logP.innerHTML = '<strong>Build log:</strong>';
-  const logUl = document.createElement('ul');
-  (result.log || []).forEach(function(l) { const li=document.createElement('li'); li.textContent=l; logUl.appendChild(li); });
   details.appendChild(table);
-  details.appendChild(logP);
-  details.appendChild(logUl);
+  // The complete log has one retained, expandable home; no second result log.
+  var logContent = document.getElementById('build-log-content');
+  var lines = Array.from(logContent.children).map(function(el) { return el.textContent; });
+  logContent.replaceChildren();
+  uniqueFeedbackMessages(lines.concat(result.log || [])).forEach(function(line) {
+    var item = document.createElement('div'); item.textContent = line; logContent.appendChild(item);
+  });
+  var logPanel = document.getElementById('build-log-panel');
+  logPanel.classList.toggle('hidden', !logContent.children.length);
+  logPanel.open = false;
+  document.getElementById('build-log').style.display = 'block';
+  document.getElementById('compute-queue-status').classList.add('hidden');
 
   const dlLink = document.getElementById('download-link');
   dlLink.href = result.download_url || '/api/task/' + (result.task_id || state.taskId) + '/download';
   dlLink.textContent = 'Download ZIP';
   const runBtn = document.getElementById('run-btn');
   if (runBtn) { runBtn.disabled = false; runBtn.textContent = '▶ Build System'; }
+  state.buildRunning = false;
+}
+
+function showBuildFailure(message, inputCheckRequired) {
+  document.getElementById('progress-section').classList.remove('hidden');
+  finishBuildProgress(false);
+  document.getElementById('result-section').classList.remove('hidden');
+  document.getElementById('result-section').dataset.state = 'error';
+  document.getElementById('result-heading').textContent = 'Build failed';
+  var details = document.getElementById('result-details');
+  details.replaceChildren();
+  details.classList.add('input-check-report', 'error');
+  appendFeedbackMessages(details, [message || 'The build could not finish.']);
+  if (inputCheckRequired) {
+    // A page left open across an upgrade can still hold obsolete Check passes.
+    // Keep user settings, but revoke navigation and final-review authorization.
+    revokeStepPass('input');
+    if (window.invalidateFinalReview) window.invalidateFinalReview();
+    var returnButton = document.createElement('button');
+    returnButton.type = 'button';
+    returnButton.textContent = 'Return to Check Upload';
+    returnButton.addEventListener('click', function() {
+      var inputIndex = state.wizardSteps.indexOf('input');
+      if (inputIndex < 0) return;
+      goToWizardStep(inputIndex);
+      renderInputReadiness(null, false, message);
+    });
+    details.appendChild(returnButton);
+  }
+  document.getElementById('download-link').classList.add('hidden');
+  document.getElementById('build-log-panel').open = false;
+  document.getElementById('compute-queue-status').classList.add('hidden');
+  var button = document.getElementById('run-btn');
+  button.disabled = false;
+  button.textContent = '▶ Build System';
   state.buildRunning = false;
 }
 
@@ -7944,73 +5784,232 @@ function formatQueueWait(seconds) {
   return (value / 3600).toFixed(1) + " hours";
 }
 
-function updateComputeQueueModal(queueState) {
-  var modal = document.getElementById("compute-queue-modal");
-  if (!modal || !queueState) return;
+// A Check can submit several managed operations and then reload its viewer.
+// Keep one notice alive for that whole interaction, not each individual ticket.
+var _checkNotice = null;
+
+function beginCheckNotice(handle) {
+  _checkNotice = {handle:handle, taskId:state.taskId, queue:{
+    task_id:state.taskId, status:'running', message:'Starting this check…'
+  }};
+  var notice = document.getElementById('compute-queue-status');
+  if (notice && handle.element.nextElementSibling !== notice) handle.element.after(notice);
+  showComputeQueueStatus(_checkNotice.queue);
+  updateNextButtonState();
+}
+
+function currentCheckNotice() {
+  var panel = document.querySelector('.panel.active');
+  return _checkNotice && _checkNotice.taskId === state.taskId &&
+    panel && panel.contains(_checkNotice.handle.element) ? _checkNotice : null;
+}
+
+function checkOwnsQueue(check, queueState) {
+  if (queueState.task_id && queueState.task_id !== check.taskId) return false;
+  var path = queueState.request_url || '';
+  return !path || path === '/api/step/' + check.taskId + '/' + check.handle.stepName ||
+    (check.handle.stepName === 'input' && path === '/api/filter-pdb/' + check.taskId);
+}
+
+function syncCheckNotice() {
+  var check = currentCheckNotice();
+  if (!check) return;
+  var panel = document.querySelector('.panel.active');
+  if (!panel || !panel.contains(check.handle.element)) return;
+  updateComputeQueueStatus(check.queue);
+}
+
+function updateComputeQueueStatus(queueState) {
+  var notice = document.getElementById("compute-queue-status");
+  if (!notice || !queueState) return;
+  var check = currentCheckNotice();
+  if (check) {
+    if (!checkOwnsQueue(check, queueState)) return;
+    check.queue = queueState;
+    if (check.handle.settled) {
+      notice.classList.add('hidden');
+      _checkNotice = null;
+      return;
+    }
+    // Never expose a ticket's terminal state while the Check still has work.
+    queueState = Object.assign({}, queueState);
+    if (!['queued', 'running'].includes(queueState.status)) {
+      queueState.status = 'running';
+      queueState.message = 'Continuing this check…';
+    }
+    notice.classList.remove('hidden');
+  } else if (['failed', 'cancelled'].includes(queueState.status) && operationHasFeedbackOwner(queueState)) {
+    notice.classList.add('hidden');
+    return;
+  }
+  notice.dataset.state = queueState.status || 'queued';
   var taskId = queueState.task_id || state.taskId || "";
   var taskEl = document.getElementById("compute-queue-task-id");
   var positionEl = document.getElementById("compute-queue-position");
   var estimateEl = document.getElementById("compute-queue-estimate");
   var titleEl = document.getElementById("compute-queue-title");
   var messageEl = document.getElementById("compute-queue-message");
+  var totalEl = document.getElementById("compute-queue-total");
+  var waitedEl = document.getElementById("compute-queue-waited");
+  var expiresEl = document.getElementById("compute-queue-expires");
+  var resourceEl = document.getElementById("compute-queue-resource");
+  if (totalEl) totalEl.textContent = queueState.queue_length == null ? '—' :
+    queueState.queue_length + ' waiting / ' + queueState.ahead + ' ahead';
+  if (waitedEl) waitedEl.textContent = queueState.waited_seconds == null ? '—' :
+    formatQueueWait(queueState.waited_seconds);
+  if (expiresEl) expiresEl.textContent = queueState.expires_at ?
+    new Date(typeof queueState.expires_at === 'number' ?
+      queueState.expires_at * 1000 : queueState.expires_at).toLocaleString() : '—';
+  if (resourceEl) resourceEl.textContent = queueState.pause_reason || 'Scheduled automatically';
   if (taskEl) taskEl.textContent = taskId;
-  if (queueState.status === "running") {
+  if (queueState.status === 'review') {
+    if (titleEl) titleEl.textContent = 'Check finished — review required';
+    if (messageEl) messageEl.textContent = 'Complete this step’s confirmation before continuing.';
+    if (positionEl) positionEl.textContent = 'No longer waiting';
+    if (estimateEl) estimateEl.textContent = '—';
+  } else if (['completed', 'failed', 'cancelled'].includes(queueState.status)) {
+    if (titleEl) titleEl.textContent = queueState.status === 'completed' ?
+      'Operation finished' : 'Operation could not finish';
+    if (messageEl) messageEl.textContent = queueState.error ||
+      'The operation finished. Its result is shown in the workflow.';
+    if (positionEl) positionEl.textContent = 'No longer waiting';
+    if (estimateEl) estimateEl.textContent = '—';
+  } else if (queueState.status === "running") {
     if (titleEl) titleEl.textContent = "Task processing has started";
     if (messageEl) messageEl.textContent =
-      "The task left the queue and is now being finalized. You may continue in the background.";
+      queueState.message || "Processing this step…";
     if (positionEl) positionEl.textContent = "Processing now";
     if (estimateEl) estimateEl.textContent = "Started";
   } else {
     if (titleEl) titleEl.textContent = "Task added to the compute queue";
     if (messageEl) messageEl.textContent =
-      "The server is busy. Your checked workflow has been saved and will start automatically.";
+      "Your operation has been saved and will start when resources are available. " +
+      "Queue time counts toward the task's lifetime.";
     if (positionEl) positionEl.textContent = String(queueState.queue_position || "—");
     if (estimateEl) {
       var stamp = queueState.estimated_start_at ?
         new Date(queueState.estimated_start_at).toLocaleString() : "Pending estimate";
-      estimateEl.textContent = stamp + " (about " +
-        formatQueueWait(queueState.estimated_wait_seconds) + ")";
+      estimateEl.textContent = queueState.estimated_wait_seconds == null ?
+        'Not enough comparable history to estimate yet' :
+        (queueState.estimated_start_at ? stamp + ' — ' : '') + 'about ' +
+        formatQueueWait(queueState.estimated_wait_seconds) + ' remaining (estimate)';
     }
   }
 }
 
-function showComputeQueueModal(queueState) {
-  var modal = document.getElementById("compute-queue-modal");
-  if (!modal) return;
-  updateComputeQueueModal(queueState);
-  var saved = document.getElementById("compute-queue-saved");
-  var close = document.getElementById("compute-queue-close");
-  if (saved) saved.checked = false;
-  if (close) close.disabled = true;
-  modal.classList.remove("hidden");
+function showComputeQueueStatus(queueState) {
+  var notice = document.getElementById('compute-queue-status');
+  if (!notice) return;
+  var check = currentCheckNotice();
+  if (check && !checkOwnsQueue(check, queueState)) return;
+  // Automatic preparation and preview loads have local feedback, never a page-level receipt.
+  if (!check && !state.buildRunning) {
+    notice.classList.add('hidden');
+    return;
+  }
+  if (!check && ['completed', 'failed', 'cancelled', 'review'].includes(queueState.status)) {
+    notice.classList.add('hidden');
+    return;
+  }
+  initComputeQueueStatus();
+  // Keep the recovery guidance beside the operation the user is watching.
+  var panel = document.querySelector('.panel.active');
+  var progress = panel && panel.querySelector('.step-progress[data-state="running"]');
+  var anchor = check ? check.handle.element :
+    (state.uploadRunning ? document.getElementById('upload-progress') : progress);
+  anchor = anchor || document.getElementById('progress-section');
+  if (!anchor) return;
+  // Polls update text in place. Reinsert only when the owning panel changes.
+  if (notice.parentElement !== anchor.parentElement ||
+      (!check && anchor.nextElementSibling !== notice)) anchor.after(notice);
+  if (!check) notice.classList.remove('hidden');
+  updateComputeQueueStatus(queueState);
 }
 
-function initComputeQueueModal() {
-  var modal = document.getElementById("compute-queue-modal");
-  var saved = document.getElementById("compute-queue-saved");
-  var close = document.getElementById("compute-queue-close");
-  var copy = document.getElementById("compute-queue-copy");
-  if (saved && close) {
-    saved.addEventListener("change", function() {
-      close.disabled = !saved.checked;
-    });
+function initComputeQueueStatus() {
+  if (initComputeQueueStatus._done) return;
+  var copy = document.getElementById('compute-queue-copy');
+  if (!copy) return;
+  initComputeQueueStatus._done = true;
+  copy.addEventListener('click', async function() {
+    var value = document.getElementById('compute-queue-task-id').textContent || '';
+    try {
+      await navigator.clipboard.writeText(value);
+      copy.textContent = 'Copied';
+    } catch (_error) { window.prompt('Copy this Task ID:', value); }
+    setTimeout(function() { copy.textContent = 'Copy'; }, 1600);
+  });
+}
+
+// Final export has queue states but no measured percentage. Share the Check
+// widget and clock, with an indeterminate readout until the result arrives.
+var _buildProgressHandle = null;
+
+function startBuildProgress(reconnected) {
+  if (_buildProgressHandle && _buildProgressHandle.clock) GMXPoll.stop(_buildProgressHandle.clock);
+  _buildProgressHandle = _startProgressDisplay('build', 'run-btn', null);
+  if (!_buildProgressHandle) return;
+  _buildProgressHandle.reconnected = Boolean(reconnected);
+  var section = document.getElementById('progress-section');
+  section.prepend(_buildProgressHandle.element);
+  section.classList.remove('hidden');
+  var bar = _buildProgressHandle.element.querySelector('.step-progress-bar');
+  bar.style.width = '35%';
+  bar.removeAttribute('aria-valuenow');
+  bar.setAttribute('aria-valuetext', 'In progress');
+  _buildProgressHandle.element.querySelector('.step-progress-percent').textContent = '—';
+}
+
+function setBuildProgressPhase(message) {
+  if (_buildProgressHandle) {
+    _buildProgressHandle.element.querySelector('.step-progress-phase').textContent = message;
   }
-  if (close && modal) {
-    close.addEventListener("click", function() {
-      if (!close.disabled) modal.classList.add("hidden");
-    });
+}
+
+function finishBuildProgress(ok) {
+  var observedStart = _buildProgressHandle && _buildProgressHandle.element.isConnected;
+  if (!observedStart) startBuildProgress();
+  finishStepProgress(_buildProgressHandle, ok);
+  var elapsed = _buildProgressHandle.element.querySelector('.step-progress-elapsed');
+  if (!observedStart) elapsed.textContent = '';
+  else if (_buildProgressHandle.reconnected) {
+    elapsed.textContent = ((Date.now() - _buildProgressHandle.startedAt) / 1000).toFixed(1) +
+      ' s since reconnect';
   }
-  if (copy) {
-    copy.addEventListener("click", async function() {
-      var value = document.getElementById("compute-queue-task-id")?.textContent || "";
-      try {
-        await navigator.clipboard.writeText(value);
-        copy.textContent = "Copied";
-      } catch (error) {
-        window.prompt("Copy this Task ID:", value);
+  var bar = _buildProgressHandle.element.querySelector('.step-progress-bar');
+  if (ok) bar.removeAttribute('aria-valuetext');
+  else {
+    bar.removeAttribute('aria-valuenow');
+    bar.setAttribute('aria-valuetext', 'Build stopped');
+    bar.style.width = '35%';
+    _buildProgressHandle.element.querySelector('.step-progress-percent').textContent = '—';
+    setBuildProgressPhase('Build stopped');
+  }
+}
+
+function watchBuildResult(result, intervalMs, logTimer) {
+  var handle = _buildProgressHandle;
+  var poll = GMXPoll.start(async function() {
+    if (handle !== _buildProgressHandle) { GMXPoll.stop(poll); return; }
+    try {
+      var status = await GMXPoll.read('/api/build/' + result.task_id + '/queue-status');
+      if (handle !== _buildProgressHandle) return;
+      if (['completed', 'failed', 'cancelled'].includes(status.status)) {
+        GMXPoll.stop(poll);
+        if (logTimer) GMXPoll.stop(logTimer);
+        if (status.status === 'completed') _showBuildResult(status.result || result);
+        else showBuildFailure(status.error || 'The build could not finish', status.input_check_required);
+      } else {
+        showComputeQueueStatus(Object.assign({task_id:result.task_id}, status));
+        setBuildProgressPhase(status.status === 'running'
+          ? 'Build started — waiting for completion...'
+          : 'Waiting for resources');
       }
-    });
-  }
+    } catch (error) {
+      setBuildProgressPhase('Connection interrupted — reconnecting to build…');
+    }
+  }, intervalMs);
+  (window._buildPollTimers = window._buildPollTimers || []).push(poll);
 }
 
 async function runBuild() {
@@ -8021,13 +6020,12 @@ async function runBuild() {
   runBtn.disabled = true;
   runBtn.textContent = 'Building...';
 
-  const progressSection = document.getElementById('progress-section');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
   const resultSection = document.getElementById('result-section');
 
-  progressSection.classList.remove('hidden');
+  startBuildProgress();
   resultSection.classList.add('hidden');
+  document.getElementById('build-log-content').replaceChildren();
+  document.getElementById('build-log-panel').classList.add('hidden');
   // Build payload FIRST so log timer can reference task_id
   let modules;
   try {
@@ -8036,8 +6034,7 @@ async function runBuild() {
     state.buildRunning = false;
     runBtn.disabled = false;
     runBtn.textContent = '▶ Build System';
-    progressSection.classList.add('hidden');
-    alert('Simulation parameter error: ' + (error && error.message ? error.message : String(error)));
+    showBuildFailure(error && error.message ? error.message : String(error));
     return;
   }
   const payload = {
@@ -8047,20 +6044,20 @@ async function runBuild() {
     modules: modules,
   };
 
-  progressFill.style.width = '10%';
-  progressText.textContent = 'Assembling pipeline configuration...';
+  setBuildProgressPhase('Assembling pipeline configuration...');
   // Show log box and start polling AFTER payload is ready
   var logBox = document.getElementById("build-log");
   var logContent = document.getElementById("build-log-content");
   if (logBox) logBox.style.display = "block";
+  document.getElementById('build-log-panel').classList.remove('hidden');
+  document.getElementById('build-log-panel').open = true;
   if (logContent) logContent.innerHTML = "";
   // Track all polling intervals for cleanup on page unload
   var _timers = (window._buildPollTimers = window._buildPollTimers || []);
   var logSince = 0, logTimer = null;
-  logTimer = setInterval(async function() {
+  logTimer = GMXPoll.start(async function() {
     try {
-      var lr = await fetch("/api/build/" + payload.task_id + "/log?since=" + logSince);
-      var ld = await lr.json();
+      var ld = await GMXPoll.read("/api/build/" + payload.task_id + "/log?since=" + logSince);
       if (ld.lines && ld.lines.length > 0) {
         ld.lines.forEach(function(line) {
           if (logContent) {
@@ -8072,13 +6069,12 @@ async function runBuild() {
         if (logBox) logBox.scrollTop = logBox.scrollHeight;
         logSince = ld.total;
       }
-      if (ld.done) { clearInterval(logTimer); logTimer = null; }
+      if (ld.done) { GMXPoll.stop(logTimer); logTimer = null; }
     } catch(e) { /* network errors are transient — keep polling */ }
   }, 500);
   _timers.push(logTimer);
 
-  progressFill.style.width = '20%';
-  progressText.textContent = `Finalizing checked system: ${state.taskType.title}...`;
+  setBuildProgressPhase(`Finalizing checked system: ${state.taskType.title}...`);
 
   try {
     var taskId = state.taskId || '';
@@ -8090,104 +6086,55 @@ async function runBuild() {
 
     if (!res.ok) {
       const err = await res.json();
-      if (res.status === 409) {
-        alert('This task is already being built. Please wait for it to complete.');
-        state.buildRunning = false; runBtn.disabled = false; runBtn.textContent = '▶ Build System';
-        return;
-      }
-      throw new Error(err.error || 'Build failed');
+      var buildError = new Error(err.error || 'Build failed');
+      buildError.inputCheckRequired = err.input_check_required === true;
+      throw buildError;
     }
 
     const result = await res.json();
 
-    // ---- Handle queued build ----
-    if (result.status === 'queued') {
-      showComputeQueueModal(result);
-      progressFill.style.width = '10%';
-      progressText.textContent = 'Queued — position ' + result.queue_position;
-      resultSection.classList.remove('hidden');
-      const details = document.getElementById('result-details');
-      details.innerHTML = '<div style="padding:20px;text-align:center">' +
-        '<h3 style="color:#d97706;">&#9201; Position <span id="queue-pos">' + result.queue_position + '</span> in build queue</h3>' +
-        '<p style="color:#64748b;max-width:500px;margin:12px auto">' + result.message + '</p>' +
-        '<p style="color:#64748b;font-size:13px;">Task ID: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px">' + result.task_id + '</code></p>' +
-        '<p style="color:#94a3b8;font-size:12px;margin-top:20px">You can close this page. Return with the Task ID, or download later from <code>/api/task/' + result.task_id + '/download</code>.</p>' +
-        '</div>';
-
-      // Poll queue position
-      var queuePoll = setInterval(async function() {
-        try {
-          var qr = await fetch('/api/build/' + result.task_id + '/queue-status');
-          var qd = await qr.json();
-          if (qd.status === 'running') {
-            clearInterval(queuePoll);
-            updateComputeQueueModal(qd);
-            document.getElementById('queue-pos').textContent = '0 (now building)';
-            progressText.textContent = 'Build started — waiting for completion...';
-            // Switch to normal build log polling
-            if (logTimer) { clearInterval(logTimer); }
-            logTimer = setInterval(async function() {
-              try {
-                var lr = await fetch('/api/build/' + result.task_id + '/log?since=' + logSince);
-                var ld = await lr.json();
-                if (ld.lines && ld.lines.length > 0) {
-                  ld.lines.forEach(function(line) {
-                    if (logContent) { var div=document.createElement('div'); div.textContent=line; logContent.appendChild(div); }
-                  });
-                  if (logBox) logBox.scrollTop = logBox.scrollHeight;
-                  logSince = ld.total;
-                }
-                if (ld.done) { clearInterval(logTimer); logTimer = null; }
-              } catch(e) {}
-            }, 500);
-          } else if (qd.status === 'completed') {
-            clearInterval(queuePoll);
-            if (logTimer) { clearInterval(logTimer); }
-            progressFill.style.width = '100%';
-            progressText.textContent = 'Complete!';
-            _showBuildResult(qd.result || result);
-          } else if (qd.status === 'failed') {
-            clearInterval(queuePoll);
-            alert('Build failed: ' + (qd.error || 'unknown error'));
-            state.buildRunning = false; runBtn.disabled = false;
-            runBtn.textContent = '▶ Build System';
-          } else {
-            document.getElementById('queue-pos').textContent = qd.queue_position;
-            progressText.textContent = 'Queued — position ' + qd.queue_position;
-            updateComputeQueueModal(qd);
-          }
-        } catch(e) {}
-      }, 3000);
-      _timers.push(queuePoll);
-      return;
+    if (result.status === 'completed') {
+      if (logTimer) GMXPoll.stop(logTimer);
+      _showBuildResult(result.result || result);
+    } else {
+      if (result.status === 'queued') {
+        showComputeQueueStatus(result);
+        setBuildProgressPhase('Waiting for resources');
+      }
+      // Restored, queued and immediately started builds share terminal handling.
+      watchBuildResult(result, result.status === 'queued' ? 3000 : 2000, logTimer);
     }
 
-    // ---- Immediate build started — poll for completion ----
-    var donePoll = setInterval(async function() {
-      try {
-        var qr = await fetch('/api/build/' + result.task_id + '/queue-status');
-        var qd = await qr.json();
-        if (qd.status === 'completed') {
-          clearInterval(donePoll);
-          if (logTimer) { clearInterval(logTimer); logTimer = null; }
-          _showBuildResult(qd.result || result);
-        } else if (qd.status === 'failed') {
-          clearInterval(donePoll);
-          if (logTimer) { clearInterval(logTimer); logTimer = null; }
-          alert('Build failed: ' + (qd.error || 'unknown error'));
-          state.buildRunning = false; runBtn.disabled = false;
-          runBtn.textContent = '▶ Build System';
-        }
-      } catch(e) {}
-    }, 2000);
-    _timers.push(donePoll);
-
   } catch (err) {
-    if (logTimer) { clearInterval(logTimer); logTimer = null; }
-    progressSection.classList.add('hidden');
-    alert('Build error: ' + err.message);
-    state.buildRunning = false;
-    runBtn.disabled = false;
-    runBtn.textContent = '▶ Build System';
+    if (logTimer) { GMXPoll.stop(logTimer); logTimer = null; }
+    showBuildFailure(err.message, err.inputCheckRequired);
   }
+}
+
+// Load-order manifest: records that this file ran to completion.
+window.__gmxbuilderLoaded = window.__gmxbuilderLoaded || [];
+window.__gmxbuilderLoaded.push("app.js");
+
+function renderMembraneCompositionWarnings(items) {
+  ['panel-membrane', 'panel-cg_environment', 'panel-final_review', 'panel-cg_system'].forEach(function(id) {
+    var panel = document.getElementById(id);
+    if (!panel) return;
+    var box = panel.querySelector('.membrane-composition-advice');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'membrane-composition-advice validation-warnings';
+      box.setAttribute('role', 'status');
+      box.style.gridColumn = '1 / -1';
+      // Keep advice in the reading flow before navigation; it never changes
+      // Check/Next availability or asks for another confirmation.
+      panel.insertBefore(box, panel.querySelector(':scope > .panel-actions'));
+    }
+    box.replaceChildren();
+    box.hidden = !items.length;
+    items.forEach(function(item) {
+      var line = document.createElement('p');
+      line.textContent = '⚠ ' + item.message;
+      box.appendChild(line);
+    });
+  });
 }

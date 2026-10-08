@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.system import System
 from gmxbuilder.modules.membrane.orient import compute_embedding_depth
 
 

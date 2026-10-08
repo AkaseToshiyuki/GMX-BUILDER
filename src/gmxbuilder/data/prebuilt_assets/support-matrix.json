@@ -1,0 +1,492 @@
+{
+  "schema_version": 1,
+  "asset_version": 7,
+  "software_version": "0.9.143",
+  "scope": "initialization_conformers_only",
+  "catalog_entries": 336,
+  "ready_entries": 37,
+  "gaff_parameter_cache_count": 67,
+  "entries": [
+    {
+      "lipid_name": "CHOL",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 3320,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "CHOL",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 3680,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DOPC",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "DOPC",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DOPC",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DOPE",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 1280,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "DOPE",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 1080,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DOPE",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 1080,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DOPS",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 4224,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "DOPS",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 3456,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DOPS",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 3456,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DPPC",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "DPPC",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DPPC",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DPPE",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 4224,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "DPPE",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 3840,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "DPPE",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 3840,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POP2",
+      "force_field": "amber14sb",
+      "lipid_ff": "gaff2",
+      "parameter_family": "amber-gaff2",
+      "n_conformations": 1240,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "POP2",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 1640,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POP3",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 880,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POP3",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 1480,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPC",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 9728,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "POPC",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPC",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPE",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "POPE",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 3584,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPE",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 3584,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPG",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPG",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 4096,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPI",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 2520,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPI",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 2520,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPS",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 5376,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "POPS",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 3584,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "POPS",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 3456,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "PSM",
+      "force_field": "amber14sb",
+      "lipid_ff": "lipid21",
+      "parameter_family": "amber-lipid21",
+      "n_conformations": 5376,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": true
+    },
+    {
+      "lipid_name": "PSM",
+      "force_field": "charmm36m",
+      "lipid_ff": "charmm36m",
+      "parameter_family": "charmm36m-lipid",
+      "n_conformations": 5248,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    },
+    {
+      "lipid_name": "PSM",
+      "force_field": "charmm36",
+      "lipid_ff": "charmm36",
+      "parameter_family": "charmm36-lipid",
+      "n_conformations": 5248,
+      "validation_scope": {
+        "kind": "initialization",
+        "label": "Initialization conformers",
+        "description": "Validated for initial construction; bulk membrane equilibrium is not certified. Equilibrate the constructed system before production MD."
+      },
+      "amber_mixed_ready": false
+    }
+  ]
+}

@@ -3,7 +3,8 @@
 
 Public source archives and Git checkouts can contain a small Git LFS pointer.
 This bootstrap reads the release manifest, downloads the immutable-by-digest
-payload from the configured public media URL, verifies its exact size and
+payload from the checkout origin LFS (or public media for source archives),
+verifies its exact size and
 SHA-256 digest, and atomically replaces the pointer.  Runtime installation
 performs the same verification again before extraction.
 """
@@ -13,11 +14,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+import os
+import shutil
+import subprocess
 import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "src/gmxbuilder/data/prebuilt_assets/manifest.json"
@@ -37,6 +40,82 @@ def _is_payload(path: Path, *, expected_size: int, expected_digest: str) -> bool
     return (
         path.is_file() and path.stat().st_size == expected_size and sha256(path) == expected_digest
     )
+
+
+def _checkout_lfs_object(archive: Path, expected_digest: str, expected_size: int) -> bool:
+    """Fetch this checkout's one asset through origin, including private LFS auth.
+
+    Source archives without Git/LFS use the verified public media URL instead.
+    Never pull unrelated objects or run a lipid preparation job during install.
+    """
+    if not shutil.which("git") or not shutil.which("git-lfs"):
+        return False
+    try:
+
+        def git(*args):
+            return subprocess.run(
+                ["git", "-C", str(archive.parent), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            ).stdout.strip()
+
+        root = Path(git("rev-parse", "--show-toplevel"))
+        relative = archive.resolve().relative_to(root.resolve()).as_posix()
+        remote = git("remote", "get-url", "origin")
+        # A developer's configured public LFS URL must not redirect a private
+        # checkout's asset fetch to another repository.
+        override = (
+            ["-c", f"lfs.url={remote.rstrip('/')}/info/lfs"]
+            if remote.startswith("https://")
+            else []
+        )
+        # Decode only the manifest's exact object. `lfs fetch` scans the whole
+        # tree and can trigger unrelated lazy downloads in a partial clone.
+        pointer = (
+            "version https://git-lfs.github.com/spec/v1\n"
+            f"oid sha256:{expected_digest}\nsize {expected_size}\n"
+        ).encode()
+        environment = dict(os.environ)
+        environment.pop("GIT_LFS_SKIP_SMUDGE", None)
+        with tempfile.NamedTemporaryFile(
+            dir=archive.parent, prefix=".lfs-", delete=False
+        ) as output:
+            temporary = Path(output.name)
+            try:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        *override,
+                        "-c",
+                        "lfs.fetchinclude=",
+                        "-c",
+                        "lfs.fetchexclude=",
+                        "lfs",
+                        "smudge",
+                        relative,
+                    ],
+                    input=pointer,
+                    stdout=output,
+                    stderr=subprocess.PIPE,
+                    env=environment,
+                    check=True,
+                    timeout=180,
+                )
+                output.flush()
+                if not _is_payload(
+                    temporary, expected_size=expected_size, expected_digest=expected_digest
+                ):
+                    return False
+                temporary.replace(archive)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return True
+    except (OSError, ValueError, StopIteration, subprocess.SubprocessError):
+        return False
 
 
 def fetch(manifest_path: Path = DEFAULT_MANIFEST) -> str:
@@ -65,6 +144,8 @@ def fetch(manifest_path: Path = DEFAULT_MANIFEST) -> str:
             raise RuntimeError("existing prebuilt asset is not the expected payload or LFS pointer")
 
     archive.parent.mkdir(parents=True, exist_ok=True)
+    if _checkout_lfs_object(archive, expected_digest, expected_size):
+        return f"downloaded from origin LFS: {archive_name}"
     request = Request(url, headers={"User-Agent": USER_AGENT})
     with tempfile.NamedTemporaryFile(
         prefix=f".{archive_name}.", suffix=".download", dir=archive.parent, delete=False

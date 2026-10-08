@@ -1,0 +1,97 @@
+"""Reviewed complete chemical identities from the installed CGenFF RTP comments.
+
+Annotations contain no force-field numbers. Graph, hydrogen counts and net
+charge are verified against both supported local releases in the tests.
+Some identities require atom-mapped SMILES to distinguish protonation sites.
+"""
+
+EXTRA_TEMPLATES = (
+    ("ACO", "CC(=O)C", ("C2", "C1", "O1", "C3"), "acetone"),
+    ("AALD", "CC=O", ("CB", "C", "O"), "acetaldehyde"),
+    ("ACN", "CC#N", ("C1", "C2", "N3"), "acetonitrile"),
+    ("NMA", "CNC(C)=O", ("CR", "N", "C", "CL", "O"), "N-methylacetamide"),
+    ("DMA", "CC(=O)N(C)C", ("C1", "C", "O", "N", "C2", "C3"), "N,N-dimethylacetamide"),
+    ("DMF", "CN(C)C=O", ("CC", "N", "CT", "C", "O"), "N,N-dimethylformamide"),
+    ("ETAC", "CCOC(C)=O", ("C21", "C2", "OM", "C", "C1", "O"), "ethyl acetate"),
+    ("MAS", "COC(C)=O", ("C2", "OM", "C", "C1", "O"), "methyl acetate"),
+    ("PYR1", "n1ccccc1", ("N1", "C2", "C3", "C4", "C5", "C6"), "pyridine"),
+    ("PYRM", "n1cnccc1", ("N1", "C2", "N3", "C4", "C5", "C6"), "pyrimidine"),
+    ("FURA", "o1cccc1", ("O5", "C1", "C2", "C3", "C4"), "furan"),
+    ("THIP", "s1cccc1", ("S5", "C1", "C2", "C3", "C4"), "thiophene"),
+    ("THAZ", "s1cncc1", ("S5", "C4", "N3", "C2", "C1"), "thiazole"),
+    ("ISOT", "s1nccc1", ("S5", "N4", "C3", "C2", "C1"), "isothiazole"),
+    (
+        "INDO",
+        "c1ccc2[nH]ccc2c1",
+        ("CZ3", "CH2", "CZ2", "CE2", "NE1", "CD1", "CG", "CD2", "CE3"),
+        "indole",
+    ),
+    ("ZFUR", "c1ccc2occc2c1", ("C6", "C7", "C8", "C9", "O1", "C2", "C3", "C4", "C5"), "benzofuran"),
+    (
+        "ZTHP",
+        "c1ccc2sccc2c1",
+        ("C6", "C7", "C8", "C9", "S1", "C2", "C3", "C4", "C5"),
+        "benzothiophene",
+    ),
+    (
+        "ZTHZ",
+        "c1ccc2scnc2c1",
+        ("C6", "C7", "C8", "C9", "S1", "C2", "N3", "C4", "C5"),
+        "benzothiazole",
+    ),
+    ("PHEN", "Oc1ccccc1", ("OH", "CZ", "CE1", "CD1", "CG", "CD2", "CE2"), "phenol"),
+    ("FLUB", "Fc1ccccc1", ("F6", "C6", "C1", "C2", "C3", "C4", "C5"), "fluorobenzene"),
+    ("MESH", "CS", ("CM", "S"), "methanethiol"),
+    ("ETSH", "CCS", ("CM1", "CM2", "S3"), "ethanethiol"),
+    ("DMSN", "CS(C)(=O)=O", ("C3", "S", "C4", "O1", "O2"), "dimethyl sulfone"),
+    (
+        "DMEP",
+        "COP(=O)([O-])OC",
+        ("C1", "O1", "P1", "O3", "O4", "O2", "C2"),
+        "dimethyl phosphate anion",
+    ),
+    ("MP_0", "COP(=O)(O)O", ("C1", "O1", "P1", "O4", "O2", "O3"), "methyl phosphate"),
+    ("MP_1", "COP(=O)(O)[O-]", ("C1", "O1", "P1", "O3", "O2", "O4"), "methyl phosphate monoanion"),
+    ("MP_2", "COP(=O)([O-])[O-]", ("C1", "O1", "P1", "O2", "O3", "O4"), "methyl phosphate dianion"),
+    ("IMIA", "c1ncc[nH]1", ("CE1", "NE2", "CD2", "CG", "ND1"), "imidazole"),
+    ("IMIM", "c1[nH+]cc[nH]1", ("CE1", "ND1", "CG", "CD2", "NE2"), "imidazolium"),
+    ("MORP", "O1CC[NH2+]CC1", ("O1", "C2", "C3", "N4", "C5", "C6"), "morpholinium"),
+    ("PIP", "[NH2+]1CCCCC1", ("N1", "C2", "C3", "C4", "C5", "C6"), "piperidinium"),
+    ("PRLD", "N1CCCC1", ("N1", "C2", "C3", "C4", "C5"), "pyrrolidine"),
+    ("PRLP", "[NH2+]1CCCC1", ("N1", "C2", "C3", "C4", "C5"), "pyrrolidinium"),
+    (
+        "3CB",
+        "O=C([O-])c1ccccc1",
+        ("O1", "CD3", "O2", "CD1", "CE1", "CZ", "CE2", "CD2", "CG"),
+        "benzoate",
+    ),
+    (
+        "ZOIC",
+        "O=C(O)c1ccccc1",
+        ("O7", "C7", "O8", "C1", "C2", "C3", "C4", "C5", "C6"),
+        "benzoic acid",
+    ),
+    ("ACEH", "CC(=O)O", ("C2", "C1", "O2", "O1"), "acetic acid"),
+    ("ACET", "CC(=O)[O-]", ("C1", "C2", "O1", "O2"), "acetate"),
+    ("FORM", "NC=O", ("N", "C", "O"), "formamide"),
+    ("UREA", "NC(N)=O", ("N1", "C2", "N3", "O2"), "urea"),
+    (
+        "NZAD",
+        "CC(=O)NCc1ccccc1",
+        ("C10", "C9", "O9", "N8", "C7", "C1", "C2", "C3", "C4", "C5", "C6"),
+        "N-benzylacetamide",
+    ),
+    (
+        "BZAA",
+        "O=C(O)Cc1ccccc1",
+        ("O8", "C8", "O9", "C7", "C5", "C4", "C3", "C2", "C1", "C6"),
+        "phenylacetic acid",
+    ),
+    (
+        "BZAC",
+        "O=C([O-])Cc1ccccc1",
+        ("O81", "C8", "O82", "C7", "C5", "C4", "C3", "C2", "C1", "C6"),
+        "phenylacetate",
+    ),
+    ("12MU", "CNC(=O)NC", ("C1", "N1", "C", "O", "N2", "C2"), "N,N-prime-dimethylurea"),
+)

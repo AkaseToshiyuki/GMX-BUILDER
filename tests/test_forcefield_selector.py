@@ -3,11 +3,16 @@
 import pytest
 
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
 from gmxbuilder.modules.forcefield.catalog import (
     get_force_field_profile,
     validate_local_gromacs,
 )
+from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+from gmxbuilder.modules.solvation.water_models import (
+    supported_force_fields,
+    water_model_compatibility,
+)
+from tests.prerequisites import requires_forcefield
 
 
 def test_forcefield_selector_uses_default_force_field(empty_system):
@@ -21,6 +26,37 @@ def test_forcefield_selector_uses_default_force_field(empty_system):
     assert result.system.metadata["force_field_release"] == "GROMACS-2026.3"
     assert result.system.metadata["force_field_family"] == "amber"
     assert result.system.metadata["ff_water_model"] == "tip3p"
+    assert result.system.metadata["water_model_compatibility"] == "recommended"
+
+
+@requires_forcefield("charmm36m")
+def test_water_model_policy_distinguishes_assets_from_scientific_support(empty_system):
+    assert water_model_compatibility("amber14sb", "tip3p").status == "recommended"
+    assert water_model_compatibility("charmm36m", "spce").status == "supported"
+    assert water_model_compatibility("amber14sb", "spce").status == "expert-unvalidated"
+    assert "charmm36m" in supported_force_fields("spce")
+    assert "amber14sb" not in supported_force_fields("spce")
+
+    with pytest.raises(ModuleConfigError, match="allow_unvalidated_water_model=true"):
+        ForceFieldSelector().run(
+            empty_system,
+            {"name": "amber14sb", "water_model": "spce"},
+        )
+
+    selected = (
+        ForceFieldSelector()
+        .run(
+            empty_system,
+            {
+                "name": "amber14sb",
+                "water_model": "spce",
+                "allow_unvalidated_water_model": True,
+            },
+        )
+        .system
+    )
+    assert selected.metadata["water_model_compatibility"] == "expert-unvalidated"
+    assert selected.metadata["water_model_policy_version"] == "1.0"
 
 
 def test_amber14sb_port_requires_gromacs_2026():
@@ -79,6 +115,7 @@ def test_forcefield_selector_rejects_cross_family_combinations(empty_system, con
         ForceFieldSelector().run(empty_system, config)
 
 
+@requires_forcefield("charmm36m")
 def test_forcefield_selector_accepts_charmm_family_lipids(empty_system):
     result = ForceFieldSelector().run(
         empty_system,
@@ -108,7 +145,9 @@ def test_forcefield_selector_accepts_recommended_amber_lipid21(empty_system):
     assert result.system.metadata["lipid21_lipids"] == ["POPC"]
 
 
-def test_missing_charmm_lipid_names_installed_alternative(empty_system, monkeypatch):
+def test_missing_charmm_lipid_names_installed_alternative(
+    empty_system, monkeypatch, unpopulated_default_lipid_library
+):
     monkeypatch.setattr(
         "gmxbuilder.modules.forcefield.compatibility.gaff_available",
         lambda: True,

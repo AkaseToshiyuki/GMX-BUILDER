@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 from gmxbuilder.pipeline.step_executor import StepRunner

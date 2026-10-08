@@ -13,9 +13,11 @@ from gmxbuilder.core.system import System
 from gmxbuilder.core.topology import AtomType, Bond, Topology
 from gmxbuilder.io.gro import GROWriter
 from gmxbuilder.io.top import TopologyWriter
+from gmxbuilder.modules.export.layout import FORCEFIELD_DIR
 from gmxbuilder.modules.ions.add_ions import IonBuilder, _WaterSite
 from gmxbuilder.modules.solvation.water_models import WaterRegistry
 from gmxbuilder.pipeline.step_executor import StepRunner
+from tests.prerequisites import requires_forcefield
 from tests.test_gromacs_smoke import _find_gmx
 from tests.test_membrane_gromacs_smoke import _write_smoke_mdp
 
@@ -191,6 +193,7 @@ def test_ions_reject_complete_or_unrecognised_preexisting_topology():
 
 
 @pytest.mark.parametrize("model_name", ["tip3p", "tip4p"])
+@requires_forcefield("charmm36m")
 def test_ions_replace_complete_water_and_remap_components(model_name):
     system = _water_system(model_name, protein_resname="LYS")
     if model_name == "tip4p":
@@ -425,6 +428,7 @@ def test_protein_charge_counts_residue_ids_independently_per_chain():
     assert merged.total_charge() == 2.0
 
 
+@pytest.mark.slow
 def test_topology_uses_force_field_ions_without_redefinition(tmp_path):
     gmx = _find_gmx()
     model = WaterRegistry.get("tip3p")
@@ -450,7 +454,7 @@ def test_topology_uses_force_field_ions_without_redefinition(tmp_path):
         tmp_path / "topol.top",
     )
     text = (tmp_path / "topol.top").read_text()
-    assert '#include "ions_tip3p.itp"' in text
+    assert f'#include "{FORCEFIELD_DIR}/ions_tip3p.itp"' in text
     assert '#include "NA.itp"' not in text
     assert '#include "CL.itp"' not in text
     _write_smoke_mdp(tmp_path / "smoke.mdp")

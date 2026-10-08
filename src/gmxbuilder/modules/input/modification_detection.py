@@ -15,7 +15,6 @@ from gmxbuilder.core.structure import Structure
 from gmxbuilder.modules.input.protein_repair import _BACKBONE, _SIDECHAIN_PARENTS
 from gmxbuilder.modules.modifications.patches import ALL_PATCHES, patch_capability
 
-
 _STANDARD_RESIDUES = frozenset(_SIDECHAIN_PARENTS)
 _PROTONATION_ALIASES = frozenset(
     {
@@ -63,23 +62,7 @@ RECOGNIZED_PRODUCT_PATCHES = _recognized_product_patches()
 
 
 def _slice_structure(structure: Structure, keep: np.ndarray) -> Structure:
-    indices = np.flatnonzero(keep)
-    return Structure(
-        coordinates=structure.coordinates[indices].copy(),
-        box_vectors=structure.box_vectors.copy(),
-        atom_names=[structure.atom_names[index] for index in indices],
-        resnames=[structure.resnames[index] for index in indices],
-        resids=[structure.resids[index] for index in indices],
-        chain_ids=[structure.chain_ids[index] for index in indices],
-        segids=[structure.segids[index] for index in indices],
-        elements=([structure.elements[index] for index in indices] if structure.elements else []),
-        occupancies=(
-            [structure.occupancies[index] for index in indices] if structure.occupancies else []
-        ),
-        tempfactors=(
-            [structure.tempfactors[index] for index in indices] if structure.tempfactors else []
-        ),
-    )
+    return structure.take(np.flatnonzero(keep))
 
 
 def _residue_groups(structure: Structure) -> list[tuple[tuple[str, int, str], list[int]]]:
@@ -147,6 +130,17 @@ def normalize_detected_modifications(
                     }
                 )
                 continue
+            # Keep deposited PTM geometry even while repair uses its parent residue.
+            original_atoms = [
+                {
+                    "name": str(structure.atom_names[index]),
+                    "element": str(structure.elements[index])
+                    if index < len(structure.elements)
+                    else "",
+                    "coordinates_nm": structure.coordinates[index].tolist(),
+                }
+                for index in indices
+            ]
             removed_atoms: list[str] = []
             for index in indices:
                 atom_name = str(structure.atom_names[index]).strip().upper()
@@ -164,6 +158,7 @@ def normalize_detected_modifications(
                 "status": "recognized",
                 "normalized": True,
                 "removed_atoms": sorted(set(removed_atoms)),
+                "original_atoms": original_atoms,
             }
             records.append(record)
             continue

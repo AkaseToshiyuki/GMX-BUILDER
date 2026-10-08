@@ -7,17 +7,18 @@ import argparse
 import hashlib
 import inspect
 import json
-from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
 import tempfile
-from urllib.request import Request, urlopen
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
-
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("external_assets.json")
-OVERLAYS = ROOT / "src" / "gmxbuilder" / "data" / "forcefield_overlays"
+SOURCE = ROOT / "src"
+FORCEFIELDS = SOURCE / "gmxbuilder" / "data" / "forcefields"
+OVERLAYS = SOURCE / "gmxbuilder" / "data" / "forcefield_overlays"
 USER_AGENT = "GMXBUILDER external-asset bootstrap/1"
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 
@@ -77,6 +78,53 @@ def apply_overlay(staging: Path, overlay_name: str) -> None:
         shutil.copy2(source, staging / source.name)
 
 
+def _archive_mode(archive: Path) -> str:
+    """Return the tar mode for *archive*, by content rather than by name.
+
+    The OL24 package is published as ``.tar.gz`` and is a plain, uncompressed
+    tar. Trusting the extension fails on it; trusting ``r:*`` would accept any
+    codec the running Python happens to support, which is more than the
+    manifest ever needs. Only the two forms actually published are allowed.
+    """
+    with archive.open("rb") as handle:
+        magic = handle.read(2)
+    if magic == b"\x1f\x8b":
+        return "r:gz"
+    return "r:"
+
+
+def _merge_onto_base(source: Path, base_name: str, destination: Path, spec: dict) -> Path:
+    """Combine a downloaded archive with a force field we already ship.
+
+    An asset with ``merge_base`` is not installed as it arrives. The archive
+    carries a whole force field, most of which duplicates -- and in places
+    silently contradicts -- the one already bundled, so only the part the
+    asset exists for is brought across. See
+    :mod:`gmxbuilder.modules.forcefield.nucleic_merge` for the rules.
+    """
+    import importlib.util
+    import sys
+
+    # This leaf module is standard-library-only. Importing its parent package
+    # executes NumPy-dependent code before the Python environment exists.
+    module_spec = importlib.util.spec_from_file_location(
+        "_gmxbuilder_nucleic_merge", SOURCE / "gmxbuilder/modules/forcefield/nucleic_merge.py"
+    )
+    assert module_spec and module_spec.loader
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_spec.name] = module
+    module_spec.loader.exec_module(module)
+
+    base = FORCEFIELDS / base_name
+    if not base.is_dir():
+        raise RuntimeError(f"merge base {base_name} is not present for {spec['name']}")
+    report = module.merge_nucleic_parameters(base, source, destination)
+    print(report.summary(), flush=True)
+    if not report.ok:
+        raise RuntimeError(f"refusing to install {spec['name']}: " + "; ".join(report.conflicts))
+    return destination
+
+
 def install_one(spec: dict, target_root: Path, *, force: bool = False) -> str:
     target = target_root / str(spec["target"])
     required = [str(name) for name in spec["required_files"]]
@@ -91,7 +139,7 @@ def install_one(spec: dict, target_root: Path, *, force: bool = False) -> str:
             raise RuntimeError(f"SHA-256 verification failed for {spec['name']}")
         extract_root = work / "extract"
         extract_root.mkdir()
-        with tarfile.open(archive, mode="r:gz") as handle:
+        with tarfile.open(archive, mode=_archive_mode(archive)) as handle:
             members = handle.getmembers()
             for member in members:
                 validate_member(member, str(spec["archive_root"]))
@@ -105,18 +153,35 @@ def install_one(spec: dict, target_root: Path, *, force: bool = False) -> str:
             )
             handle.extractall(extract_root, members=members, **extract_kwargs)
         source = extract_root / str(spec["archive_root"])
+        merge_base = str(spec.get("merge_base", ""))
+        if merge_base:
+            source = _merge_onto_base(source, merge_base, work / "merged", spec)
         apply_overlay(source, str(spec.get("overlay", "")))
         if not validate_directory(source, required):
             raise RuntimeError(f"official archive is incomplete for {spec['name']}")
 
         target_root.mkdir(parents=True, exist_ok=True)
-        replacement = target.with_name(target.name + ".installing")
-        if replacement.exists():
-            shutil.rmtree(replacement)
-        shutil.copytree(source, replacement)
-        if target.exists():
-            shutil.rmtree(target)
-        replacement.replace(target)
+        # Stage outside package-data so an interrupted install cannot become a
+        # distributable force-field tree. Keep it on the destination filesystem.
+        staging_parent = ROOT / ".gmxbuilder-installer-tools" / "assets"
+        if not target_root.resolve().is_relative_to(SOURCE.resolve()):
+            staging_parent = target_root.parent / ".gmxbuilder-installer-tools"
+        staging_parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="asset-", dir=staging_parent) as staging:
+            stage = Path(staging)
+            replacement = stage / "replacement"
+            backup = stage / "previous"
+            shutil.copytree(source, replacement)
+            if not validate_directory(replacement, required):
+                raise RuntimeError(f"staged asset is incomplete for {spec['name']}")
+            if target.exists():
+                target.replace(backup)
+            try:
+                replacement.replace(target)
+            except OSError:
+                if backup.exists():
+                    backup.replace(target)
+                raise
     return f"installed: {spec['name']}"
 
 

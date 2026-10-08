@@ -37,19 +37,18 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.tableofcontents import TableOfContents
 
-
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.md"
-DEFAULT_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.pdf"
-ZH_SOURCE = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.md"
-ZH_OUTPUT = ROOT / "docs" / "GMXBUILDER_USER_MANUAL_V1.0.4.zh-CN.pdf"
+DEFAULT_SOURCE = ROOT / "docs" / "USER_MANUAL.md"
+DEFAULT_OUTPUT = ROOT / "docs" / "USER_MANUAL.pdf"
+ZH_SOURCE = ROOT / "docs" / "USER_MANUAL.zh-CN.md"
+ZH_OUTPUT = ROOT / "docs" / "USER_MANUAL.zh-CN.pdf"
 FONT_PATH = Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf")
 LATIN_FONT_PATH = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 TITLE = "GMXBUILDER User Manual"
-DOC_VERSION = "V1.0.4"
+DOC_VERSION = "1.0.0"
 AUTHOR = "Haochen Yang"
-DATE = "2026-08-17"
-SOFTWARE = "GMXBUILDER v0.9.19 or later"
+DATE = "2026-10-08"
+SOFTWARE = "GMXBUILDER 1.0.0"
 LANGUAGE = "en"
 
 
@@ -430,7 +429,7 @@ def parse_markdown(source: str, styles, page_width: float):
         if line.startswith("|") and line.endswith("|"):
             flush_paragraph()
             flush_list()
-            table_rows.append([cell for cell in line.strip("|").split("|")])
+            table_rows.append(line.strip("|").split("|"))
             continue
         flush_table()
 

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.exceptions import ForceFieldError, ModuleConfigError
+from gmxbuilder.core.system import System
 from gmxbuilder.core.topology import Bond
-from gmxbuilder.core.exceptions import ModuleConfigError, ForceFieldError
-from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 from gmxbuilder.modules import register_module
 from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
+from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
 @register_module
@@ -54,20 +54,31 @@ class ForceFieldAssigner(BaseModule):
                         f"Nucleic-acid component {component.name} was not prepared "
                         "by the native polymer backend"
                     )
-        from gmxbuilder.modules.forcefield.lipid_policy import lipid_has_rtp
-        from gmxbuilder.modules.forcefield.lipid_policy import charmm_lipid_capability
+        from gmxbuilder.modules.forcefield.lipid_policy import (
+            charmm_lipid_capability,
+            lipid_has_rtp,
+        )
         from gmxbuilder.modules.membrane.lipids import LipidRegistry
 
         registered_lipids = set(LipidRegistry.list())
         lipid_names = sorted(set(system.structure.resnames) & registered_lipids)
         lipid_ff = str(system.metadata.get("lipid_ff", ff_name)).lower()
-        if lipid_ff == "gaff2":
+        from gmxbuilder.modules.forcefield.lipid_policy import lipid_backend_for
+
+        if lipid_ff == "amber-mixed":
+            from gmxbuilder.modules.forcefield.lipid_policy import amber_mixed_validation_reason
+
+            validation_reason = amber_mixed_validation_reason(lipid_names)
+            if validation_reason:
+                raise ForceFieldError(validation_reason)
+        if lipid_ff in {"gaff2", "amber-mixed"}:
             from gmxbuilder.modules.forcefield.lipid_policy import gaff_lipid_capability
 
             blocked_gaff = [
                 (name, gaff_lipid_capability(name)[1])
                 for name in lipid_names
-                if not gaff_lipid_capability(name)[0]
+                if lipid_backend_for(name, lipid_ff) == "gaff2"
+                and not gaff_lipid_capability(name)[0]
             ]
             if blocked_gaff:
                 raise ForceFieldError("; ".join(reason for _name, reason in blocked_gaff))
@@ -80,22 +91,27 @@ class ForceFieldAssigner(BaseModule):
         ]
         if blocked_charmm:
             raise ForceFieldError("; ".join(reason for _name, reason in blocked_charmm))
-        if lipid_ff == "gaff2" and not str(ff_name).lower().startswith("amber"):
+        if lipid_ff in {"gaff2", "amber-mixed"} and not str(ff_name).lower().startswith("amber"):
             raise ForceFieldError(
                 "GAFF2 lipids require an Amber protein force field because "
                 "their combination and 1-4 scaling rules must match"
             )
-        if lipid_ff == "lipid21":
+        if lipid_ff in {"lipid21", "amber-mixed"}:
             from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
 
-            unsupported = [name for name in lipid_names if not lipid21_capability(name)[0]]
+            unsupported = [
+                name
+                for name in lipid_names
+                if lipid_backend_for(name, lipid_ff) == "lipid21"
+                and not lipid21_capability(name)[0]
+            ]
             if unsupported:
                 raise ForceFieldError(
                     f"Lipids {unsupported} do not have exact bundled Lipid21 parameters"
                 )
             if not str(ff_name).lower().startswith("amber"):
                 raise ForceFieldError("Lipid21 requires an Amber protein force-field family")
-        if missing_rtp and lipid_ff not in {"gaff2", "lipid21"}:
+        if missing_rtp and lipid_ff not in {"gaff2", "lipid21", "amber-mixed"}:
             raise ForceFieldError(
                 f"Lipids {missing_rtp} have no {ff_name} RTP parameters and "
                 f"were not routed through the Amber/GAFF2 policy"
@@ -116,6 +132,20 @@ class ForceFieldAssigner(BaseModule):
             supported, reason, target_distance = disulfide_capability(str(ff_name))
             if not supported or target_distance is None:
                 raise ForceFieldError(f"Saved disulfides are unavailable for {ff_name}: {reason}")
+        endpoint_indices = {}
+        if crosslinks:
+            structure = system.structure
+            for index, (chain, resid, name, residue) in enumerate(
+                zip(
+                    structure.chain_ids,
+                    structure.resids,
+                    structure.atom_names,
+                    structure.resnames,
+                    strict=True,
+                )
+            ):
+                if str(name).strip() == "SG" and str(residue).strip().upper() == "CYX":
+                    endpoint_indices.setdefault((str(chain), int(resid)), []).append(index)
         for record in crosslinks:
             if not isinstance(record, dict) or record.get("type") != "disulfide":
                 raise ForceFieldError("Invalid crosslink metadata in structure checkpoint")
@@ -133,21 +163,7 @@ class ForceFieldAssigner(BaseModule):
                     raise ForceFieldError(
                         f"Disulfide metadata has invalid {label} residue"
                     ) from error
-                matches = [
-                    index
-                    for index, (atom_chain, atom_resid, atom_name, residue_name) in enumerate(
-                        zip(
-                            system.structure.chain_ids,
-                            system.structure.resids,
-                            system.structure.atom_names,
-                            system.structure.resnames,
-                        )
-                    )
-                    if str(atom_chain) == chain
-                    and int(atom_resid) == resid
-                    and str(atom_name).strip() == "SG"
-                    and str(residue_name).strip().upper() == "CYX"
-                ]
+                matches = endpoint_indices.get((chain, resid), [])
                 if len(matches) != 1:
                     raise ForceFieldError(
                         f"Validated disulfide endpoint {chain or '?'}:{resid} no longer "

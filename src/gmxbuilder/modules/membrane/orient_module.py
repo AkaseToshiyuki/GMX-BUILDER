@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.pipeline.base import BaseModule, ModuleResult
+from gmxbuilder.core.system import System
 from gmxbuilder.geometry.transforms import rotation_matrix_from_axis_angle
 from gmxbuilder.modules import register_module
-
+from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 _HYDROPHOBIC_RESIDUES = {
     "ILE",
@@ -112,6 +111,16 @@ def assess_membrane_orientation(
     spans_bilayer = bool(z_values.min() <= -half_thickness and z_values.max() >= half_thickness)
 
     warnings: list[str] = []
+    from gmxbuilder.core.hydrophobicity import WW_INTERFACE
+
+    uncalibrated = sorted({row[1] for row in residue_rows} - WW_INTERFACE.keys())
+    if uncalibrated:
+        warnings.append(
+            "No measured WW interface energy is available for "
+            + ", ".join(uncalibrated)
+            + "; orientation uses unvalidated legacy estimates or zero weights for these residues."
+        )
+
     if n_core < 3:
         warnings.append(
             "Fewer than three residues occupy the hydrophobic core; the protein "
@@ -300,8 +309,8 @@ class OrientModule(BaseModule):
                 # orientation the user sees in the 3D viewer).  Only the axis
                 # rotation is applied — manual z_offset/tilt/phi REPLACE PPM's
                 # computed values rather than adding on top of them.
-                from gmxbuilder.modules.membrane.orient import _find_best_ppm_orientation
                 from gmxbuilder.geometry.transforms import rotation_matrix_from_vectors
+                from gmxbuilder.modules.membrane.orient import _find_best_ppm_orientation
 
                 best_axis, _, _, _, _, _ = _find_best_ppm_orientation(
                     system.structure, half_thickness=half_thickness

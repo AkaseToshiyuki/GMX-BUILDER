@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import json
-import sys
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 import click
 
 from gmxbuilder import __version__
+
+
+class _CLIGroup(click.Group):
+    """Keep numerical modules unloaded until serve has set native budgets."""
+
+    def list_commands(self, ctx):
+        return sorted(set(super().list_commands(ctx)) | {"charmm-compat"})
+
+    def get_command(self, ctx, cmd_name):
+        if cmd_name == "charmm-compat":
+            from gmxbuilder.modules.forcefield.charmm_compat_cli import charmm_compat_cli
+
+            return charmm_compat_cli
+        return super().get_command(ctx, cmd_name)
 
 
 def _prepare_cli_build_config(cfg, output: str | None = None):
@@ -37,7 +51,7 @@ def _prepare_cli_build_config(cfg, output: str | None = None):
     return cfg.model_copy(update={"modules": modules, "output_dir": output_dir})
 
 
-@click.group()
+@click.group(cls=_CLIGroup)
 @click.version_option(version=__version__, prog_name="gmxbuilder")
 def main():
     """GMXBUILDER — Build GROMACS molecular dynamics simulation systems.
@@ -81,6 +95,7 @@ def build(config: str, output: str | None):
     cfg = PipelineConfig.from_yaml(config)
 
     cfg = _prepare_cli_build_config(cfg, output)
+    _require_empty_output(cfg.output_dir)
 
     click.echo(f"Output directory: {cfg.output_dir}")
     click.echo(f"System name: {cfg.system_name}")
@@ -89,9 +104,10 @@ def build(config: str, output: str | None):
     pipeline = Pipeline.create_default()
 
     # Run
-    from gmxbuilder.core.system import System
-    from gmxbuilder.core.structure import Structure
     import numpy as np
+
+    from gmxbuilder.core.structure import Structure
+    from gmxbuilder.core.system import System
 
     # Start with an empty system; forward simparams to metadata
     metadata = {"seed": cfg.seed, "system_name": cfg.system_name}
@@ -114,6 +130,13 @@ def build(config: str, output: str | None):
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
+
+
+def _require_empty_output(directory: str | Path) -> None:
+    """Refuse to destroy unrelated files before starting any construction."""
+    path = Path(directory).expanduser().resolve()
+    if path.exists() and (not path.is_dir() or any(path.iterdir())):
+        raise click.ClickException(f"Output directory is not empty: {path}")
 
 
 def _parse_cg_lipids(values: tuple[str, ...], label: str) -> list[dict]:
@@ -352,8 +375,7 @@ def _run_martini3(
     gpu_ids = gpu_ids.strip()
     use_gpu = bool(gpu_ids)
     output = Path(output_dir).expanduser().resolve()
-    if output.exists() and any(output.iterdir()):
-        raise click.ClickException(f"Output directory is not empty: {output}")
+    _require_empty_output(output)
 
     secondary_mode = "auto" if secondary_structure.strip().lower() == "auto" else "manual"
     mapping_config = {
@@ -405,7 +427,9 @@ def _run_martini3(
     with tempfile.TemporaryDirectory(prefix="gmxbuilder-martini3-") as temporary:
         pipeline_type = "martini3-bilayer" if mode == "bilayer" else "martini3-solvent"
         runner = StepRunner(Path(temporary) / "task", pipeline_type=pipeline_type)
-        checked_step(runner, "input", {"include_protein": include_protein, "environment": mode})
+        checked_step(
+            runner, "input", {"include_protein": include_protein, "environment": mode, "seed": seed}
+        )
         checked_step(runner, "cg_model", {"model": "martini3", "water_model": "W"})
         checked_step(runner, "cg_mapping", mapping_config)
         if orientation_config is not None:
@@ -487,22 +511,100 @@ def info(pdb: str):
 
 
 @main.command()
-def list_lipids():
-    """List available lipid types."""
+@click.option(
+    "--force-field",
+    "force_field_filter",
+    help="Show only lipids this force field can build.",
+)
+@click.option("--unavailable", is_flag=True, help="Show only lipids no force field can build.")
+def list_lipids(force_field_filter: str | None, unavailable: bool):
+    """List available lipid types and the force fields that can build them.
+
+    Registry membership is not the same as buildability: a lipid may be
+    described here and still be refused at force-field selection, usually
+    because its pre-equilibrated conformers failed a production gate. The
+    force-field column states that up front rather than leaving it to be
+    discovered several steps into a workflow.
+    """
+    from gmxbuilder.modules.membrane.equilibrated_library import (
+        EquilibratedLipidLibrary,
+        configured_library_root,
+    )
     from gmxbuilder.modules.membrane.lipids import LipidRegistry
+    from gmxbuilder.modules.membrane.v4_availability import refresh_availability_list
+
+    library = EquilibratedLipidLibrary(roots=[configured_library_root()])
+    library.require_v4 = True
+    ready = {
+        (entry["lipid_name"], entry["lipid_ff"])
+        for entry in refresh_availability_list(library=library, write=False)["entries"]
+        if entry["ready"]
+    }
+
+    def support(name: str) -> tuple[list[str], str]:
+        available = [
+            label
+            for source, label in (
+                ("charmm36", "C36"),
+                ("charmm36m", "C36m"),
+                ("lipid21", "Lipid21"),
+                ("gaff2", "GAFF2"),
+            )
+            if (name, source) in ready
+        ]
+        return available, ", ".join(available) if available else "none"
 
     click.echo("Available lipids:")
+    missing = []
     for name in LipidRegistry.list():
         try:
             lt = LipidRegistry.get(name)
-            click.echo(
-                f"  {lt.name:<6s}  "
-                f"{lt.common_name:<60s}  "
-                f"APL={lt.area_per_lipid:.3f} nm²  "
-                f"charge={lt.charge:+d}"
-            )
         except KeyError:
             click.echo(f"  {name:<6s}  [WARNING: registry inconsistency — skipping]", err=True)
+            continue
+        available, rendered = support(name)
+        if not available:
+            missing.append(lt.name)
+        if unavailable and available:
+            continue
+        if force_field_filter:
+            wanted = force_field_filter.strip().lower()
+            aliases = {
+                "charmm36": "C36",
+                "c36": "C36",
+                "charmm36m": "C36m",
+                "c36m": "C36m",
+                "lipid21": "Lipid21",
+                "amber": "Lipid21",
+                "gaff2": "GAFF2",
+                "gaff": "GAFF2",
+            }
+            label = aliases.get(wanted)
+            if label is None:
+                raise click.ClickException(
+                    f"Unknown force field {force_field_filter!r}. "
+                    "Use charmm36, charmm36m, lipid21, or gaff2."
+                )
+            if label not in available:
+                continue
+        click.echo(
+            f"  {lt.name:<6s}  "
+            f"{lt.common_name:<58s}  "
+            f"APL={lt.area_per_lipid:.3f} nm²  "
+            f"charge={lt.charge:+d}  "
+            f"[{rendered}]"
+        )
+
+    if missing and not force_field_filter:
+        click.echo(
+            f"\n{len(missing)} lipid(s) are described but cannot be built by any bundled "
+            f"force field: {', '.join(missing)}",
+            err=True,
+        )
+        click.echo(
+            "Run `gmxbuilder list-lipids --unavailable` for the list, or select a different lipid.",
+            err=True,
+        )
 
 
 @main.command()
@@ -655,48 +757,11 @@ def lipid_library_build(
     test_mode: bool,
     force: bool,
 ):
-    """Build compatible entries offline using explicit-solvent NPT."""
-    from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
-    from gmxbuilder.modules.membrane.lipid_equilibration import LipidEquilibrationBuilder
-
-    if npt_ps <= 0:
-        raise click.BadParameter("--npt-ps must be positive")
-    library = EquilibratedLipidLibrary()
-    requested = {name.strip().upper() for name in lipids}
-    jobs = library.coverage([force_field])
-    if requested:
-        jobs = [job for job in jobs if job["lipid_name"] in requested]
-        missing = requested - {job["lipid_name"] for job in jobs}
-        if missing:
-            raise click.ClickException(
-                "Incompatible or unknown lipid(s): " + ", ".join(sorted(missing))
-            )
-    if lipid_ff:
-        requested_backend = str(lipid_ff).strip().lower()
-        jobs = [job for job in jobs if str(job["lipid_ff"]).strip().lower() == requested_backend]
-        if not jobs:
-            raise click.ClickException(f"No compatible {requested_backend} lipid-library jobs")
-    if not jobs:
-        raise click.ClickException("No compatible lipid-library jobs")
-    builder = LipidEquilibrationBuilder(library=library)
-    failures = []
-    for number, job in enumerate(jobs, 1):
-        click.echo(f"[{number}/{len(jobs)}] {job['lipid_name']} {job['parameter_family']}")
-        try:
-            output = builder.build(
-                job["lipid_name"],
-                job["force_field"],
-                job["lipid_ff"],
-                npt_ps=npt_ps,
-                test_mode=test_mode,
-                force=force,
-            )
-            click.echo(f"  -> {output}")
-        except Exception as exc:
-            failures.append((job["lipid_name"], str(exc)))
-            click.echo(f"  FAILED: {exc}", err=True)
-    if failures:
-        raise click.ClickException(f"{len(failures)} of {len(jobs)} library builds failed")
+    """Retired V3 writer; production publication requires the V4 replica workflow."""
+    raise click.ClickException(
+        "The V3 single-replica writer is retired. "
+        "Use scripts/build_v4_library.py for V4 sampling, acceptance and publication."
+    )
 
 
 @lipid_library.command("queue")
@@ -711,42 +776,24 @@ def lipid_library_build(
 @click.option("--npt-ps", default=1000.0, type=float, show_default=True)
 @click.option("--log-dir", default="output/lipid-library", show_default=True)
 def lipid_library_queue(force_fields: tuple[str, ...], npt_ps: float, log_dir: str):
-    """Continue missing production entries using two rotating GPUs."""
-    from gmxbuilder.modules.membrane.library_queue import run_library_queue
-
-    try:
-        results = run_library_queue(force_fields, npt_ps=npt_ps, log_dir=log_dir)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    if not results:
-        click.echo("All requested force-field libraries are already validated")
-        return
-    from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
-
-    library = EquilibratedLipidLibrary()
-    failures = []
-    for job, success, path in results:
-        unavailable = (
-            not success
-            and library.inspect_failure(
-                job["lipid_name"],
-                job["force_field"],
-                job["lipid_ff"],
-                min_npt_ps=npt_ps,
-            )
-            is not None
-        )
-        status = "DONE" if success else "UNAVAILABLE" if unavailable else "FAILED"
-        click.echo(f"{status:<6s} {job['force_field']:<15s} {job['lipid_name']:<8s} {path}")
-        if not success and not unavailable:
-            failures.append(job)
-    if failures:
-        raise click.ClickException(f"{len(failures)} of {len(results)} queued builds failed")
+    """Retired V3 queue; V4 is administered by its isolated replica scheduler."""
+    raise click.ClickException(
+        "The V3 queue is retired. Use scripts/build_v4_library.py for the V4 queue."
+    )
 
 
 @main.command()
-@click.option("--host", "-h", default="127.0.0.1", help="Host to bind to")
-@click.option("--port", "-p", default=7788, type=int, help="Port to listen on")
+@click.option("--host", "-h", default="127.0.0.1", show_default=True, help="Host to bind to")
+@click.option("--port", "-p", default=7788, show_default=True, type=int, help="Port to listen on")
+@click.option(
+    "--allow-unsafe-deployment",
+    is_flag=True,
+    envvar="GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT",
+    help=(
+        "Explicitly allow an unauthenticated non-loopback listener. Required for "
+        "every non-loopback address, including the 0.0.0.0 and :: wildcards."
+    ),
+)
 @click.option(
     "--max-builds",
     "-j",
@@ -779,6 +826,7 @@ def lipid_library_queue(force_fields: tuple[str, ...], npt_ps: float, log_dir: s
 def serve(
     host: str,
     port: int,
+    allow_unsafe_deployment: bool,
     reload: bool,
     max_builds: int | None,
     cpu_cores: int | None,
@@ -795,11 +843,15 @@ def serve(
     the worker thread-pool size.
     """
     import os
+
     from gmxbuilder.runtime.hardware import configure_runtime_resources
-    from gmxbuilder.web.security import validate_server_bind
+    from gmxbuilder.web.security import bind_is_loopback, validate_server_bind
 
     try:
-        security = validate_server_bind(host)
+        security = validate_server_bind(
+            host,
+            allow_unsafe_deployment=allow_unsafe_deployment,
+        )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     if reload and security.mode == "public":
@@ -844,6 +896,7 @@ def serve(
     os.environ["GMXBUILDER_MAX_BUILDS"] = str(effective_slots)
 
     import uvicorn
+
     from gmxbuilder.web.server import app as web_app
 
     click.echo(f"\n  GMXBUILDER Web Server v{__version__}")
@@ -852,6 +905,19 @@ def serve(
         f"  Deployment security: {security.mode}; "
         f"authentication={'enabled' if security.authentication_enabled else 'disabled'}"
     )
+    if not bind_is_loopback(host):
+        if security.mode == "public":
+            click.echo(
+                "  Warning: public listeners should remain firewalled behind the configured "
+                "TLS reverse proxy.",
+                err=True,
+            )
+        else:
+            click.echo(
+                "  WARNING: unsafe non-loopback deployment is enabled without end-user "
+                "authentication. Never expose this listener to the Internet.",
+                err=True,
+            )
     click.echo(f"  Concurrent task slots: {effective_slots}  (env GMXBUILDER_MAX_BUILDS)")
     click.echo(
         f"  CPU budget: {hardware.configured_cpu_cores}/"
@@ -876,7 +942,14 @@ def serve(
         click.echo(f"  Warning: {warning}", err=True)
     click.echo("  Press Ctrl+C to stop.\n")
 
-    uvicorn.run(web_app, host=host, port=port, reload=reload, log_level="info")
+    uvicorn.run(
+        web_app,
+        host=host,
+        port=port,
+        reload=reload,
+        log_level="info",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ after the PDB cleaning step removed them.
 from __future__ import annotations
 
 from pathlib import Path
+
 import numpy as np
 
 
@@ -123,7 +124,7 @@ class HDBHydrogenAdder:
         """
         # Build per-residue index map
         residue_atoms: dict[tuple[str, str, int], list[int]] = {}
-        for i, (rn, rid, chain) in enumerate(zip(resnames, resids, chain_ids)):
+        for i, (rn, rid, chain) in enumerate(zip(resnames, resids, chain_ids, strict=True)):
             key = (str(chain), rn, rid)
             if key not in residue_atoms:
                 residue_atoms[key] = []
@@ -204,12 +205,14 @@ class HDBHydrogenAdder:
                 h_positions = _compute_h_positions(
                     ctrl_pos,
                     bonded_positions,
-                    len(missing),
+                    len(rule["h_names"]),
                     atom_name=new_names[ctrl_idx],
                     method=rule.get("method"),
                 )
 
-                for i, hname in enumerate(missing):
+                for i, hname in enumerate(rule["h_names"]):
+                    if hname in existing_h:
+                        continue
                     if i < len(h_positions):
                         new_names.append(hname)
                         new_resnames.append(rn)
@@ -265,6 +268,10 @@ def _compute_h_positions(
 
     Bond length is inferred from the control atom's element if not specified.
     """
+    if method not in {None, 1, 2, 3, 4, 5, 6}:
+        raise ValueError(f"Unsupported HDB geometry method {method}")
+    if n_h not in {1, 2, 3}:
+        raise ValueError(f"Unsupported hydrogen count {n_h}")
     if bond_length is None:
         elem = atom_name.strip()[0] if atom_name else "C"
         bond_length = _H_BOND_LENGTHS.get(elem, 0.109)
@@ -295,7 +302,7 @@ def _compute_h_positions(
             direction = np.cos(tetrahedral) * axis - np.sin(tetrahedral) * reference
             positions = [ctrl_pos + direction * bond_length]
 
-    elif method == 3 and n_h == 2 and len(units) >= 1:
+    elif method == 3 and n_h in (1, 2) and len(units) >= 1:
         # Two planar hydrogens at 120 degrees to i-j, one cis and one trans.
         axis = units[0]
         reference = None
@@ -308,7 +315,7 @@ def _compute_h_positions(
             ]
             positions = [ctrl_pos + direction * bond_length for direction in directions]
 
-    elif method == 4 and n_h in (2, 3) and len(units) >= 1:
+    elif method == 4 and n_h in (1, 2, 3) and len(units) >= 1:
         # Methyl/amine construction around i-j; k sets the trans reference.
         axis = units[0]
         reference = None
@@ -376,7 +383,13 @@ def _compute_h_positions(
         if n_h == 1:
             directions = [main_dir]
         elif n_h == 2:
-            directions = [main_dir + 0.8 * perp1, main_dir - 0.8 * perp1]
+            # HDB method 3 is planar (120 degrees), method 6/default is
+            # tetrahedral. Never silently reuse the old 77-degree geometry.
+            half_angle = np.pi / 3 if method == 3 else np.arccos(-1 / 3) / 2
+            directions = [
+                np.cos(half_angle) * main_dir + sign * np.sin(half_angle) * perp1
+                for sign in (1, -1)
+            ]
         else:
             directions = [
                 main_dir * np.cos(np.radians(109.5))

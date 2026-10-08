@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextvars
+import copy
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -14,14 +17,13 @@ import numpy as np
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.structure import PER_ATOM_FIELDS, Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROReader
 from gmxbuilder.io.pdb import PDBWriter
 from gmxbuilder.runtime.hardware import find_gromacs_executable
 
-
-_SUPPORTED_FORCE_FIELDS = {"charmm36m"}
+_SUPPORTED_FORCE_FIELDS = {"charmm36m", "amber14sb_ol24"}
 
 
 def _force_field_directory(force_field: str) -> Path:
@@ -33,18 +35,7 @@ def _force_field_directory(force_field: str) -> Path:
 
 
 def _subset(structure: Structure, indices: list[int]) -> Structure:
-    return Structure(
-        coordinates=structure.coordinates[indices].copy(),
-        box_vectors=structure.box_vectors.copy(),
-        atom_names=[structure.atom_names[index] for index in indices],
-        resnames=[structure.resnames[index] for index in indices],
-        resids=[structure.resids[index] for index in indices],
-        chain_ids=[structure.chain_ids[index] for index in indices],
-        segids=[structure.segids[index] for index in indices],
-        elements=[structure.elements[index] for index in indices],
-        occupancies=[structure.occupancies[index] for index in indices],
-        tempfactors=[structure.tempfactors[index] for index in indices],
-    )
+    return structure.take(indices)
 
 
 def _section_body(text: str, section: str) -> list[str]:
@@ -227,19 +218,7 @@ def _make_polymer_molecules_contiguous(system: System) -> None:
         raise ModuleConfigError("Could not establish a complete polymer coordinate order")
 
     old_to_new = {old: new for new, old in enumerate(order)}
-    system.structure.coordinates = system.structure.coordinates[order]
-    for name in (
-        "atom_names",
-        "resnames",
-        "resids",
-        "chain_ids",
-        "segids",
-        "elements",
-        "occupancies",
-        "tempfactors",
-    ):
-        values = getattr(system.structure, name)
-        setattr(system.structure, name, [values[index] for index in order])
+    system.structure.select_atoms(order)
     for component in system.components:
         component.atom_indices = np.asarray(
             sorted(old_to_new[int(index)] for index in component.atom_indices),
@@ -252,6 +231,36 @@ def _make_polymer_molecules_contiguous(system: System) -> None:
     # Structure Processing may hold transient index-based terms.  Final
     # force-field assignment reconstructs them from residue/crosslink metadata.
     system.topology = None
+
+
+def _validate_hydroxyl_termini(itp_text: str) -> None:
+    """Verify terminal chemistry independently of force-field menu numbering.
+
+    OL24 encodes 5'/3' hydroxyl ends in RTP variants, without CHARMM TDB
+    patches or terminal menus. Check actual atoms and O-H bonds for both.
+    """
+    atoms = {}
+    for raw in _section_body(itp_text, "atoms"):
+        fields = raw.partition(";")[0].split()
+        if fields and not fields[0].startswith("#"):
+            atoms[int(fields[0])] = (fields[2], fields[4], float(fields[7]))
+    residues = list(dict.fromkeys(value[0] for value in atoms.values()))
+    bonds = set()
+    for raw in _section_body(itp_text, "bonds"):
+        fields = raw.partition(";")[0].split()
+        if len(fields) >= 2 and not fields[0].startswith("#"):
+            bonds.add(frozenset(map(int, fields[:2])))
+    if not residues:
+        raise ModuleConfigError("Native nucleic topology has no residues")
+    if any(residue == residues[0] and name == "P" for residue, name, _mass in atoms.values()):
+        raise ModuleConfigError("Expected a 5' hydroxyl terminus, found terminal phosphate")
+    for resid, oxygen in ((residues[0], "O5'"), (residues[-1], "O3'")):
+        indices = [i for i, (r, name, _mass) in atoms.items() if r == resid and name == oxygen]
+        if len(indices) != 1 or not any(
+            r == resid and 0 < mass < 2 and frozenset((indices[0], i)) in bonds
+            for i, (r, _name, mass) in atoms.items()
+        ):
+            raise ModuleConfigError(f"Native nucleic topology lacks the terminal {oxygen}-H bond")
 
 
 def _prepare_component(
@@ -293,10 +302,13 @@ def _prepare_component(
             "-water",
             "tip3p",
             "-ignh",
-            "-ter",
         ]
+        if force_field == "charmm36m":
+            command.append("-ter")
         env = os.environ.copy()
         env["GMXLIB"] = str(work)
+        for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+            env[name] = "1"
         try:
             completed = subprocess.run(
                 command,
@@ -304,7 +316,7 @@ def _prepare_component(
                 env=env,
                 # The bundled CHARMM36m TDB fixes these menu entries to the
                 # 5TER and 3TER hydroxyl patches; output is verified below.
-                input="4\n6\n",
+                input="4\n6\n" if force_field == "charmm36m" else "",
                 text=True,
                 capture_output=True,
                 timeout=120,
@@ -326,8 +338,9 @@ def _prepare_component(
                 f"Native GROMACS preparation failed for {polymer} chain {chain}: {detail}"
             )
         terminal_report = completed.stdout + "\n" + completed.stderr
-        if not re.search(r"Start terminus .*:\s*5TER", terminal_report) or not re.search(
-            r"End terminus .*:\s*3TER", terminal_report
+        if force_field == "charmm36m" and (
+            not re.search(r"Start terminus .*:\s*5TER", terminal_report)
+            or not re.search(r"End terminus .*:\s*3TER", terminal_report)
         ):
             raise ModuleConfigError(
                 f"Native GROMACS did not confirm 5TER/3TER hydroxyl termini for "
@@ -352,6 +365,7 @@ def _prepare_component(
                 f"Native GROMACS restraints for {polymer} chain {chain} are incomplete"
             )
         itp_text = _sanitize_itp(itp_path.read_text())
+        _validate_hydroxyl_termini(itp_text)
         old_moltype = _molecule_type(itp_text)
         itp_text = _replace_molecule_type(itp_text, old_moltype, canonical_moltype)
         posre_name = f"posre_{canonical_moltype}.itp"
@@ -365,6 +379,7 @@ def _prepare_component(
     processed.elements = [_element(name) for name in processed.atom_names]
     processed.occupancies = [1.0] * processed.num_atoms
     processed.tempfactors = [0.0] * processed.num_atoms
+    _restore_source_identity(source, processed)
     native = {
         "molecule_type": canonical_moltype,
         "itp_filename": f"topol_{canonical_moltype}.itp",
@@ -376,9 +391,46 @@ def _prepare_component(
         "chain_id": chain,
         "atom_count": processed.num_atoms,
         "residue_count": len(set(processed.resids)),
-        "backend": "gromacs-pdb2gmx-charmm36",
+        "backend": f"gromacs-pdb2gmx-{force_field}",
     }
     return processed, native
+
+
+def _restore_source_identity(source: Structure, processed: Structure) -> None:
+    """Map unchanged heavy atoms across pdb2gmx naming/numbering conventions.
+
+    pdb2gmx rebuilds hydrogens with -ignh; they do not inherit deposition IDs.
+    The PDB adapter rounds each coordinate to 0.0001 nm, followed by 0.001 nm
+    GRO output. Require a unique heavy atom within the sum of those rounding
+    bounds, including mmCIF inputs that had more precision than PDB.
+    """
+    from scipy.spatial import cKDTree
+
+    old = [i for i, element in enumerate(source.elements) if element.upper() not in {"H", "D"}]
+    new = [i for i, element in enumerate(processed.elements) if element.upper() not in {"H", "D"}]
+    tree = cKDTree(source.coordinates[old])
+    matches = tree.query_ball_point(
+        processed.coordinates[new], r=np.sqrt(3) * (0.00005 + 0.0005) + 1e-8
+    )
+    assigned = set()
+    for index, candidates in zip(new, matches, strict=True):
+        candidates = [
+            old[i]
+            for i in candidates
+            if source.elements[old[i]].upper() == processed.elements[index].upper()
+        ]
+        if len(candidates) != 1 or candidates[0] in assigned:
+            raise ModuleConfigError(
+                "Native nucleic preparation changed or ambiguously mapped "
+                "a heavy atom; cannot preserve coordinate identity"
+            )
+        original = candidates[0]
+        assigned.add(original)
+        processed.source_ids[index] = source.source_ids[original]
+    if assigned != set(old):
+        raise ModuleConfigError("Native nucleic preparation removed an input heavy atom")
+    processed.source_info = copy.deepcopy(source.source_info)
+    processed.validate_atom_fields()
 
 
 def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
@@ -394,28 +446,36 @@ def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
 
     prepared: dict[int, tuple[Component, Structure, dict]] = {}
     replaced: set[int] = set()
-    for ordinal, component in enumerate(
-        sorted(components, key=lambda item: min(map(int, item.atom_indices))), start=1
-    ):
-        result, native = _prepare_component(system.structure, component, force_field, ordinal)
+    from gmxbuilder.runtime.hardware import current_task_threads
+
+    ordered = sorted(components, key=lambda item: min(map(int, item.atom_indices)))
+    workers = min(len(ordered), current_task_threads(), 4)
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="nucleic") as pool:
+            pending = [
+                pool.submit(
+                    contextvars.copy_context().run,
+                    _prepare_component,
+                    system.structure,
+                    component,
+                    force_field,
+                    ordinal,
+                )
+                for ordinal, component in enumerate(ordered, start=1)
+            ]
+            results = [future.result() for future in pending]
+    else:
+        results = [
+            _prepare_component(system.structure, component, force_field, ordinal)
+            for ordinal, component in enumerate(ordered, start=1)
+        ]
+    for component, (result, native) in zip(ordered, results, strict=True):
         first = min(map(int, component.atom_indices))
         prepared[first] = (component, result, native)
         replaced.update(map(int, component.atom_indices))
 
     coordinates: list[np.ndarray] = []
-    fields = {
-        name: []
-        for name in (
-            "atom_names",
-            "resnames",
-            "resids",
-            "chain_ids",
-            "segids",
-            "elements",
-            "occupancies",
-            "tempfactors",
-        )
-    }
+    fields = {name: [] for name in PER_ATOM_FIELDS}
     old_to_new: dict[int, int] = {}
     new_nucleic: dict[int, Component] = {}
 
@@ -454,6 +514,7 @@ def prepare_nucleic_acids(system: System) -> tuple[System, list[str]]:
     system.structure = Structure(
         coordinates=np.asarray(coordinates, dtype=float),
         box_vectors=system.structure.box_vectors.copy(),
+        source_info=copy.deepcopy(system.structure.source_info),
         **fields,
     )
     rebuilt: list[Component] = []

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 from click.testing import CliRunner
+from fastapi.testclient import TestClient
 
 from gmxbuilder.app import main
 from gmxbuilder.core.component import Component
@@ -18,6 +18,7 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
+from gmxbuilder.io.pdb import PDBParser
 from gmxbuilder.modules.coarse_grained import (
     CGExportModule,
     CGSystemCheckModule,
@@ -37,13 +38,14 @@ from gmxbuilder.modules.coarse_grained.common import (
     normalize_composition,
     write_cg_viewer_pdb,
 )
-from gmxbuilder.modules.coarse_grained.protocol import normalize_protocol
+from gmxbuilder.modules.coarse_grained.protocol import normalize_protocol, write_mdp_files
+from gmxbuilder.modules.export.layout import STRUCTURE_DIR, TOPOLOGY_DIR
 from gmxbuilder.modules.martini3_bilayer.orientation import CGOrientationModule
-from gmxbuilder.io.pdb import PDBParser
 from gmxbuilder.pipeline.step_executor import StepRunner, _get_module, get_pipeline_steps
 from gmxbuilder.web import server
 from gmxbuilder.web.server import app, task_manager
 from gmxbuilder.web.task_types import get_all_task_types, get_task_type
+from tests.prerequisites import requires_gaff_runtime, requires_lfs_assets
 
 
 def test_martini_task_types_and_workflow_modules_are_independent():
@@ -93,6 +95,7 @@ def test_martini_task_types_and_workflow_modules_are_independent():
         assert len(set(classes)) == len(expected)
 
 
+@requires_lfs_assets
 def test_martini_assets_and_public_boundaries_are_explicit():
     verified = verify_assets()
     capabilities = public_capabilities()
@@ -171,6 +174,16 @@ def test_composition_and_protocol_reject_silent_scientific_drift():
     assert normalize_protocol(protocol, has_membrane=True) == protocol
     assert protocol["eq1_timestep_fs"] == 10.0
     assert protocol["production_timestep_fs"] == 20.0
+
+
+def test_cg_velocity_seed_is_explicit_and_persisted(tmp_path):
+    protocol = normalize_protocol({}, has_membrane=True, velocity_seed=123456)
+
+    write_mdp_files(tmp_path, protocol)
+
+    assert protocol["velocity_seed"] == 123456
+    assert "gen-seed = 123456" in (tmp_path / "equilibration_1.mdp").read_text()
+    assert "gen-seed = -1" not in (tmp_path / "equilibration_1.mdp").read_text()
 
 
 def test_exact_lipid_corrections_keep_each_coby_parameter_library():
@@ -544,6 +557,7 @@ def test_cg_orientation_preview_matches_manual_check_coordinates(tmp_path, monke
     )
 
 
+@requires_lfs_assets
 def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkeypatch):
     monkeypatch.setattr(task_manager, "root", tmp_path)
     server._step_runners.clear()
@@ -588,7 +602,20 @@ def test_coarse_grained_capabilities_and_protein_free_input_api(tmp_path, monkey
         before = runner.load_system("cg_system")
         assert before is not None and before.metadata["system_confirmed"] is False
         exact_coordinates = np.array(before.structure.coordinates, copy=True)
-        confirmed = client.post(f"/api/step/{task_id}/cg_system/confirm")
+        retired = client.post(f"/api/step/{task_id}/cg_system/confirm")
+        assert retired.status_code == 410
+        from gmxbuilder.web.server_parts.viewer_data import checkpoint_revision
+
+        revision = checkpoint_revision(tmp_path / task_id / "steps" / "cg_system")
+        stale = client.post(
+            f"/api/task/{task_id}/final-review",
+            json={"source_step": "cg_system", "revision": "stale"},
+        )
+        assert stale.status_code == 409
+        confirmed = client.post(
+            f"/api/task/{task_id}/final-review",
+            json={"source_step": "cg_system", "revision": revision},
+        )
         assert confirmed.status_code == 200, confirmed.text
         after = runner.load_system("cg_system")
         assert after is not None and after.metadata["system_confirmed"] is True
@@ -609,7 +636,7 @@ def test_coarse_grained_frontend_keeps_step_validation_and_viewer_confirmation_s
 
     assert "function buildModuleConfig(focusStep)" in app_source
     assert "buildModuleConfig(stepName)[stepName]" in app_source
-    assert "stepName === 'input' && !isCoarseGrainedWorkflow()" in app_source
+    # Shared input selection is exercised by the browser tests for all three workflows.
     assert "this browser does not provide a working WebGL context" in app_source
     assert "cgConfirmation.disabled = cgViewerRendered !== true" in app_source
     assert "await _doCheckStep(spec[1], spec[2], spec[0]);" in app_source
@@ -630,7 +657,7 @@ def test_coarse_grained_frontend_keeps_step_validation_and_viewer_confirmation_s
     assert "function addCgOrientationPlaneMarkers" in app_source
     assert "Number(halfThicknessNm) * 10.0" in app_source
     assert "stepName !== 'cg_mapping' && stepName !== 'cg_orientation'" in app_source
-    assert "stick: {radius: 0.065" in app_source
+    assert "GMXStyle.apply(viewer, GMXStyle.pdbAtoms(viewer, pdb), {coarse: true})" in app_source
     assert "not an energy-minimized or equilibrated membrane" in template
 
 
@@ -675,6 +702,7 @@ def _write_glycine_hairpin(path: Path) -> None:
     path.write_text("\n".join(lines) + "\nEND\n", encoding="utf-8")
 
 
+@requires_lfs_assets
 def test_real_martinize_and_coby_solution_protein_path(tmp_path):
     """Exercise the previously uncovered atomistic-to-CG protein path."""
     pdb = tmp_path / "gly_hairpin.pdb"
@@ -741,6 +769,8 @@ def test_real_martinize_and_coby_solution_protein_path(tmp_path):
     assert final.component_by_kind(ComponentKind.PROTEIN)
 
 
+@requires_gaff_runtime
+@requires_lfs_assets
 def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
     """Run the pinned builder, not a mock, across the complete pure-bilayer path."""
     runner = StepRunner(tmp_path / "task", pipeline_type="martini3-bilayer")
@@ -789,6 +819,12 @@ def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
     assert quality["solvent_layers"]["water_beads_below"] >= 10
     assert quality["solvent_layers"]["water_beads_above"] >= 10
     assert quality["protein_placement"] is None
+    lipid_indices = final.component_by_kind(ComponentKind.MEMBRANE)[0].atom_indices
+    water_indices = final.component_by_kind(ComponentKind.SOLVENT)[0].atom_indices
+    lipid_z = final.coordinates[lipid_indices, 2]
+    water_z = final.coordinates[water_indices, 2]
+    assert not np.any((water_z >= lipid_z.min()) & (water_z <= lipid_z.max()))
+    assert final.metadata["cg_membrane_water_exclusion"]["water_sites_in_membrane"] == 0
     source_coordinates = np.array(final.structure.coordinates, copy=True)
 
     final.metadata["system_confirmed"] = True
@@ -823,7 +859,20 @@ def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
     assert np.array_equal(exported.structure.coordinates, source_coordinates)
     with zipfile.ZipFile(archive_path) as archive:
         members = set(archive.namelist())
-        assert {"input.gro", "input.pdb", "topol.top", "index.ndx", "run_md.sh"} <= members
+        assert {
+            f"{STRUCTURE_DIR}/input.gro",
+            f"{STRUCTURE_DIR}/input.pdb",
+            f"{STRUCTURE_DIR}/index.ndx",
+            f"{TOPOLOGY_DIR}/topol.top",
+            "run_md.sh",
+        } <= members
+        # The package root carries only what a person opens first.
+        assert {name for name in members if "/" not in name} <= {
+            "README.txt",
+            "manifest.json",
+            "CITATIONS.json",
+            "run_md.sh",
+        }
         assert {
             "mdp/mini.mdp",
             "mdp/equilibration_1.mdp",
@@ -837,6 +886,7 @@ def test_real_coby_mixed_bilayer_exports_exact_neutral_package(tmp_path):
             assert not member.startswith("/") and ".." not in Path(member).parts
 
 
+@requires_lfs_assets
 def test_coarse_grained_cli_builds_dry_bilayer_package(tmp_path, monkeypatch):
     output = tmp_path / "cli-output"
 
@@ -862,8 +912,8 @@ def test_coarse_grained_cli_builds_dry_bilayer_package(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert (output / "input.gro").is_file()
-    assert (output / "topol.top").is_file()
+    assert (output / STRUCTURE_DIR / "input.gro").is_file()
+    assert (output / TOPOLOGY_DIR / "topol.top").is_file()
     assert not (output / "run_md.sh").exists()
     archives = list(output.glob("*.zip"))
     assert len(archives) == 1
@@ -872,3 +922,127 @@ def test_coarse_grained_cli_builds_dry_bilayer_package(tmp_path, monkeypatch):
         assert not any(name.startswith("mdp/") for name in archive.namelist())
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["gromacs_validation"] == "not-requested"
+
+
+@requires_lfs_assets
+def test_real_martinize_and_coby_solution_path_exports_a_package(tmp_path):
+    """The solvent workflow's export half, which nothing else reached.
+
+    ``test_real_martinize_and_coby_solution_protein_path`` stops at the
+    ``cg_system`` checkpoint, so the finalize-and-export half of this pipeline
+    had no end-to-end coverage at all -- the bilayer workflow's export was
+    covered and the solvent workflow's was not.
+    """
+    pdb = tmp_path / "gly_hairpin.pdb"
+    _write_glycine_hairpin(pdb)
+    runner = StepRunner(tmp_path / "task", pipeline_type="martini3-solvent")
+    _run(runner, "input", {"pdb": str(pdb), "include_protein": True, "environment": "solution"})
+    _run(runner, "cg_model", {"model": "martini3", "water_model": "W"})
+    _run(
+        runner,
+        "cg_mapping",
+        {
+            "protein_model": "folded",
+            "secondary_structure": "manual",
+            "secondary_structure_string": "HHHHHHHH",
+            "elastic": True,
+            "elastic_lower": 0.3,
+            "elastic_upper": 0.9,
+        },
+    )
+    _run(runner, "cg_environment", {"seed": 2718})
+    _run(runner, "cg_solvation", {"include_solvent": True, "salt_molarity": 0.15})
+    _run(runner, "cg_system", {"salt_molarity": 0.15, "confirm_system": False})
+
+    system = runner.load_system("cg_system")
+    assert system is not None
+    confirmed = np.array(system.structure.coordinates, copy=True)
+    system.metadata["system_confirmed"] = True
+    system.save_checkpoint(runner.step_dir("cg_system"))
+
+    result = runner.finalize_from_checkpoint(
+        "cg_system",
+        simparams={
+            "temperature": 310,
+            "pressure": 1,
+            "production_ns": 1,
+            "output_interval_ps": 100,
+            "equilibration_1": True,
+            "equilibration_2": True,
+        },
+        export_config={"write_mdp": True, "system_name": "cg_solution"},
+    )
+    assert result["status"] == "ok", result
+
+    archive = Path(result["zip_path"])
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as handle:
+        members = set(handle.namelist())
+    assert {
+        f"{STRUCTURE_DIR}/input.gro",
+        f"{STRUCTURE_DIR}/index.ndx",
+        f"{TOPOLOGY_DIR}/topol.top",
+        "run_md.sh",
+        "manifest.json",
+    } <= members
+    assert any(name.startswith("mdp/") for name in members)
+
+    # Exporting must not move a single bead: the confirmed checkpoint is what
+    # the user reviewed, and the package has to be that system.
+    exported = runner.load_system("cg_system")
+    assert exported is not None
+    assert np.array_equal(exported.structure.coordinates, confirmed)
+
+
+@requires_lfs_assets
+def test_an_elastic_network_that_cannot_form_is_refused_not_silently_omitted(tmp_path):
+    """A two-residue peptide has no non-neighbour pair to restrain.
+
+    Martinize2 returns a protein with no elastic bonds, and shipping that
+    while the user asked for an elastic network would be a different molecule
+    from the one they requested. Found by driving the pipeline by hand.
+    """
+    pdb = tmp_path / "dipeptide.pdb"
+    pdb.write_text(
+        "ATOM      1  N   GLY A   1      20.000  20.000  20.000  1.00  0.00           N\n"
+        "ATOM      2  CA  GLY A   1      21.458  20.000  20.000  1.00  0.00           C\n"
+        "ATOM      3  C   GLY A   1      22.009  21.420  20.000  1.00  0.00           C\n"
+        "ATOM      4  O   GLY A   1      21.209  22.354  20.000  1.00  0.00           O\n"
+        "ATOM      5  N   GLY A   2      23.370  21.580  20.000  1.00  0.00           N\n"
+        "ATOM      6  CA  GLY A   2      24.000  22.890  20.000  1.00  0.00           C\n"
+        "ATOM      7  C   GLY A   2      25.510  22.800  20.100  1.00  0.00           C\n"
+        "ATOM      8  O   GLY A   2      26.100  23.860  20.300  1.00  0.00           O\n"
+        "TER\nEND\n"
+    )
+    runner = StepRunner(tmp_path / "task", pipeline_type="martini3-solvent")
+    _run(runner, "input", {"pdb": str(pdb), "include_protein": True, "environment": "solution"})
+    _run(runner, "cg_model", {"model": "martini3", "water_model": "W"})
+
+    refused = runner.run_step(
+        "cg_mapping",
+        {
+            "protein_model": "folded",
+            "secondary_structure": "manual",
+            "secondary_structure_string": "HH",
+            "elastic": True,
+            "elastic_lower": 0.3,
+            "elastic_upper": 0.9,
+        },
+    )
+    assert refused["status"] == "error"
+    assert "no elastic bonds" in refused["error"]
+
+    # And the same protein maps fine once the impossible request is dropped.
+    _run(
+        runner,
+        "cg_mapping",
+        {
+            "protein_model": "folded",
+            "secondary_structure": "manual",
+            "secondary_structure_string": "HH",
+            "elastic": False,
+        },
+    )
+    mapped = runner.load_system("cg_mapping")
+    assert mapped is not None
+    assert mapped.metadata["cg_mapping"]["elastic_network"] is False

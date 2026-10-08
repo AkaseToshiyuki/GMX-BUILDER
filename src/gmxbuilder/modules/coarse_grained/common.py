@@ -10,8 +10,8 @@ import signal
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
@@ -24,7 +24,6 @@ from gmxbuilder.modules.coarse_grained.assets import (
     lipid_viewer_topologies,
     load_manifest,
 )
-
 
 STANDARD_PROTEIN_RESIDUES = {
     "ALA",

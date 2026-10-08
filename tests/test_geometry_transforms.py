@@ -5,6 +5,7 @@ import pytest
 from scipy.spatial import cKDTree
 
 from gmxbuilder.geometry.align import compute_principal_axes
+from gmxbuilder.geometry.grid import hexagonal_grid, rectangular_grid
 from gmxbuilder.geometry.periodic import wrap_periodic_coordinates
 from gmxbuilder.geometry.transforms import (
     rotation_matrix_from_axis_angle,
@@ -80,3 +81,26 @@ def test_periodic_wrap_never_rounds_tiny_negative_values_to_box_length():
     # SciPy is the downstream authority that rejected the former DAPE input.
     tree = cKDTree(wrapped, boxsize=box)
     assert tree.n == 2
+
+
+@pytest.mark.parametrize(
+    "factory,args",
+    [
+        (hexagonal_grid, ((float("inf"), 1.0), 0.5)),
+        (hexagonal_grid, ((1.0, 1.0), 0.0)),
+        (rectangular_grid, ((1.0, -1.0), (0.5, 0.5))),
+        (rectangular_grid, ((1.0, 1.0), (float("nan"), 0.5))),
+    ],
+)
+def test_grid_generators_reject_nonfinite_or_nonpositive_geometry(factory, args):
+    with pytest.raises(ValueError):
+        factory(*args)
+
+
+def test_grid_generators_fail_before_exceeding_candidate_budget():
+    with pytest.raises(ValueError, match="point budget"):
+        hexagonal_grid((100.0, 100.0), 0.01, max_points=10_000)
+    with pytest.raises(ValueError, match="point budget"):
+        rectangular_grid((100.0, 100.0), (0.01, 0.01), max_points=10_000)
+
+    assert hexagonal_grid((2.0, 2.0), 1.0, max_points=100).shape[1] == 2

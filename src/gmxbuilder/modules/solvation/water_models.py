@@ -5,6 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+WATER_COMPATIBILITY_POLICY_VERSION = "1.0"
+
+
+@dataclass(frozen=True)
+class WaterModelCompatibility:
+    """Versioned scientific status for one force-field/water pair."""
+
+    status: str
+    reason: str
+    policy_version: str = WATER_COMPATIBILITY_POLICY_VERSION
+
 
 @dataclass
 class WaterModel:
@@ -99,7 +110,12 @@ class WaterRegistry:
 
 
 def water_model_supported(force_field: str, water_model: str) -> bool:
-    """Return whether the bundled force field contains this water topology."""
+    """Return whether the bundled force field contains this water topology.
+
+    This is a technical asset check, not a claim that the combination is a
+    scientifically validated default.  Use :func:`water_model_compatibility`
+    for the selection policy.
+    """
     import gmxbuilder.data.forcefields as forcefield_data
 
     base = Path(forcefield_data.__path__[0])
@@ -111,7 +127,72 @@ def water_model_supported(force_field: str, water_model: str) -> bool:
     return False
 
 
+_REGRESSION_SUPPORTED_NONDEFAULTS = frozenset(
+    {
+        # Exercised as a complete solvated CHARMM36m membrane through grompp
+        # and a minimization mdrun.  It remains non-default because that test
+        # does not establish transferable thermodynamic accuracy.
+        ("charmm36m", "spce"),
+    }
+)
+
+
+def water_model_compatibility(force_field: str, water_model: str) -> WaterModelCompatibility:
+    """Return the conservative, versioned compatibility classification.
+
+    Status values are ``recommended``, ``supported``, ``expert-unvalidated``,
+    and ``prohibited``.  A readable topology alone is never promoted above
+    ``expert-unvalidated``.
+    """
+    ff_name = force_field.strip().lower()
+    model_name = water_model.strip().lower()
+    try:
+        WaterRegistry.get(model_name)
+    except KeyError:
+        return WaterModelCompatibility(
+            "prohibited",
+            f"Water model {model_name!r} is not implemented by GMXBUILDER",
+        )
+    if not water_model_supported(ff_name, model_name):
+        return WaterModelCompatibility(
+            "prohibited",
+            f"Water topology {model_name!r} is not bundled for force field {ff_name!r}",
+        )
+
+    from gmxbuilder.modules.forcefield.catalog import get_force_field_profile
+
+    try:
+        profile = get_force_field_profile(ff_name)
+    except ValueError:
+        return WaterModelCompatibility(
+            "expert-unvalidated",
+            "The topology is present, but this force-field release has no versioned "
+            "GMXBUILDER water-model profile",
+        )
+    if model_name == profile.default_water:
+        return WaterModelCompatibility(
+            "recommended",
+            f"Default water model for {profile.label}",
+        )
+    if (ff_name, model_name) in _REGRESSION_SUPPORTED_NONDEFAULTS:
+        return WaterModelCompatibility(
+            "supported",
+            "Non-default combination covered by complete GMXBUILDER topology, "
+            "grompp, and minimization regression tests",
+        )
+    return WaterModelCompatibility(
+        "expert-unvalidated",
+        f"The {model_name} topology is bundled, but this combination is not in "
+        f"GMXBUILDER water compatibility policy {WATER_COMPATIBILITY_POLICY_VERSION}",
+    )
+
+
 def supported_force_fields(water_model: str) -> list[str]:
+    """Return force fields that can advertise this model without expert opt-in."""
     from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
 
-    return [name for name in ForceFieldRegistry.list() if water_model_supported(name, water_model)]
+    return [
+        name
+        for name in ForceFieldRegistry.list()
+        if water_model_compatibility(name, water_model).status in {"recommended", "supported"}
+    ]

@@ -7,7 +7,14 @@ import hashlib
 from pathlib import Path
 
 import pytest
-import tomllib
+
+# tomllib joined the standard library in 3.11, and this project supports 3.10.
+# An unconditional import here failed collection for the whole module, taking
+# every unrelated test in it down on the oldest supported interpreter.
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    tomllib = None
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -59,14 +66,51 @@ def _request(*, peer: str, forwarded: str = "", proto: str = "http") -> Request:
     )
 
 
-def test_nonloopback_bind_requires_explicit_mode(monkeypatch):
+def test_nonloopback_bind_requires_explicit_unsafe_opt_in(monkeypatch):
     monkeypatch.delenv("GMXBUILDER_DEPLOYMENT_MODE", raising=False)
-    with pytest.raises(ValueError, match="Non-loopback"):
-        validate_server_bind("0.0.0.0")
+    monkeypatch.delenv("GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT", raising=False)
+    with pytest.raises(ValueError, match="unauthenticated non-loopback"):
+        validate_server_bind("192.0.2.10")
     validate_server_bind("127.0.0.1")
 
+    # A wildcard address is the broadest exposure, so it does not authorize
+    # itself; it needs the same opt-in as any other non-loopback address.
+    for wildcard in ("0.0.0.0", "::"):
+        with pytest.raises(ValueError, match="unauthenticated non-loopback"):
+            validate_server_bind(wildcard)
+        assert validate_server_bind(wildcard, allow_unsafe_deployment=True).allow_unsafe_deployment
+
+    assert (
+        validate_server_bind("192.0.2.10", allow_unsafe_deployment=True).allow_unsafe_deployment
+        is True
+    )
+
+    monkeypatch.setenv("GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT", "1")
+    assert validate_server_bind("192.0.2.10").mode == "local"
+
+
+def test_trusted_lan_mode_is_not_a_way_around_the_unsafe_opt_in(monkeypatch):
+    monkeypatch.delenv("GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT", raising=False)
     monkeypatch.setenv("GMXBUILDER_DEPLOYMENT_MODE", "trusted-lan")
-    assert validate_server_bind("0.0.0.0").mode == "trusted-lan"
+    monkeypatch.delenv("GMXBUILDER_AUTH_USER", raising=False)
+    monkeypatch.delenv("GMXBUILDER_AUTH_PASSWORD", raising=False)
+    monkeypatch.delenv("GMXBUILDER_ACCESS_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="unauthenticated non-loopback"):
+        validate_server_bind("0.0.0.0")
+    assert validate_server_bind("0.0.0.0", allow_unsafe_deployment=True).mode == "trusted-lan"
+
+
+def test_configured_authentication_removes_the_need_for_the_unsafe_opt_in(monkeypatch):
+    monkeypatch.delenv("GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT", raising=False)
+    monkeypatch.setenv("GMXBUILDER_DEPLOYMENT_MODE", "trusted-lan")
+    monkeypatch.setenv("GMXBUILDER_ACCESS_TOKEN", "x" * 32)
+    assert validate_server_bind("0.0.0.0").authentication_enabled is True
+
+
+def test_invalid_unsafe_deployment_environment_value_is_rejected(monkeypatch):
+    monkeypatch.setenv("GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT", "sometimes")
+    with pytest.raises(ValueError, match="GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT"):
+        validate_server_bind("127.0.0.1")
 
 
 def test_public_mode_requires_complete_auth_tls_proxy_and_https_origins(monkeypatch):
@@ -79,6 +123,8 @@ def test_public_mode_requires_complete_auth_tls_proxy_and_https_origins(monkeypa
     assert any("requires a Basic password" in error for error in config.errors)
     assert any("TRUSTED_PROXIES" in error for error in config.errors)
     assert any("https://" in error for error in config.errors)
+    with pytest.raises(ValueError, match="public mode requires"):
+        validate_server_bind("0.0.0.0", allow_unsafe_deployment=True)
 
 
 def test_liveness_survives_invalid_public_security_configuration(monkeypatch):
@@ -200,10 +246,14 @@ def test_template_has_no_runtime_cdn_dependency_or_inline_script_handler():
     assert "https://3Dmol.org" not in template
     assert "https://unpkg.com" not in template
     assert " onerror=" not in template
-    assert "/static/vendor/3dmol-2.5.5/3Dmol-min.js" in template
-    assert "/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js" in template
+    assets = (ROOT / "src/gmxbuilder/web/static/assets.js").read_text()
+    assert "/static/assets.js?v={{ version }}" in template
+    assert "https://" not in assets
+    assert "/static/vendor/3dmol-2.5.5/3Dmol-min.js" in assets
+    assert "/static/vendor/smiles-drawer-2.0.3/smiles-drawer.min.js" in assets
 
 
+@pytest.mark.skipif(tomllib is None, reason="tomllib requires Python 3.11 or newer")
 def test_uv_lock_pins_registry_and_direct_url_artifacts():
     lock = tomllib.loads((ROOT / "uv.lock").read_text())
     packages = lock["package"]
@@ -219,6 +269,7 @@ def test_uv_lock_pins_registry_and_direct_url_artifacts():
     assert pdbfixer["sdist"]["hash"].startswith("sha256:")
 
 
+@pytest.mark.skipif(tomllib is None, reason="tomllib requires Python 3.11 or newer")
 def test_distribution_excludes_runtime_outputs_and_bytecode():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     excluded = project["tool"]["setuptools"]["exclude-package-data"]["gmxbuilder"]
@@ -243,4 +294,73 @@ def test_local_installer_emits_hardened_service_and_safe_bind_default():
     ):
         assert directive in installer
     assert "GMXBUILDER_DEPLOYMENT_MODE" in installer
+    assert "GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT" in installer
+    assert "--allow-unsafe-deployment" in installer
     assert '"$UV_BIN" sync' in installer and "--frozen" in installer
+
+    nginx = (ROOT / "deploy/nginx-gmxbuilder.conf.example").read_text()
+    assert "access_log off;" in nginx
+
+
+def _unauthenticated_local_environment(monkeypatch, tmp_path):
+    """The default local deployment: no credentials, loopback, no CORS override."""
+    for name in (
+        "GMXBUILDER_DEPLOYMENT_MODE",
+        "GMXBUILDER_AUTH_USER",
+        "GMXBUILDER_AUTH_PASSWORD",
+        "GMXBUILDER_ACCESS_TOKEN",
+        "GMXBUILDER_CORS_ORIGINS",
+        "GMXBUILDER_ALLOW_UNSAFE_DEPLOYMENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GMXBUILDER_RATE_LIMIT_DB", str(tmp_path / "rate.sqlite3"))
+    monkeypatch.setattr(server, "task_manager", TaskManager(tmp_path / "tasks"))
+
+
+def test_cross_site_write_is_refused_without_authentication(monkeypatch, tmp_path):
+    """A page on another origin must not be able to drive the local instance.
+
+    Authentication is not what makes a cross-site write dangerous; reachability
+    is. Request.json() also ignores Content-Type, so a cross-site request needs
+    no preflight and would otherwise be processed normally.
+    """
+    _unauthenticated_local_environment(monkeypatch, tmp_path)
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/tasks",
+            headers={"Origin": "https://evil.example", "Content-Type": "text/plain"},
+            content='{"task_type":"pure-membrane"}',
+        )
+        assert response.status_code == 403
+        assert response.json()["error"] == "Request Origin is not allowed"
+
+
+def test_non_browser_clients_without_origin_are_unaffected(monkeypatch, tmp_path):
+    _unauthenticated_local_environment(monkeypatch, tmp_path)
+    with TestClient(server.app) as client:
+        response = client.post("/api/tasks", json={"task_type": "pure-membrane"})
+        assert response.status_code == 200
+
+
+def test_same_origin_write_is_allowed_on_a_non_default_port(monkeypatch, tmp_path):
+    """The allowlist hardcodes the default port; the real bind port may differ.
+
+    Nothing derives GMXBUILDER_CORS_ORIGINS from the port the server was
+    actually started on, so the check has to accept the listener's own origin
+    or every non-default-port deployment would reject its own browser client.
+    """
+    _unauthenticated_local_environment(monkeypatch, tmp_path)
+    with TestClient(server.app, base_url="http://127.0.0.1:9999") as client:
+        response = client.post(
+            "/api/tasks",
+            headers={"Origin": "http://127.0.0.1:9999"},
+            json={"task_type": "pure-membrane"},
+        )
+        assert response.status_code == 200
+
+        response = client.post(
+            "/api/tasks",
+            headers={"Origin": "http://127.0.0.1:4321"},
+            json={"task_type": "pure-membrane"},
+        )
+        assert response.status_code == 403

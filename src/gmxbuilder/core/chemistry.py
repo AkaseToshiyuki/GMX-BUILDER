@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 PROTEIN_RESNAMES = frozenset(
     {
         "ALA",

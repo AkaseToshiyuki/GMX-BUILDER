@@ -21,11 +21,10 @@ Naming convention: first letter = tail-1 source, second letter = tail-2 source.
 from __future__ import annotations
 
 import re
-
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Iterator
 
 
 @dataclass
@@ -178,7 +177,7 @@ class LipidRegistry:
             0.28,
             0,
             621.83,
-            "CCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCC",
+            "CCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCC",
         ),
         LipidTemplate(
             "DMPC",
@@ -192,7 +191,7 @@ class LipidRegistry:
             0.28,
             0,
             677.93,
-            "CCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "DPPC",
@@ -206,7 +205,7 @@ class LipidRegistry:
             0.30,
             0,
             734.04,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "DSPC",
@@ -220,7 +219,7 @@ class LipidRegistry:
             0.30,
             0,
             790.15,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "POPC",
@@ -234,7 +233,7 @@ class LipidRegistry:
             0.30,
             0,
             760.08,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         LipidTemplate(
             "SOPC",
@@ -248,7 +247,7 @@ class LipidRegistry:
             0.30,
             0,
             788.14,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         LipidTemplate(
             "DOPC",
@@ -262,7 +261,7 @@ class LipidRegistry:
             0.30,
             0,
             786.11,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC/C=C\CCCCCCCC",
         ),
         LipidTemplate(
             "PAPC",
@@ -276,7 +275,7 @@ class LipidRegistry:
             0.30,
             0,
             782.10,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         # ================================================================
         # PE — Phosphatidylethanolamine (zwitterionic)
@@ -293,7 +292,7 @@ class LipidRegistry:
             0.28,
             0,
             635.85,
-            "CCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "DPPE",
@@ -307,7 +306,7 @@ class LipidRegistry:
             0.28,
             0,
             691.96,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "POPE",
@@ -321,7 +320,7 @@ class LipidRegistry:
             0.28,
             0,
             718.01,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OCC[NH3+]",
         ),
         LipidTemplate(
             "DOPE",
@@ -335,7 +334,7 @@ class LipidRegistry:
             0.28,
             0,
             744.03,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC/C=C\CCCCCCCC",
         ),
         LipidTemplate(
             "PAPE",
@@ -349,7 +348,7 @@ class LipidRegistry:
             0.28,
             0,
             740.02,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OCC[NH3+]",
         ),
         LipidTemplate(
             "SOPE",
@@ -363,7 +362,7 @@ class LipidRegistry:
             0.28,
             0,
             746.05,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OCC[NH3+]",
         ),
         # ================================================================
         # PG — Phosphatidylglycerol (anionic, -1)
@@ -380,7 +379,7 @@ class LipidRegistry:
             0.30,
             -1,
             665.87,
-            "CCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@@H](O)CO)OC(=O)CCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "DPPG",
@@ -394,7 +393,7 @@ class LipidRegistry:
             0.30,
             -1,
             721.97,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@@H](O)CO)OC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "POPG",
@@ -407,8 +406,8 @@ class LipidRegistry:
             3.7,
             0.30,
             -1,
-            747.00,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCCCC=CCCCCCCCC",
+            748.012,
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@@H](O)CO",
         ),
         LipidTemplate(
             "DOPG",
@@ -421,8 +420,8 @@ class LipidRegistry:
             3.5,
             0.30,
             -1,
-            773.04,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCCCC=CCCCCCCCC",
+            774.05,
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@@H](O)CO)OC(=O)CCCCCCC/C=C\\CCCCCCCC",
         ),
         LipidTemplate(
             "SOPG",
@@ -436,7 +435,7 @@ class LipidRegistry:
             0.30,
             -1,
             776.07,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@@H](O)CO",
         ),
         # ================================================================
         # PS — Phosphatidylserine (anionic, -1)
@@ -453,7 +452,7 @@ class LipidRegistry:
             0.30,
             -1,
             734.97,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC([NH3+])C(=O)[O-])OC(=O)CCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@H]([NH3+])C(=O)[O-])OC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "POPS",
@@ -467,7 +466,7 @@ class LipidRegistry:
             0.30,
             -1,
             761.00,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC([NH3+])C(=O)[O-])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@H]([NH3+])C(=O)[O-]",
         ),
         LipidTemplate(
             "DOPS",
@@ -481,7 +480,7 @@ class LipidRegistry:
             0.30,
             -1,
             787.04,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC([NH3+])C(=O)[O-])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@H]([NH3+])C(=O)[O-])OC(=O)CCCCCCC/C=C\CCCCCCCC",
         ),
         LipidTemplate(
             "SOPS",
@@ -495,7 +494,7 @@ class LipidRegistry:
             0.30,
             -1,
             789.05,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC([NH3+])C(=O)[O-])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@H]([NH3+])C(=O)[O-]",
         ),
         # ================================================================
         # PA — Phosphatidic Acid (anionic, -1 at pH 7)
@@ -512,7 +511,7 @@ class LipidRegistry:
             0.28,
             -1,
             647.89,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])O)OC(=O)CCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])O)OC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "POPA",
@@ -526,7 +525,7 @@ class LipidRegistry:
             0.28,
             -1,
             673.93,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])O)OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])O",
         ),
         LipidTemplate(
             "DOPA",
@@ -540,7 +539,7 @@ class LipidRegistry:
             0.28,
             -1,
             699.97,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])O)OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])O)OC(=O)CCCCCCC/C=C\CCCCCCCC",
         ),
         # ================================================================
         # PI — Phosphatidylinositol (anionic, -1)
@@ -557,7 +556,7 @@ class LipidRegistry:
             0.32,
             -1,
             836.07,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(O)C(O)C(O)C(O)C1O)OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])O[C@@H]1[C@H](O)[C@H](O)[C@@H](O)[C@H](O)[C@H]1O)OC(=O)CCCCCCC/C=C\CCCCCCCC",
         ),
         LipidTemplate(
             "SOPI",
@@ -571,7 +570,8 @@ class LipidRegistry:
             0.32,
             -1,
             864.13,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(O)C(O)C(O)C(O)C1O)OC(=O)CCCCCCC=CCCCCCCCC",
+            # Exact sn-chain/headgroup identity follows the named native CHARMM residue.
+            "CCCCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])O[C@@H]1[C@H](O)[C@H](O)[C@@H](O)[C@H](O)[C@H]1O)OC(=O)CCCCCCC/C=C\\CCCCCCCC",
         ),
         LipidTemplate(
             "PIPI",
@@ -585,7 +585,7 @@ class LipidRegistry:
             0.32,
             -1,
             858.08,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(O)C(O)C(O)C(O)C1O)OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])O[C@@H]1[C@H](O)[C@H](O)[C@@H](O)[C@H](O)[C@H]1O",
         ),
         # ================================================================
         # SM — Sphingomyelin (zwitterionic)
@@ -602,7 +602,7 @@ class LipidRegistry:
             0.30,
             0,
             703.03,
-            "CCCCCCCCCCCCCCCC(=O)NC(COP(=O)([O-])OCC[N+](C)(C)C)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](COP(=O)([O-])OCC[N+](C)(C)C)NC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "SSM",
@@ -616,7 +616,7 @@ class LipidRegistry:
             0.30,
             0,
             731.08,
-            "CCCCCCCCCCCCCCCCCC(=O)NC(COP(=O)([O-])OCC[N+](C)(C)C)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](COP(=O)([O-])OCC[N+](C)(C)C)NC(=O)CCCCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "BSM",
@@ -630,7 +630,7 @@ class LipidRegistry:
             0.30,
             0,
             815.24,
-            "CCCCCCCCCCCCCCCCCCCCCCCC(=O)NC(COP(=O)([O-])OCC[N+](C)(C)C)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](COP(=O)([O-])OCC[N+](C)(C)C)NC(=O)CCCCCCCCCCCCCCCCCCCCCCC",
         ),
         # ================================================================
         # ST — Sterols
@@ -647,7 +647,7 @@ class LipidRegistry:
             0.25,
             0,
             386.65,
-            "CC(C)CCCC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "CC(C)CCC[C@@H](C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "ERG",
@@ -661,7 +661,8 @@ class LipidRegistry:
             0.25,
             0,
             396.65,
-            "CC(C)C(C)C=CC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            # Natural ergosterol, PubChem CID 444679: preserve the C20 stereoisomer.
+            "C[C@H](/C=C/[C@H](C)C(C)C)[C@H]1CC[C@H]2C3=CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         # ================================================================
         # PIP — Phosphoinositides (highly anionic)
@@ -678,7 +679,7 @@ class LipidRegistry:
             0.34,
             -4,
             993.01,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(OP(=O)([O-])[O-])C(OP(=O)([O-])O)C(O)C(O)C1O)OC(=O)CCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])O[C@@H]1[C@H](O)[C@H](O)[C@@H](OP(=O)([O-])O)[C@H](OP(=O)([O-])[O-])[C@H]1O",
         ),
         LipidTemplate(
             "POP3",
@@ -692,7 +693,8 @@ class LipidRegistry:
             0.34,
             -6,
             1070.97,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(OP(=O)([O-])[O-])C(OP(=O)([O-])[O-])C(OP(=O)([O-])O)C(O)C1O)OC(=O)CCCCCCC=CCCCCCCCC",
+            # Exact sn-chain/headgroup identity follows the named native CHARMM residue.
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])O[C@H]1[C@H](O)[C@@H](OP(=O)([O-])[O-])[C@H](OP(=O)([O-])[O-])[C@@H](OP(=O)([O-])O)[C@H]1O",
         ),
         # ================================================================
         # Mixed / Special
@@ -705,11 +707,17 @@ class LipidRegistry:
             (22, 1),
             (22, 1),
             0.780,
-            3.4,
+            # 3.4 nm was almost certainly DEPC's hydrophobic core thickness
+            # rather than its head-to-head distance: it sat below DOPC's 3.6 nm
+            # although a 22:1 chain is four carbons longer per tail than 18:1,
+            # and the rest of the symmetric PC series rises monotonically
+            # (12:0 3.00, 14:0 3.30, 16:0 3.90, 18:0 4.20). A measured 50 ns
+            # GAFF2 bilayer gives 5.12 nm.
+            4.4,
             0.32,
             0,
             898.35,
-            "CCCCCCCCC=CCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCC=CCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCC/C=C\CCCCCCCC",
         ),
         LipidTemplate(
             "PAPG",
@@ -723,7 +731,7 @@ class LipidRegistry:
             0.30,
             -1,
             770.02,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            "CCCCC/C=C\\C/C=C\\C/C=C\\C/C=C\\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@@H](O)CO",
         ),
         LipidTemplate(
             "TOCL",
@@ -737,7 +745,7 @@ class LipidRegistry:
             0.36,
             -2,
             1456.01,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(COP(=O)([O-])O)OC(=O)CCCCCCC=CCCCCCCCC)OC(=O)CCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC(O)COP(=O)([O-])OC[C@@H](COC(=O)CCCCCCC/C=C\\CCCCCCCC)OC(=O)CCCCCCC/C=C\\CCCCCCCC)OC(=O)CCCCCCC/C=C\\CCCCCCCC",
         ),
         # ================================================================
         # More PC variants
@@ -754,7 +762,7 @@ class LipidRegistry:
             0.30,
             0,
             782.09,
-            "CCCCCC=CCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCC/C=C\C/C=C\CCCCC",
         ),
         LipidTemplate(
             "DAPC",
@@ -768,7 +776,7 @@ class LipidRegistry:
             0.30,
             0,
             830.15,
-            "CCCCCC=CCC=CCC=CCC=CCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCC=CCC=CCC=CCC=CCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCC/C=C\C/C=C\C/C=C\C/C=C\CCCCC",
         ),
         LipidTemplate(
             "PUPC",
@@ -782,7 +790,7 @@ class LipidRegistry:
             0.30,
             0,
             806.12,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CC=CCC=CCC=CCC=CCC=CCC=CCC",
+            r"CC/C=C\C/C=C\C/C=C\C/C=C\C/C=C\C/C=C\CCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         LipidTemplate(
             "SAPC",
@@ -796,7 +804,7 @@ class LipidRegistry:
             0.30,
             0,
             810.15,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         LipidTemplate(
             "SMpC",
@@ -810,7 +818,7 @@ class LipidRegistry:
             0.30,
             0,
             734.04,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "PMpC",
@@ -824,7 +832,7 @@ class LipidRegistry:
             0.30,
             0,
             705.99,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCCCCCCC",
         ),
         # ================================================================
         # More PE variants
@@ -841,7 +849,7 @@ class LipidRegistry:
             0.28,
             0,
             740.01,
-            "CCCCCC=CCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC/C=C\C/C=C\CCCCC",
         ),
         LipidTemplate(
             "DAPE",
@@ -855,7 +863,7 @@ class LipidRegistry:
             0.28,
             0,
             788.07,
-            "CCCCCC=CCC=CCC=CCC=CCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCC=CCC=CCC=CCC=CCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)OC[C@H](COP(=O)([O-])OCC[NH3+])OC(=O)CCC/C=C\C/C=C\C/C=C\C/C=C\CCCCC",
         ),
         LipidTemplate(
             "SAPE",
@@ -869,7 +877,7 @@ class LipidRegistry:
             0.28,
             0,
             768.07,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OCC[NH3+]",
         ),
         LipidTemplate(
             "DPePE",
@@ -883,7 +891,7 @@ class LipidRegistry:
             0.28,
             0,
             687.93,
-            "CCCCCCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC=CCCCCCCCC",
+            r"CCCCCC/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCC/C=C\CCCCCC",
         ),
         # ================================================================
         # More PG variants
@@ -899,8 +907,8 @@ class LipidRegistry:
             3.6,
             0.30,
             -1,
-            769.00,
-            "CCCCCC=CCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCCCC=CCC=CCCCCC",
+            770.018,
+            "CCCCC/C=C\\C/C=C\\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@@H](O)CO)OC(=O)CCCCCCC/C=C\\C/C=C\\CCCCC",
         ),
         LipidTemplate(
             "DAPG",
@@ -913,8 +921,8 @@ class LipidRegistry:
             3.4,
             0.30,
             -1,
-            817.04,
-            "CCCCCC=CCC=CCC=CCC=CCCCCC(=O)OCC(COP(=O)([O-])OCC(O)CO)OC(=O)CCCCC=CCC=CCC=CCC=CCCCC",
+            818.062,
+            "CCCCC/C=C\\C/C=C\\C/C=C\\C/C=C\\CCCC(=O)OC[C@H](COP(=O)([O-])OC[C@@H](O)CO)OC(=O)CCC/C=C\\C/C=C\\C/C=C\\C/C=C\\CCCCC",
         ),
         # ================================================================
         # More PS variants
@@ -931,7 +939,7 @@ class LipidRegistry:
             0.30,
             -1,
             783.01,
-            "CCCCCC=CCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])OCC([NH3+])C(=O)[O-])OC(=O)CCCCCCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])OC[C@H]([NH3+])C(=O)[O-])OC(=O)CCCCCCC/C=C\C/C=C\CCCCC",
         ),
         LipidTemplate(
             "SAPS",
@@ -945,7 +953,7 @@ class LipidRegistry:
             0.30,
             -1,
             811.07,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC([NH3+])C(=O)[O-])OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\C/C=C\C/C=C\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@H]([NH3+])C(=O)[O-]",
         ),
         # ================================================================
         # More PA variants
@@ -962,7 +970,7 @@ class LipidRegistry:
             0.28,
             -1,
             695.94,
-            "CCCCCC=CCC=CCCCCCCCC(=O)OCC(COP(=O)([O-])O)OC(=O)CCCCCCC=CCC=CCCCCC",
+            r"CCCCC/C=C\C/C=C\CCCCCCCC(=O)OC[C@H](COP(=O)([O-])O)OC(=O)CCCCCCC/C=C\C/C=C\CCCCC",
         ),
         # ================================================================
         # LPC — Lyso-phosphatidylcholine (single-chain, neutral)
@@ -979,7 +987,7 @@ class LipidRegistry:
             0.26,
             0,
             495.63,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)O",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@@H](O)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         LipidTemplate(
             "LPC18",
@@ -993,7 +1001,7 @@ class LipidRegistry:
             0.26,
             0,
             523.68,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[N+](C)(C)C)O",
+            "CCCCCCCCCCCCCCCCCC(=O)OC[C@@H](O)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         # ================================================================
         # LPE — Lyso-phosphatidylethanolamine (single-chain)
@@ -1010,7 +1018,7 @@ class LipidRegistry:
             0.25,
             0,
             453.55,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC[NH3+])O",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@@H](O)COP(=O)([O-])OCC[NH3+]",
         ),
         # ================================================================
         # DG — Diacylglycerol (neutral, no headgroup)
@@ -1027,7 +1035,7 @@ class LipidRegistry:
             0.25,
             0,
             621.00,
-            "CCCCCCCC=CCCCCCCCC(=O)OCC(CO)OC(=O)CCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)OC[C@H](CO)OC(=O)CCCCCCC/C=C\\CCCCCCCC",
         ),
         LipidTemplate(
             "DPPGd",
@@ -1041,7 +1049,7 @@ class LipidRegistry:
             0.25,
             0,
             568.91,
-            "CCCCCCCCCCCCCCCC(=O)OCC(CO)OC(=O)CCCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCCCC(=O)OC[C@H](CO)OC(=O)CCCCCCCCCCCCCCC",
         ),
         # ================================================================
         # CER — Ceramides (sphingolipid backbone + one fatty acid)
@@ -1058,7 +1066,7 @@ class LipidRegistry:
             0.25,
             0,
             537.90,
-            "CCCCCCCCCCCCCCCC(=O)NC(CO)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](CO)NC(=O)CCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "Cer18",
@@ -1072,7 +1080,7 @@ class LipidRegistry:
             0.25,
             0,
             565.95,
-            "CCCCCCCCCCCCCCCCCC(=O)NC(CO)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](CO)NC(=O)CCCCCCCCCCCCCCCCC",
         ),
         LipidTemplate(
             "Cer24",
@@ -1086,7 +1094,7 @@ class LipidRegistry:
             0.25,
             0,
             650.11,
-            "CCCCCCCCCCCCCCCCCCCCCCCC(=O)NC(CO)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](CO)NC(=O)CCCCCCCCCCCCCCCCCCCCCCC",
         ),
         # ================================================================
         # MGDG — Monogalactosyldiacylglycerol (plant thylakoid)
@@ -1140,10 +1148,8 @@ class LipidRegistry:
             0.42,
             -1,
             1545.83,
-            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](CO[C@@H]1OC(CO)[C@@H](O[C@@H]2OC(CO)"
-            "[C@H](O[C@@H]3OC(CO)[C@H](O)[C@H](O[C@@H]4OC(CO)[C@H](O)[C@H](O)C4O)"
-            "C3NC(C)=O)[C@H](O[C@]3(C(=O)[O-])CC(O)[C@@H](NC(C)=O)C([C@H](O)[C@H](O)"
-            "CO)O3)C2O)[C@H](O)C1O)NC(=O)CCCCCCCCCCCCCCCCC",
+            # PubChem CID 9963963: complete GM1a stereochemistry; only sialic acid is deprotonated.
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](CO[C@@H]1O[C@H](CO)[C@@H](O[C@@H]2O[C@H](CO)[C@H](O[C@@H]3O[C@H](CO)[C@H](O)[C@H](O[C@@H]4O[C@H](CO)[C@H](O)[C@H](O)[C@H]4O)[C@H]3NC(C)=O)[C@H](O[C@]3(C(=O)[O-])C[C@H](O)[C@@H](NC(C)=O)[C@H]([C@H](O)[C@H](O)CO)O3)[C@H]2O)[C@H](O)[C@H]1O)NC(=O)CCCCCCCCCCCCCCCCC",
         ),
         # ================================================================
         # ST — Additional Sterols
@@ -1160,7 +1166,7 @@ class LipidRegistry:
             0.25,
             0,
             400.68,
-            "CC(C)C(C)CCC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "CC(C)[C@H](C)CC[C@@H](C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "SITO",
@@ -1174,7 +1180,7 @@ class LipidRegistry:
             0.25,
             0,
             414.71,
-            "CC(CC)CCC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "CC[C@H](CC[C@@H](C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C)C(C)C",
         ),
         LipidTemplate(
             "STIG",
@@ -1188,7 +1194,7 @@ class LipidRegistry:
             0.25,
             0,
             412.69,
-            "CC(C)C(C)C=CC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "CC[C@H](/C=C/[C@@H](C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C)C(C)C",
         ),
         # ---- Oxysterols (hydroxycholesterols) ----
         LipidTemplate(
@@ -1203,7 +1209,7 @@ class LipidRegistry:
             0.26,
             0,
             402.65,
-            "CC(O)(C)CCCC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "C[C@H](CCCC(C)(C)O)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "27OHC",
@@ -1217,7 +1223,7 @@ class LipidRegistry:
             0.26,
             0,
             402.65,
-            "OCC(C)CCCC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "C[C@H](CCC[C@@H](C)CO)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "20AHC",
@@ -1231,7 +1237,7 @@ class LipidRegistry:
             0.26,
             0,
             402.65,
-            "CC(C)CCCC(C)(O)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "C[C@](O)(CCCC(C)C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "22RHC",
@@ -1245,7 +1251,7 @@ class LipidRegistry:
             0.26,
             0,
             402.65,
-            "CC(C)CCC(O)C(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "C[C@H]([C@H](O)CCC(C)C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "24SHC",
@@ -1259,7 +1265,7 @@ class LipidRegistry:
             0.26,
             0,
             402.65,
-            "CC(C)C(O)CCC(C)C1CCC2C3CC=C4CC(O)CCC4(C)C3CCC12C",
+            "CC(C)[C@@H](O)CC[C@@H](C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         LipidTemplate(
             "7KCH",
@@ -1273,7 +1279,7 @@ class LipidRegistry:
             0.26,
             0,
             400.64,
-            "CC(C)CCCC(C)C1CCC2C3C(=O)C=C4CC(O)CCC4(C)C3CCC12C",
+            "CC(C)CCC[C@@H](C)[C@H]1CC[C@H]2[C@@H]3C(=O)C=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C",
         ),
         # ================================================================
         # PIP — More Phosphoinositides
@@ -1290,7 +1296,7 @@ class LipidRegistry:
             0.34,
             -4,
             1043.07,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(OP(=O)([O-])[O-])C(OP(=O)([O-])O)C(O)C(O)C1O)OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            "CCCCC/C=C\\C/C=C\\C/C=C\\C/C=C\\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])O[C@@H]1[C@H](O)[C@H](O)[C@@H](OP(=O)([O-])O)[C@H](OP(=O)([O-])[O-])[C@H]1O",
         ),
         LipidTemplate(
             "PAPI",
@@ -1304,7 +1310,8 @@ class LipidRegistry:
             0.34,
             -4,
             1015.01,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(OP(=O)([O-])[O-])C(OP(=O)([O-])O)C(O)C(O)C1O)OC(=O)CCC=CCC=CCC=CCC=CCCCCC",
+            # Exact sn-chain/headgroup identity follows the named native CHARMM residue.
+            "CCCCC/C=C\\C/C=C\\C/C=C\\C/C=C\\CCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])O[C@@H]1[C@H](O)[C@H](O)[C@@H](OP(=O)([O-])O)[C@H](OP(=O)([O-])[O-])[C@H]1O",
         ),
         LipidTemplate(
             "SOP2",
@@ -1318,7 +1325,8 @@ class LipidRegistry:
             0.34,
             -4,
             1021.06,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(OP(=O)([O-])[O-])C(OP(=O)([O-])O)C(O)C(O)C1O)OC(=O)CCCCCCC=CCCCCCCCC",
+            # Exact sn-chain/headgroup identity follows the named native CHARMM residue.
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])O[C@H]1[C@H](O)[C@@H](O)[C@H](OP(=O)([O-])[O-])[C@@H](OP(=O)([O-])O)[C@H]1O",
         ),
         LipidTemplate(
             "SOP3",
@@ -1332,7 +1340,8 @@ class LipidRegistry:
             0.34,
             -6,
             1099.03,
-            "CCCCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OC1C(OP(=O)([O-])[O-])C(OP(=O)([O-])[O-])C(OP(=O)([O-])O)C(O)C1O)OC(=O)CCCCCCC=CCCCCCCCC",
+            # Exact sn-chain/headgroup identity follows the named native CHARMM residue.
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCCCC)COP(=O)([O-])O[C@H]1[C@H](O)[C@@H](OP(=O)([O-])[O-])[C@H](OP(=O)([O-])[O-])[C@@H](OP(=O)([O-])O)[C@H]1O",
         ),
         # ================================================================
         # Ether / Plasmalogen lipids
@@ -1349,7 +1358,7 @@ class LipidRegistry:
             0.30,
             0,
             744.07,
-            "CCCCCCCCCCCCCC/C=C/OCC(COP(=O)([O-])OCC[N+](C)(C)C)OC(=O)CCCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](CO/C=C\\CCCCCCCCCCCCCC)COP(=O)([O-])OCC[N+](C)(C)C",
         ),
         LipidTemplate(
             "PPEpl",
@@ -1363,7 +1372,7 @@ class LipidRegistry:
             0.28,
             0,
             701.98,
-            "CCCCCCCCCCCCCC/C=C/OCC(COP(=O)([O-])OCC[NH3+])OC(=O)CCCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](CO/C=C\\CCCCCCCCCCCCCC)COP(=O)([O-])OCC[NH3+]",
         ),
         # ================================================================
         # Additional SM variants
@@ -1380,7 +1389,7 @@ class LipidRegistry:
             0.28,
             0,
             618.87,
-            "CCCCCCCCCC(=O)NC(COP(=O)([O-])OCC[N+](C)(C)C)C(O)C=CCCCCCCCCCCCCC",
+            "CCCCCCCCCCCCC/C=C/[C@@H](O)[C@H](COP(=O)([O-])OCC[N+](C)(C)C)NC(=O)CCCCCCCCC",
         ),
         LipidTemplate(
             "NSM",
@@ -1394,7 +1403,7 @@ class LipidRegistry:
             0.30,
             0,
             813.24,
-            "CCCCCCCCC=CCCCCCCCCCCCCCC(=O)NC(COP(=O)([O-])OCC[N+](C)(C)C)C(O)C=CCCCCCCCCCCCCC",
+            r"CCCCCCCC/C=C\CCCCCCCCCCCCCC(=O)N[C@@H](COP(=O)([O-])OCC[N+](C)(C)C)[C@H](O)/C=C/CCCCCCCCCCCCC",
         ),
         # ================================================================
         # Bacterial-specific lipids
@@ -1411,7 +1420,7 @@ class LipidRegistry:
             0.32,
             1,
             878.20,
-            "CCCCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(O)COC(=O)C([NH3+])CCCC[NH3+])OC(=O)CCCCCCC=CCCCCCCCC",
+            "CCCCCCCC/C=C\\CCCCCCCC(=O)O[C@H](COC(=O)CCCCCCCCCCCCCCC)COP(=O)([O-])OC[C@@H](O)COC(=O)[C@@H]([NH3+])CCCC[NH3+]",
         ),
         LipidTemplate(
             "TMCL",
@@ -1425,7 +1434,7 @@ class LipidRegistry:
             0.34,
             -2,
             1239.58,
-            "CCCCCCCCCCCCCC(=O)OCC(COP(=O)([O-])OCC(COP(=O)([O-])O)OC(=O)CCCCCCCCCCCCC)OC(=O)CCCCCCCCCCCCC",
+            "CCCCCCCCCCCCCC(=O)OC[C@H](COP(=O)([O-])OCC(O)COP(=O)([O-])OC[C@@H](COC(=O)CCCCCCCCCCCCC)OC(=O)CCCCCCCCCCCCC)OC(=O)CCCCCCCCCCCCC",
         ),
     ]
 
@@ -1628,35 +1637,173 @@ def _parse_smiles_elements(smiles: str) -> dict[str, int]:
     return counts
 
 
+# ---------------------------------------------------------------------------
+# Headgroup classification
+#
+# This replaced a list of raw SMILES fragments matched as substrings against a
+# canonical SMILES string. That test cannot work: RDKit canonicalisation
+# rewrites ring closures and inserts stereo markers, so a pattern like the
+# sterol nucleus never matched anything, and the default was PC. Fed the
+# project's own 84 built-in lipids, it recovered 36% of their categories --
+# and, worse, it mistook all eleven sterols for PC, which denied them the POPC
+# host they need, so an uploaded cholesterol was built as a pure cholesterol
+# bilayer that cannot form. Matching real substructures instead recovers 99%.
+
+_HEADGROUP_SMARTS: dict[str, str] = {
+    "CHOLINE": "[NX4+](C)(C)C",
+    "ETHANOLAMINE": "[OX2][CX4][CX4][NX4H3+,NX3H2]",
+    "SERINE": "[OX2][CX4][CX4]([NX4H3+,NX3H2])[CX3](=O)[OX1-,OX2H1]",
+    "GLYCEROLP": "[OX2]C[CH1]([OX2H1])[CH2][OX2H1]",
+    "INOSITOL": "[CH1]1([OX2])[CH1]([OX2])[CH1]([OX2])[CH1]([OX2])[CH1]([OX2])[CH1]1[OX2]",
+    "AMIDE": "[NX3H1][CX3](=O)",
+    "ESTER": "[CX3](=O)[OX2][CX4]",
+    "PYRANOSE": "[CH1]1[OX2][CH1][CH1][CH1][CH1]1",
+    # One acyl tail contributes one terminal methyl on a chain. Two carbons is
+    # enough: a docosahexaenoyl chain ends C=C-CH2-CH3, so demanding a longer
+    # run of CH2 would count it as absent and read the lipid as lyso.
+    "ACYL_TAIL": "[CH3][CH2]",
+}
+
+_COMPILED_HEADGROUP_SMARTS: dict[str, object] = {}
+
+
+def _smarts(key: str):
+    from rdkit import Chem
+
+    if key not in _COMPILED_HEADGROUP_SMARTS:
+        _COMPILED_HEADGROUP_SMARTS[key] = Chem.MolFromSmarts(_HEADGROUP_SMARTS[key])
+    return _COMPILED_HEADGROUP_SMARTS[key]
+
+
+def _count(molecule, key: str) -> int:
+    pattern = _smarts(key)
+    return len(molecule.GetSubstructMatches(pattern)) if pattern is not None else 0
+
+
+def _is_sterol(molecule) -> bool:
+    """Whether four rings are fused into the steroid nucleus (three 6, one 5).
+
+    Ring topology rather than a SMARTS pattern. Sterols differ by unsaturation,
+    ring methylation and oxidation state -- cholesterol, ergosterol, the
+    phytosterols, 7-ketocholesterol and the hydroxycholesterols all have to be
+    admitted while sugars and single aromatic rings are excluded -- and one
+    pattern covering that set is much harder to get right than asking how the
+    rings are fused.
+    """
+    rings = [set(r) for r in molecule.GetRingInfo().AtomRings()]
+    systems: list[dict] = []
+    for ring in rings:
+        block = {"atoms": set(ring), "sizes": [len(ring)]}
+        for existing in [s for s in systems if s["atoms"] & ring]:
+            block["atoms"] |= existing["atoms"]
+            block["sizes"] += existing["sizes"]
+            systems.remove(existing)
+        systems.append(block)
+    return any(
+        len(s["sizes"]) >= 4 and s["sizes"].count(6) >= 3 and 5 in s["sizes"] for s in systems
+    )
+
+
+def detect_lipid_category(molecule) -> str:
+    """Classify a lipid headgroup from its structure.
+
+    Ordered most specific first, because the classes genuinely nest: a
+    sphingomyelin carries the same phosphocholine as a PC, and a
+    phosphoinositide the same inositol as a PI.
+    """
+    phosphorus = sum(a.GetAtomicNum() == 15 for a in molecule.GetAtoms())
+    choline = _count(molecule, "CHOLINE")
+    inositol = _count(molecule, "INOSITOL")
+    amide = _count(molecule, "AMIDE")
+    sugars = _count(molecule, "PYRANOSE")
+    # A lyso lipid carries one tail where its class carries two. Counting tails
+    # rather than esters, because a plasmalogen attaches its first chain as a
+    # vinyl ether, which is not an ester and would read as a missing chain.
+    lyso = _count(molecule, "ACYL_TAIL") <= 1
+
+    if _is_sterol(molecule):
+        return "ST"
+    if phosphorus >= 2 and not inositol:
+        return "CL"
+    if inositol:
+        return "PIP" if phosphorus >= 2 else "PI"
+    if amide and phosphorus and choline:
+        return "SM"
+    if amide and sugars >= 3:
+        return "GM1"
+    if amide and not phosphorus:
+        return "CER"
+    if phosphorus:
+        if choline:
+            return "LPC" if lyso else "PC"
+        if _count(molecule, "SERINE"):
+            return "PS"
+        if _count(molecule, "ETHANOLAMINE"):
+            return "LPE" if lyso else "PE"
+        if _count(molecule, "GLYCEROLP"):
+            return "LPG" if lyso else "PG"
+        return "PA"
+    if sugars >= 2:
+        return "DGDG"
+    if sugars == 1:
+        return "MGDG"
+    return "DG" if _count(molecule, "ESTER") >= 2 else "PC"
+
+
+def _category_reference(category: str) -> tuple[float, float] | None:
+    """Median area and thickness of the built-in lipids in this class.
+
+    A lipid's headgroup constrains its area and thickness far better than its
+    carbon count does. Predicting each built-in lipid from the median of the
+    *others* in its class, rather than from the carbon-count buckets below,
+    cuts the worst area error from 46% to 18% and the worst thickness error
+    from 38% to 23%. That matters more than the median does, because the
+    production gate is a ratio band: a 46% error cannot pass it, and an 18%
+    one comfortably does.
+
+    Derived from the registry at call time rather than written out as a second
+    table, so it cannot drift from the entries it summarises.
+    """
+    import statistics
+
+    areas, thicknesses = [], []
+    for template in LipidRegistry._BUILTIN:
+        if isinstance(template, LipidTemplate):
+            if template.category == category:
+                areas.append(template.area_per_lipid)
+                thicknesses.append(template.bilayer_thickness)
+        elif isinstance(template, dict) and template.get("category") == category:
+            areas.append(float(template["area_per_lipid"]))
+            thicknesses.append(float(template["bilayer_thickness"]))
+    if not areas:
+        return None
+    return statistics.median(areas), statistics.median(thicknesses)
+
+
 def _estimate_lipid_properties(smiles: str, user_name: str) -> dict:
     """Estimate physical properties of a lipid from its SMILES string.
 
     Returns a dict compatible with LipidTemplate fields.
     """
-    # Count elements
-    elem = _parse_smiles_elements(smiles)
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors, rdMolDescriptors
 
-    # Build formula string
-    formula_order = ["C", "H", "N", "O", "P", "S", "F", "Cl", "Br", "I", "Na", "K"]
-    formula = "".join(
-        f"{el}{elem[el] if elem[el] > 1 else ''}" for el in formula_order if el in elem
-    )
+    molecule = Chem.MolFromSmiles(smiles)
+    if molecule is None:
+        raise ValueError("lipid SMILES could not be parsed")
 
-    # Mass from atomic counts
-    mass = sum(_ATOMIC_MASSES.get(el, 0.0) * cnt for el, cnt in elem.items())
+    # Formula, mass and charge from RDKit rather than by scanning the SMILES
+    # text. The previous element counter estimated implicit hydrogens as
+    # `heavy_valence // 2`, which reported POPC as C42H95NO8P against its real
+    # C42H82NO8P -- a formula shown to the user that was simply wrong.
+    formula = rdMolDescriptors.CalcMolFormula(molecule)
+    mass = Descriptors.MolWt(molecule)
+    charge = Chem.GetFormalCharge(molecule)
+    elem: dict[str, int] = {}
+    for atom in Chem.AddHs(molecule).GetAtoms():
+        elem[atom.GetSymbol()] = elem.get(atom.GetSymbol(), 0) + 1
 
-    # ---- Charge estimation ----
-    charge = 0
-    for pattern, contrib, _desc in _CHARGED_PATTERNS:
-        if pattern in smiles:
-            charge += contrib
-
-    # ---- Headgroup / category detection ----
-    category = "PC"  # default
-    for smarts, cat in _HEADGROUP_SMILES:
-        if smarts in smiles:
-            category = cat
-            break
+    category = detect_lipid_category(molecule)
 
     # ---- APL estimation ----
     # Count carbons in the molecule (proxy for tail size)
@@ -1689,6 +1836,12 @@ def _estimate_lipid_properties(smiles: str, user_name: str) -> dict:
         dh = 3.5  # nm
     else:
         dh = 3.8  # nm — typical phospholipid
+
+    # The headgroup class is the better predictor; the carbon-count buckets
+    # above remain the fallback for a class the registry does not cover.
+    reference = _category_reference(category)
+    if reference is not None:
+        apl, dh = reference
 
     # ---- vdW radius ----
     vdw = 0.35  # nm — approximate
@@ -1792,6 +1945,9 @@ def parse_custom_lipid(smiles: str, name: str) -> dict:
     result = _estimate_lipid_properties(identity["canonical_smiles"], str(name).strip())
     result["name"] = normalized_name
     result.update(identity)
+    from gmxbuilder.modules.membrane.chain_identity import chain_identity
+
+    result.update(chain_identity(identity["canonical_smiles"]))
     result["registered_matches"] = find_registered_lipid_matches(smiles)
     result["is_existing"] = any(match["match"] == "exact" for match in result["registered_matches"])
     return result

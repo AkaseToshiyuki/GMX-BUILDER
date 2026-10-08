@@ -27,7 +27,28 @@ dependencies; no manual browser download or file placement is required.
 - `src/gmxbuilder/data/forcefields/amber99sb.ff`
 - `src/gmxbuilder/data/forcefields/charmm36m` (installed locally)
 - `src/gmxbuilder/data/forcefields/charmm36` (installed locally)
+- `src/gmxbuilder/data/forcefields/amber14sb_ol24` (assembled locally)
 - `src/gmxbuilder/data/forcefields/oplsaa.ff`
+
+### Amber nucleic acids (`amber14sb_ol24`)
+
+This force field is **assembled on the user's machine and is never
+redistributed from here**. The installer downloads `amber14sb_OL24.ff.tar.gz`
+from the Olomouc group (<https://fch.upol.cz/ff_ol/>), verifies the pinned
+SHA-256, and merges only the nucleic-acid half onto the bundled ff14SB. The
+protein, water, ion and phosphorylated-residue files are the GROMACS 2026 port
+this repository already ships, unchanged.
+
+The community GROMACS ports of these parameters **carry no licence file**, on
+the OL pages or on `ftp.gromacs.org/contrib/forcefields/`. The parameters
+themselves are Amber-derived and the Amber project states its force fields are
+public domain; the GROMACS file format descends from the ffamber ports now in
+GROMACS, under LGPL-2.1-or-later. Rather than redistribute on that inference,
+GMXBUILDER installs the archive from its official source and ships only the
+merge logic, which is original GPL-3.0-or-later work.
+
+Cite OL24 (Zgarbova et al., J. Chem. Theory Comput. 21, 833-846, 2025) and the
+refinements it builds on; the assembled `forcefield.doc` lists all of them.
 
 Provenance and scientific references embedded in `forcefield.itp`,
 `forcefield.doc` and related source headers must be preserved. Before any
@@ -96,6 +117,7 @@ texts and any bundled-component notices remain in the installed distributions.
 | RDKit | BSD-3-Clause |
 | OpenMM | BSD-like |
 | PDBFixer | MIT |
+| Gemmi 0.7.5 | MPL-2.0 |
 | Vermouth / Martinize2 | Apache-2.0 |
 | COBY | Apache-2.0 |
 | MDTraj | LGPL-2.1-or-later |

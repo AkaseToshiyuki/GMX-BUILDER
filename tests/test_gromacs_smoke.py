@@ -1,8 +1,9 @@
 """External GROMACS validation of GMXBUILDER coordinates and topology."""
 
 import os
-from pathlib import Path
+import re
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,9 +14,14 @@ from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROWriter
 from gmxbuilder.io.top import TopologyWriter
+from gmxbuilder.modules.export.layout import FORCEFIELD_DIR
 from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
 from gmxbuilder.modules.modifications.processor import StructureProcessor
 from gmxbuilder.runtime.hardware import find_gromacs_executable
+
+# Every test here drives a real external tool, so the whole module is slow;
+# `--fast` deselects it. See the note at the top of tests/conftest.py.
+pytestmark = pytest.mark.slow
 
 
 def _find_gmx() -> str:
@@ -501,7 +507,7 @@ def test_amber_disulfide_pair_passes_grompp(tmp_path, force_field):
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
 
-def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path):
+def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path, require_simulation):
     """A newly enabled, charged PTM must survive persistence and real dynamics."""
     gmx = _find_gmx()
     system = (
@@ -555,6 +561,7 @@ def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path):
         timeout=60,
     )
     assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
+    require_simulation()
     mdrun = subprocess.run(
         [
             gmx,
@@ -575,7 +582,9 @@ def test_representative_new_charmm36m_ptm_minimizes_and_roundtrips(tmp_path):
     )
     output = mdrun.stdout + "\n" + mdrun.stderr
     assert mdrun.returncode == 0, output
-    assert "nan" not in output.lower()
+    # A whole word, not a substring: GROMACS signs off with a random quotation
+    # and this failed on "nancy swanson". The check is for NaN energies.
+    assert not re.search(r"\bnan\b", output, flags=re.IGNORECASE), output
     assert (tmp_path / "ptm-em.gro").is_file()
 
 
@@ -588,14 +597,15 @@ def test_amber14sb_uses_water_specific_ion_parameters(tmp_path):
     top_path = tmp_path / "topol.top"
     TopologyWriter("amber14sb").write_top(system.structure, top_path)
     topology = top_path.read_text()
-    assert '#include "ions_tip3p.itp"' in topology
+    assert f'#include "{FORCEFIELD_DIR}/ions_tip3p.itp"' in topology
     assert '#include "ions.itp"' not in topology
 
 
-def test_one_step_mdrun_can_use_gpu(tmp_path):
+def test_one_step_mdrun_can_use_gpu(tmp_path, require_simulation):
     if os.environ.get("GMXBUILDER_TEST_GPU") != "1":
         pytest.skip("set GMXBUILDER_TEST_GPU=1 to exercise CUDA mdrun")
     gmx, tpr_path = _build_gromacs_input(tmp_path, "charmm36m")
+    require_simulation()
     result = subprocess.run(
         [
             gmx,
@@ -627,3 +637,67 @@ def test_one_step_mdrun_can_use_gpu(tmp_path):
     assert result.returncode == 0, output
     assert "GPU" in output or "CUDA" in output
     assert (tmp_path / "gpu-smoke.log").is_file()
+
+
+def test_the_sorted_package_still_builds_a_tpr(tmp_path):
+    """The whole point of the layout change, checked by the tool it is for.
+
+    ``grompp`` resolves an ``#include`` against the directory of the file
+    containing it. That is what lets ``topology/topol.top`` reach its siblings
+    by bare name and the database as ``forcefield/...``, and it is an
+    assumption about GROMACS rather than about this code -- so it is asserted
+    against GROMACS, from an extracted archive, exactly as a user would.
+    """
+    import zipfile
+
+    from gmxbuilder.modules.export.exporter import ExportModule
+    from gmxbuilder.modules.export.layout import STRUCTURE_DIR, TOPOLOGY_DIR
+
+    gmx = _find_gmx()
+    system = _two_residue_system("amber14sb")
+    system.metadata["water_model"] = "tip3p"
+    assigned = ForceFieldAssigner().execute(system, {})
+    assert assigned.success, assigned.log
+
+    built = tmp_path / "built"
+    result = ExportModule().execute(
+        assigned.system, {"output_dir": str(built), "system_name": "sorted"}
+    )
+    assert result.success, result.log
+
+    # Unpacked somewhere else entirely: a path that only works in the
+    # directory it was written in is not a package.
+    unpacked = tmp_path / "elsewhere"
+    with zipfile.ZipFile(built / "sorted.zip") as archive:
+        archive.extractall(unpacked)
+
+    grompp = subprocess.run(
+        [
+            gmx,
+            "grompp",
+            "-f",
+            "mdp/mini.mdp",
+            "-c",
+            f"{STRUCTURE_DIR}/input.gro",
+            "-r",
+            f"{STRUCTURE_DIR}/input.gro",
+            "-p",
+            f"{TOPOLOGY_DIR}/topol.top",
+            "-n",
+            f"{STRUCTURE_DIR}/index.ndx",
+            "-o",
+            "sorted.tpr",
+            "-po",
+            "sorted_out.mdp",
+            # The two-residue probe carries a net charge and no solvent; that
+            # warning is about the test system, not about the layout.
+            "-maxwarn",
+            "1",
+        ],
+        cwd=unpacked,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert grompp.returncode == 0, grompp.stdout + "\n" + grompp.stderr
+    assert (unpacked / "sorted.tpr").is_file()

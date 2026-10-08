@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.system import System
+from gmxbuilder.modules.forcefield.catalog import force_field_family
 from gmxbuilder.modules.forcefield.gaff_backend import gaff_available
 from gmxbuilder.modules.forcefield.lipid_policy import (
     amber_lipid_backend,
@@ -12,7 +13,6 @@ from gmxbuilder.modules.forcefield.lipid_policy import (
     lipid_has_rtp,
 )
 from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
-from gmxbuilder.modules.forcefield.catalog import force_field_family
 
 
 def molecule_groups(system: System) -> dict[str, list[list[int]]]:
@@ -168,13 +168,17 @@ def compatibility_report(
         labels = {
             "lipid21": "Amber Lipid21 v1.0 (exact)",
             "gaff2": "GAFF2 fallback (Amber-compatible)",
+            "amber-mixed": "Lipid21 with GAFF2 for missing lipid species",
         }
+        from gmxbuilder.modules.forcefield.lipid_policy import amber_mixed_validation_reason
+
+        mixed_reason = amber_mixed_validation_reason(lipids) if backend == "amber-mixed" else ""
         lipid_options = [
             {
                 "value": backend or "unavailable",
                 "label": labels.get(backend, "No validated Amber lipid backend"),
-                "enabled": backend is not None,
-                "reason": backend_reason,
+                "enabled": backend is not None and not mixed_reason,
+                "reason": mixed_reason or backend_reason,
             }
         ]
         # Lipid21 remains the preferred exact backend, but GAFF2 must stay an
@@ -183,7 +187,7 @@ def compatibility_report(
         # membrane, so hiding this valid alternative makes their workflow
         # impossible to complete.
         gaff_supported = gaff_available() and all(gaff_lipid_capability(name)[0] for name in lipids)
-        if backend == "lipid21" and gaff_supported:
+        if backend in {"lipid21", "amber-mixed"} and gaff_supported:
             lipid_options.append(
                 {
                     "value": "gaff2",
@@ -216,14 +220,15 @@ def compatibility_report(
     if not ligands:
         ligand_options = [{"value": "none", "label": "No retained small molecule", "enabled": True}]
     elif family == "charmm":
+        from gmxbuilder.modules.forcefield.charmm_compat import availability
+
+        local_enabled, local_reason = availability(protein_ff)
         ligand_options = [
             {
-                "value": "rtp",
-                "label": f"{protein_ff} RTP template",
-                "enabled": rtp_all,
-                "reason": ""
-                if rtp_all
-                else "one or more molecules do not exactly match a CHARMM template",
+                "value": "charmm_compat",
+                "label": "Local CHARMM-compatible builder",
+                "enabled": local_enabled,
+                "reason": local_reason,
             },
             {
                 "value": "cgenff",

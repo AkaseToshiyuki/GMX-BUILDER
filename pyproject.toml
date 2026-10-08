@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gmxbuilder"
-version = "0.9.19"
+version = "1.0.0"
 description = "Build GROMACS membrane protein simulation systems with automated topology and MD parameter generation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,12 +13,10 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [
     {name = "Haochen Yang"}
 ]
-classifiers = [
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
-]
 dependencies = [
     "numpy>=1.24,<2.5",
     "scipy>=1.10",
+    "gemmi==0.7.5",
     "rdkit>=2024.3",
     "openmm>=8.2",
     "pdbfixer @ https://github.com/openmm/pdbfixer/archive/94cfa4c0ca551cdc5f13320f9a658efd59f2b881.tar.gz",
@@ -36,17 +34,25 @@ dependencies = [
     # explicit so a clean locked installation can import the pinned backend.
     "matplotlib>=3.8,<4",
     "mdtraj==1.10.3",
+    # Environment-sensitive pKa prediction. Without it the builder falls back
+    # to model pKa values, which ignore burial, hydrogen bonding and local
+    # electrostatics -- the residues most affected are exactly the buried and
+    # membrane-embedded ones. The fallback is reported rather than silent, but
+    # a default installation should not need it.
+    "propka>=3.5",
 ]
 
 [project.optional-dependencies]
+managed = [
+    "pyfuse3==3.4.2; sys_platform == 'linux'",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
-    "black",
     "ruff",
     "selenium>=4.20",
     "pip-audit>=2.9",
-    "httpx2>=0.28",
+    "httpx2>=2.12.0",
 ]
 docs = [
     "reportlab>=4.0",
@@ -69,18 +75,41 @@ gmxbuilder = [
     "**/*.pyc",
     "web/static/output/*",
     "web/static/output/**/*",
+    "data/forcefields/charmm36/*",
+    "data/forcefields/charmm36/**/*",
+    "data/forcefields/charmm36m/*",
+    "data/forcefields/charmm36m/**/*",
+    "data/forcefields/amber14sb_ol24/*",
+    "data/forcefields/amber14sb_ol24/**/*",
+    "data/forcefields/*.installing*/*",
+    "data/forcefields/*.installing*/**/*",
+    "data/forcefields/*.backup*/*",
+    "data/forcefields/*.backup*/**/*",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
-    "browser: live Firefox browser regression tests (requires GMXBUILDER_BROWSER_URL)",
+    "browser: live Firefox regression tests with an isolated server (optional GMXBUILDER_BROWSER_URL override)",
+    "slow: drives a real external tool -- GROMACS, AmberTools, an RDKit 3D embedding or a browser. Deselected by --fast.",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# Declared explicitly: ruff's default set omits E501, so the line-length above
+# was never actually enforced, and an unset `select` silently inherits any
+# user-level ruff configuration present on the machine.
+#
+# `B` and `SIM` are deliberately not enabled yet. All 13 current B023 hits are
+# the accumulator-closure idiom, where a nested helper is meant to read the
+# enclosing values at call time, so enabling it would only buy 13 noqa
+# comments. The 43 B905 hits would require adding `strict=` to `zip()`, which
+# changes runtime behaviour on length mismatch and needs per-site review.
+select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 # Conventional four-atom topology notation (i, j, k, l) is part of the

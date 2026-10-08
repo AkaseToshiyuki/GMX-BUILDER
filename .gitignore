@@ -37,6 +37,7 @@ output/
 # may track these paths; public checkouts populate them during installation.
 src/gmxbuilder/data/forcefields/charmm36/
 src/gmxbuilder/data/forcefields/charmm36m/
+src/gmxbuilder/data/forcefields/amber14sb_ol24/
 *.gro
 !src/gmxbuilder/data/water_boxes/tip3p_water.gro
 !src/gmxbuilder/data/water_boxes/spc_water.gro
@@ -45,6 +46,10 @@ src/gmxbuilder/data/forcefields/charmm36m/
 *.top
 *.itp
 !src/gmxbuilder/data/forcefields/amber14sb.ff/*.itp
+!src/gmxbuilder/data/forcefields/amber99sb.ff/*.itp
+!src/gmxbuilder/data/forcefields/amber99sb-ildn.ff/*.itp
+!src/gmxbuilder/data/forcefields/oplsaa.ff/*.itp
+!src/gmxbuilder/data/lipid21/itp/*.itp
 !src/gmxbuilder/data/forcefield_overlays/**/*.itp
 !src/gmxbuilder/data/martini3/v3.0.0/*.itp
 *.mdp
@@ -52,3 +57,14 @@ src/gmxbuilder/data/forcefields/charmm36m/
 *.edr
 *.trr
 *.xtc
+
+# Reviewed, distributable scientific inputs; never unignore external force fields.
+!src/gmxbuilder/data/water_boxes/*.gro
+!src/gmxbuilder/data/mdp/*.mdp
+!src/gmxbuilder/data/topologies/*.top
+src/gmxbuilder/data/forcefields/*.installing*/
+src/gmxbuilder/data/forcefields/*.backup*/
+
+# Isolated installer bootstrap and developer environment
+.gmxbuilder-uv-bootstrap.*
+.venv

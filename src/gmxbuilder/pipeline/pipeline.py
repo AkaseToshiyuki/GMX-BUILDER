@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
+from gmxbuilder.core.exceptions import ModuleConfigError, PipelineError
 from gmxbuilder.core.system import System
-from gmxbuilder.core.exceptions import PipelineError, ModuleConfigError
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 from gmxbuilder.pipeline.config import PipelineConfig
 
@@ -209,10 +209,10 @@ class Pipeline:
     @classmethod
     def create_liquid(cls) -> Pipeline:
         """Create a pure-liquid pipeline (no protein, no membrane)."""
-        from gmxbuilder.modules.solvation.solvate import SolvationBuilder
-        from gmxbuilder.modules.ions.add_ions import IonBuilder
-        from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
         from gmxbuilder.modules.export.exporter import ExportModule
+        from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
+        from gmxbuilder.modules.ions.add_ions import IonBuilder
+        from gmxbuilder.modules.solvation.solvate import SolvationBuilder
 
         pipeline = cls(name="liquid")
         pipeline.add_module(SolvationBuilder())
@@ -224,15 +224,15 @@ class Pipeline:
     @classmethod
     def _build(cls, name: str, *, with_membrane: bool) -> Pipeline:
         """Shared builder — toggles membrane-related modules."""
-        from gmxbuilder.modules.input.pdb_input import PDBInputModule
-        from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
-        from gmxbuilder.modules.modifications.processor import StructureProcessor
-        from gmxbuilder.modules.membrane.orient_module import OrientModule
-        from gmxbuilder.modules.membrane.builder import MembraneBuilder
-        from gmxbuilder.modules.solvation.solvate import SolvationBuilder
-        from gmxbuilder.modules.ions.add_ions import IonBuilder
-        from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
         from gmxbuilder.modules.export.exporter import ExportModule
+        from gmxbuilder.modules.forcefield.assign import ForceFieldAssigner
+        from gmxbuilder.modules.forcefield.selector import ForceFieldSelector
+        from gmxbuilder.modules.input.pdb_input import PDBInputModule
+        from gmxbuilder.modules.ions.add_ions import IonBuilder
+        from gmxbuilder.modules.membrane.builder import MembraneBuilder
+        from gmxbuilder.modules.membrane.orient_module import OrientModule
+        from gmxbuilder.modules.modifications.processor import StructureProcessor
+        from gmxbuilder.modules.solvation.solvate import SolvationBuilder
 
         pipeline = cls(name=name)
         pipeline.add_module(PDBInputModule())

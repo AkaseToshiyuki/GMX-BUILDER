@@ -16,7 +16,6 @@ from pathlib import Path
 
 from parmed.amber import AmberOFFLibrary
 
-
 TYPE_MAP = {
     "OP": "PHOP",
     "OQ": "PHOQ",
@@ -215,6 +214,52 @@ def generate_itp(frcmod_path: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def register_atom_types(itp_text: str, atp_path: Path) -> list[str]:
+    """Add the generated atom types to the ``pdb2gmx`` atom-type database.
+
+    ``pdb2gmx`` resolves an ``.rtp`` atom type against ``atomtypes.atp``; a
+    type defined only in an ``.itp`` is invisible to it. Because this importer
+    wrote the phospho types to ``ffphosaa14sb.itp`` alone, ``pdb2gmx -ff
+    amber14sb`` failed on *any* input with "Atom type PHOR (residue S1P) not
+    found in atomtype database" -- the Amber path builds topologies directly
+    from the ``.rtp`` files, so nothing exercised it until DNA support needed
+    native ``pdb2gmx``.
+
+    Idempotent: types already present are left alone.
+    """
+    existing = {
+        line.split(";")[0].split()[0]
+        for line in atp_path.read_text(encoding="utf-8").splitlines()
+        if line.split(";")[0].strip()
+    }
+
+    additions: list[str] = []
+    section = None
+    for raw in itp_text.splitlines():
+        line = raw.split(";")[0].strip()
+        header = re.match(r"^\[\s*(\S+)\s*\]", line)
+        if header:
+            section = header.group(1)
+            continue
+        if section != "atomtypes" or not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] not in existing:
+            additions.append(f"{parts[0]:<12s} {float(parts[2]):.5f}")
+            existing.add(parts[0])
+
+    if additions:
+        text = atp_path.read_text(encoding="utf-8").rstrip("\n")
+        atp_path.write_text(
+            text
+            + "\n\n; phosphorylated amino-acid types (see ffphosaa14sb.itp)\n"
+            + "\n".join(additions)
+            + "\n",
+            encoding="utf-8",
+        )
+    return additions
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--amber-dat", type=Path, required=True)
@@ -226,7 +271,11 @@ def main() -> None:
     (output / "phosaa14sb.rtp").write_text(
         generate_rtp(leap / "lib" / "phosaa14SB.lib", output / "aminoacids.rtp")
     )
-    (output / "ffphosaa14sb.itp").write_text(generate_itp(leap / "parm" / "frcmod.phosaa14SB"))
+    itp_text = generate_itp(leap / "parm" / "frcmod.phosaa14SB")
+    (output / "ffphosaa14sb.itp").write_text(itp_text)
+    added = register_atom_types(itp_text, output / "atomtypes.atp")
+    if added:
+        print(f"registered {len(added)} atom types in atomtypes.atp")
 
 
 if __name__ == "__main__":

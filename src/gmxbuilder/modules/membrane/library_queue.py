@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import os
-from pathlib import Path
-import signal
 import shutil
+import signal
 import subprocess
 import time
-from typing import Iterable
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from gmxbuilder.modules.membrane.equilibrated_library import EquilibratedLipidLibrary
 from gmxbuilder.runtime.hardware import (
@@ -18,7 +18,6 @@ from gmxbuilder.runtime.hardware import (
     configured_gpu_devices,
     configured_task_threads,
 )
-
 
 DEFAULT_FORCE_FIELDS = ("amber14sb", "charmm36m", "charmm36")
 
@@ -218,7 +217,7 @@ def run_library_queue(
                 )
                 for index, job in enumerate(batch)
             ]
-            for job, future in zip(batch, futures):
+            for job, future in zip(batch, futures, strict=True):
                 try:
                     results.append(future.result())
                 except Exception as exc:

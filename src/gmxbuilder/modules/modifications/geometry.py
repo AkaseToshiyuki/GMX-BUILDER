@@ -9,21 +9,28 @@ remain fixed so applying a modification cannot silently move the protein.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from itertools import combinations
 from pathlib import Path
 
 import numpy as np
-
-from gmxbuilder.core.chemistry import is_hydrogen
 from scipy.optimize import least_squares
 
+from gmxbuilder.core.chemistry import is_hydrogen
 from gmxbuilder.modules.forcefield.rtp_parser import _force_field_path
 from gmxbuilder.modules.modifications.patches import StereoConstraint
 
 
 class ModificationGeometryError(ValueError):
     """Raised when a force-field-consistent modified residue cannot be built."""
+
+
+# Construction tolerances, shared by generated and restored heavy atoms.
+MAX_BOND_ERROR_NM = 0.015
+MAX_ANGLE_ERROR_DEG = 15.0
+MIN_HEAVY_CLEARANCE_NM = 0.08
+# Signed tetrahedral volume excludes flat or inverted specified stereocentres.
+MIN_STEREO_VOLUME_NM3 = 2.0e-4
 
 
 @dataclass(frozen=True)
@@ -88,7 +95,7 @@ def _parse_parameter_file(
             continue
 
 
-@lru_cache(maxsize=None)
+@cache
 def _load_geometry_parameters(force_field: str) -> _BondedGeometryParameters:
     bonds: dict[tuple[str, str], float] = {}
     angles: dict[tuple[str, str, str], float] = {}
@@ -245,7 +252,7 @@ def _seed_stereochemistry(
         movable = next((name for name in ordered if name in missing), None)
         if movable is None:
             oriented = expected_sign * _signed_volume(coordinates, center, first, second, third)
-            if oriented < 2.0e-4:
+            if oriented < MIN_STEREO_VOLUME_NM3:
                 raise ModificationGeometryError(
                     f"Retained atoms contradict required stereochemistry {label}"
                 )
@@ -256,7 +263,7 @@ def _seed_stereochemistry(
                 f"Cannot seed stereochemistry {label} with multiple new reference atoms"
             )
         oriented = expected_sign * _signed_volume(coordinates, center, first, second, third)
-        if oriented >= 2.0e-4:
+        if oriented >= MIN_STEREO_VOLUME_NM3:
             continue
         origin = coordinates[center]
         normal = np.cross(
@@ -268,7 +275,10 @@ def _seed_stereochemistry(
         coordinates[movable] = (
             coordinates[movable] - 2.0 * float(np.dot(displacement, normal)) * normal
         )
-        if expected_sign * _signed_volume(coordinates, center, first, second, third) < 2.0e-4:
+        if (
+            expected_sign * _signed_volume(coordinates, center, first, second, third)
+            < MIN_STEREO_VOLUME_NM3
+        ):
             raise ModificationGeometryError(f"Cannot initialize required stereochemistry {label}")
 
 
@@ -496,7 +506,7 @@ def build_modified_heavy_atom_geometry(
                 # Bond/angle targets determine the physical volume magnitude;
                 # this one-sided residual only selects the documented enantiomer
                 # and keeps the centre safely away from a planar ambiguity.
-                result.append(max(0.0, 2.0e-4 - oriented) / 1.0e-4)
+                result.append(max(0.0, MIN_STEREO_VOLUME_NM3 - oriented) / 1.0e-4)
         # Resolve unconstrained torsional degeneracy near the local, clash-free
         # initializer without competing with bonded force-field targets.
         result.extend((1e-4 * (values - initial) / 0.1).tolist())
@@ -545,23 +555,26 @@ def build_modified_heavy_atom_geometry(
         min_nonbonded_distance_nm=min(nonbonded_distances, default=None),
         stereo_centres=tuple(label for *_atoms, label in resolved_stereo),
     )
-    if quality.max_bond_error_nm > 0.015:
+    if quality.max_bond_error_nm > MAX_BOND_ERROR_NM:
         raise ModificationGeometryError(
             f"Modified-residue bond geometry is outside tolerance "
             f"({quality.max_bond_error_nm:.4f} nm maximum error)"
         )
-    if quality.max_angle_error_deg > 15.0:
+    if quality.max_angle_error_deg > MAX_ANGLE_ERROR_DEG:
         raise ModificationGeometryError(
             f"Modified-residue angle geometry is outside tolerance "
             f"({quality.max_angle_error_deg:.1f} degrees maximum error)"
         )
-    if quality.min_nonbonded_distance_nm is not None and quality.min_nonbonded_distance_nm < 0.08:
+    if (
+        quality.min_nonbonded_distance_nm is not None
+        and quality.min_nonbonded_distance_nm < MIN_HEAVY_CLEARANCE_NM
+    ):
         raise ModificationGeometryError(
             "Modified-residue geometry contains a heavy-atom overlap below 0.08 nm"
         )
     for center, first, second, third, expected_sign, label in resolved_stereo:
         oriented = expected_sign * _signed_volume(coordinates, center, first, second, third)
-        if oriented < 2.0e-4:
+        if oriented < MIN_STEREO_VOLUME_NM3:
             raise ModificationGeometryError(
                 f"Modified-residue stereochemistry does not match {label}"
             )
@@ -608,3 +621,54 @@ def crosslink_bond_length(
     except KeyError as error:
         raise ModificationGeometryError(f"Crosslink residue has no {atom_name} atom") from error
     return _load_geometry_parameters(force_field.strip().lower()).bond(atom_type, atom_type)
+
+
+def validate_restored_heavy_atoms(
+    *, force_field, template, coordinates, restored, environment, stereo_constraints=()
+):
+    """Validate deposited PTM atoms using the same construction tolerances."""
+    parameters = _load_geometry_parameters(force_field.strip().lower())
+    atom_types, bonds = _heavy_template(template)
+    graph = _neighbours(atom_types, bonds)
+    bond_errors, angle_errors, separations = [], [], []
+    for first, second in bonds:
+        if not {first, second}.intersection(restored):
+            continue
+        target = parameters.bond(atom_types[first], atom_types[second])
+        error = abs(float(np.linalg.norm(coordinates[first] - coordinates[second])) - target)
+        bond_errors.append(error)
+        if not np.isfinite(error) or error > MAX_BOND_ERROR_NM:
+            raise ModificationGeometryError("Deposited PTM bond geometry is outside tolerance")
+    for first, center, third, target in _angle_terms(graph, atom_types, parameters):
+        if {first, center, third}.intersection(restored):
+            error = abs(
+                _angle(coordinates[first], coordinates[center], coordinates[third]) - target
+            )
+            angle_errors.append(error)
+            if not np.isfinite(error) or error > MAX_ANGLE_ERROR_DEG:
+                raise ModificationGeometryError("Deposited PTM angle geometry is outside tolerance")
+    distances = _graph_distances(graph)
+    for first, second in combinations(atom_types, 2):
+        if {first, second}.intersection(restored) and distances.get((first, second), 99) > 2:
+            distance = float(np.linalg.norm(coordinates[first] - coordinates[second]))
+            separations.append(distance)
+            if distance < MIN_HEAVY_CLEARANCE_NM:
+                raise ModificationGeometryError("Deposited PTM has a heavy-atom overlap")
+    for name in restored:
+        if environment.size:
+            distance = float(np.min(np.linalg.norm(environment - coordinates[name], axis=1)))
+            separations.append(distance)
+            if distance < MIN_HEAVY_CLEARANCE_NM:
+                raise ModificationGeometryError("Deposited PTM clashes with its environment")
+    for center, first, second, third, sign, label in _resolve_stereo_constraints(
+        stereo_constraints, atom_types
+    ):
+        if sign * _signed_volume(coordinates, center, first, second, third) < MIN_STEREO_VOLUME_NM3:
+            raise ModificationGeometryError(f"Deposited PTM stereochemistry does not match {label}")
+    return GeometryQuality(
+        tuple(sorted(restored)),
+        max(bond_errors, default=0.0),
+        max(angle_errors, default=0.0),
+        min(separations, default=None),
+        tuple(c.label for c in stereo_constraints),
+    )

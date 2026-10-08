@@ -1,0 +1,413 @@
+/* Dark workspace overlay. style.css is the retained classic presentation.
+ * Keep the existing DOM, labels, controls, hidden states and handlers intact.
+ * Neutral planes and crisp borders replace decorative elevation.
+ */
+:root {
+  color-scheme: dark;
+  --primary: #8bb4ff;
+  --primary-hover: #b5cfff;
+  --bg: #13181f;
+  --surface: #1c232d;
+  --surface-raised: #232d39;
+  --input: #141b24;
+  --border: #3b4859;
+  --text: #edf1f7;
+  --text-muted: #aab8ca;
+  --success: #79deb0;
+  --danger: #ff9f9f;
+  --warning: #f1cc83;
+  --blue-surface: #1c304c;
+  --green-surface: #17382d;
+  --red-surface: #3c242a;
+  --amber-surface: #352e21;
+  --radius: 3px;
+  --shadow: none;
+}
+
+body { font-size: 14px; line-height: 1.6; }
+* { scrollbar-color: #60718a #1c232d; scrollbar-width: thin; }
+a { color: var(--primary); text-underline-offset: 3px; }
+a:hover { color: var(--primary-hover); }
+::selection { background: #31558a; color: #fff; }
+button, input, select, textarea { font: inherit; }
+button { color: var(--text); }
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select, textarea {
+  color: var(--text); background-color: var(--input);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  max-width: 100%;
+}
+input::placeholder, textarea::placeholder { color: #9aaabd; opacity: 1; }
+input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: #669dff; }
+input[type="range"] { min-width: 0; }
+input:disabled, select:disabled, textarea:disabled { color: var(--text-muted); }
+input[type="file"]::file-selector-button {
+  font: inherit; padding: 8px 12px; margin-right: 12px;
+  color: var(--text); background: var(--surface-raised);
+  border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+}
+button:focus-visible, a:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid #a3c7ff; outline-offset: 3px;
+}
+.field input:focus, .field select:focus { box-shadow: none; }
+
+/* Brand assets, version badge and task-copy control are unchanged. */
+.header { padding: 14px 28px; gap: 20px; box-shadow: none; flex-wrap: wrap; }
+.brand-logo { width: clamp(190px, 19vw, 260px); filter: brightness(1.45); }
+.release-badge { background: #c72535; border-radius: 2px; vertical-align: middle; }
+.header-task-id { color: var(--text-muted); flex-wrap: wrap; overflow-wrap: anywhere; }
+.header-task-id b { font-family: ui-monospace, monospace; color: var(--text); }
+.copy-task-id { color: var(--primary); border-color: var(--border); border-radius: 3px; }
+.copy-task-id:hover, .copy-task-id:focus-visible { background: var(--blue-surface); }
+.copy-task-id-status { color: var(--success); }
+
+/* The original wizard supplies all step names, order and locking behaviour. */
+.container { max-width: 1640px; margin: 30px auto; padding: 0 28px 32px; }
+.container:has(#step-nav .step) {
+  display: grid; grid-template-columns: 210px minmax(0, 1fr);
+  gap: 32px; align-items: start;
+}
+.panels, .panel, .field, .form-grid, .ion-col { min-width: 0; }
+.steps.dynamic {
+  display: flex; flex-direction: column; position: sticky; top: 20px;
+  max-height: calc(100dvh - 40px); overflow-y: auto; overflow-x: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 6px; gap: 4px; margin: 0;
+}
+.steps .step {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  min-width: 0; padding: 12px 10px; border-left: 2px solid transparent;
+  border-radius: 2px; font-size: 13px; background: transparent;
+}
+.steps .step:not(:last-child)::after { content: none; }
+.steps .step-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 26px; min-height: 26px; font-size: 12px; margin: 0;
+  border: 1px solid var(--border); border-radius: 3px;
+}
+.steps .step-divider { height: 1px; align-self: stretch !important; background: var(--border); font-size: 0 !important; margin: 3px 8px !important; }
+.steps .step:hover { background: var(--surface-raised); }
+.steps .step.active { background: var(--blue-surface); color: #b3ceff; border-left-color: #669dff; }
+.steps .step.active .step-num { border-color: #669dff; color: #fff; background: #2759ad; }
+.steps .step.done { color: var(--success); }
+.steps .step.locked { opacity: .7; }
+.panel h2 { font-size: 26px; font-weight: 650; letter-spacing: -.5px; margin-bottom: 24px; }
+.section-desc { max-width: 90ch; }
+.form-grid { gap: 20px; grid-template-columns: minmax(0, 1fr); }
+.form-grid > * { min-width: 0; }
+.field select { min-width: 0; width: 100%; }
+.field label { font-size: 14px; }
+.field input[type="text"], .field input[type="number"], .field select { padding: 10px 12px; }
+.hint { font-size: 12px; line-height: 1.65; }
+.info-section-title { margin-top: 24px; padding-bottom: 10px; }
+.panel-actions { gap: 12px; flex-wrap: wrap; padding-top: 20px; border-top: 1px solid var(--border); }
+.btn { border-radius: 3px; font-weight: 600; color: var(--text); box-shadow: none; }
+.btn:hover { background: var(--surface-raised); }
+.btn.primary { background: #2563eb; border-color: #407bfa; color: #fff; }
+.btn.primary:hover { background: #1d4ed8; border-color: #669dff; }
+.btn:disabled { opacity: .6; }
+.btn.primary:disabled { background: #2a3545; border-color: var(--border); color: #b5c2d4; }
+.link-btn { color: var(--primary); }
+
+/* Available and planned workflow cards all keep their original ordering. */
+#panel-task-type { max-width: 1260px; margin: 0 auto; }
+.task-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.task-card { padding: 20px; border-radius: 3px; gap: 9px; }
+.task-card:hover { background: #202b39; box-shadow: none; transform: none; }
+.task-card.selected { background: var(--blue-surface); box-shadow: none; }
+.task-card.disabled { opacity: .68; filter: none; }
+.task-card.disabled:hover { background: var(--surface); }
+.task-card .card-title { font-size: 16px; }
+.task-card .card-desc { font-size: 13px; line-height: 1.65; }
+.task-card .card-badge { border-radius: 2px; background: var(--amber-surface); color: var(--warning); }
+
+/* Form and preview above a full-width action region. */
+@media (min-width: 1320px) {
+  #panel-membrane.active { display:grid; grid-template-columns:minmax(360px,.9fr) minmax(0,1.1fr); gap:24px; align-items:start; }
+  #panel-membrane > h2, #panel-membrane > #membrane-actual-counts, #panel-membrane > .membrane-action, #panel-membrane > .panel-actions { grid-column:1 / -1; }
+  #panel-membrane > .form-grid { grid-column:1; padding:20px; border:1px solid var(--border); background:var(--surface); }
+  #panel-membrane > .membrane-preview { grid-column:2; min-width:0; }
+}
+.viewer-box, .mol-viewer, .viewer-container { background: #141b24; border-color: var(--border); border-radius: 3px !important; }
+.viewer-unavailable { background: var(--amber-surface); color: var(--warning); }
+.upload-zone { border-width: 1px; background: var(--surface); padding: 40px 24px; }
+.upload-zone:hover, .upload-zone.dragover { background: var(--blue-surface); }
+.chain-card, .smallmol-card, .leaflet-section, .md-stage-box, .proc-patch-picker,
+.lipid-count-table .count-table, .lipid-count-table .count-summary,
+.prod-iter-row, .step-progress { background: var(--surface); border-color: var(--border); border-radius: 3px; }
+.readonly-field, .lipid-mix-row, .ion-card, .sim-stage-card { border-radius: 3px; }
+.lipid-mix-row { padding: 10px; flex-wrap: wrap; }
+.lipid-mix-row .mix-lipid-picker { min-width: 130px; }
+.lipid-mix-row .mix-ratio { min-width: 100px; }
+.lipid-mix-row .mix-ratio input[type="range"] { width: 60px; }
+.mix-ratio-input { width: 78px !important; }
+.lipid-mix-row .mix-remove:hover { background: var(--red-surface); }
+.add-lipid-btn { background: var(--blue-surface) !important; border-radius: 3px; }
+.add-lipid-btn:hover { background: #293e5e !important; }
+.lipid-picker-dropdown { box-shadow: 0 12px 32px #0008; border-color: var(--border); }
+.lipid-card, .lipid-mix-row .mix-lipid-trigger { border-radius: 3px; }
+.lipid-card:hover, .lipid-card.selected { background: var(--blue-surface); box-shadow: none; }
+.lipid-card.unavailable, .lipid-card.unavailable:hover { background: var(--surface); }
+.lipid-card-unavailable { color: var(--danger); }
+/* Chemical drawings keep their original white canvas and element colors. */
+.lipid-card .lipid-card-img, .custom-lipid-structure { background: #fff; }
+.lipid-card .lipid-card-tag, .lipid-card .lipid-card-tag.charge-zero { background: #2a3442; color: var(--text-muted); border-radius: 2px; }
+.lipid-card .lipid-card-tag.charge-pos, .seq-tag.protein { background: #263c5b; color: #b9d4ff; }
+.lipid-card .lipid-card-tag.charge-neg, .seq-tag.lipid { background: #482d43; color: #f4bbdd; }
+.seq-tag.nucleic { background: #392f50; color: #d8c1ff; }
+.seq-tag.water { background: var(--green-surface); color: #a0e9c4; }
+.seq-tag.ion { background: var(--amber-surface); color: var(--warning); }
+.seq-tag.other { background: var(--surface-raised); color: var(--text-muted); }
+
+/* Tabs, tables and scientific status text retain their existing semantics. */
+.orient-tab.active, .cg-orient-tab.active, .ion-card.selected { background: var(--blue-surface); color: var(--primary); }
+.orient-tab, .cg-orient-tab { min-width: 0; }
+.orient-tab:hover:not(.active), .cg-orient-tab:hover:not(.active) { background: var(--surface-raised); }
+.structproc-tabs { border-color: var(--border); flex-wrap: wrap; }
+.structproc-tab { color: var(--text-muted); padding: 10px 16px; }
+.structproc-tab.active { color: var(--primary); border-color: var(--primary); }
+.structproc-tab:hover { color: var(--text); }
+.structproc-tab.detected-attention:not(.active) { color: var(--warning); }
+.proc-table th, .ion-summary-table th, .lipid-count-table .count-table th { background: var(--surface-raised); color: var(--text-muted); border-color: var(--border); }
+.proc-table td, .ion-summary-table td, .termini-chain-row { border-color: var(--border); }
+.proc-table tr:hover td { background: var(--surface); }
+.proc-table, .ion-summary-table, .input-check-report table { overflow-wrap: anywhere; }
+.structproc-result { overflow: auto; }
+.proc-mod-res.modifiable { background: var(--green-surface); border-color: #448669; }
+.proc-mod-res.modified { background: var(--blue-surface); border-color: #638ec9; }
+.proc-mod-res.catalog-only { color: var(--text-muted); border-color: var(--border); }
+.proc-mod-res:hover, .proc-mod-item, .proc-patch-option:hover, .chain-rename:hover { background: var(--blue-surface); border-color: #638ec9; }
+.proc-mod-res.selected { background: #315da3; border-color: #8bb4ff; color: #fff; }
+.proc-mod-res.modified::after, .chain-rename, .proc-patch-option .patch-name { color: var(--primary); }
+.proc-mod-item button, .ion-card .ion-remove { color: var(--danger); }
+.proc-patch-option, .ion-card, .sim-stage-card { background: var(--surface); border-color: var(--border); }
+.smallmol-name, .ion-summary-footer.ok { color: var(--success); }
+.smallmol-name:hover { background: var(--green-surface); }
+.smallmol-info, .ion-card .ion-charge, .custom-lipid-props td:first-child { color: var(--text-muted); }
+.ion-col h4, .md-stage-box h4 { color: var(--text); border-color: var(--border); }
+.ion-summary-footer.error { color: var(--danger); }
+.ion-neutralize-pair { background: var(--amber-surface); border-color: #77613b; }
+.ion-neutralize-pair h4 { color: var(--warning); }
+.sim-stage-header { background: var(--surface-raised); }
+.sim-stage-header:hover { background: #2b3746; }
+.sim-stage-header.open, .sim-stage-body .param-row { border-color: var(--border); }
+.sim-stage-title { color: var(--text); }
+.sim-stage-summary, .sim-stage-body .param-item label,
+.sim-stage-body .param-item .param-label, .sim-stage-body .param-textarea label { color: var(--text-muted); }
+.sim-stage-card, .md-stage-box { border-radius: 3px; }
+.sim-stage-body .param-item { max-width: 100%; }
+.sim-stage-body .param-textarea textarea { border-color: var(--border); }
+
+.result-section, .input-check-report { background: var(--green-surface); color: #b8efd3; border-color: #427961; border-radius: 3px; }
+.validation-errors, .input-check-report.error, .result-section[data-state="error"] { background: var(--red-surface); color: #ffc0c0; border-color: #80515b; border-radius: 3px; }
+.validation-errors ul { color: #ffc0c0; }
+.validation-warnings { background: var(--amber-surface); color: #f1d69f; border-color: #77613b; border-radius: 3px; }
+.validation-warnings ul { color: #f1d69f; }
+.input-check-report td, .input-check-report th { border-color: #427961; }
+.input-check-report.error td, .input-check-report.error th { border-color: #80515b; }
+.input-check-validation { color: var(--success); }
+.step-progress-track { background: #38475a; }
+.step-progress-bar { background: #2563eb; }
+.step-progress[data-state="running"] { background: var(--blue-surface); border-color: #54729b; }
+.step-progress[data-state="done"] { background: var(--green-surface); border-color: #86efac; }
+.step-progress[data-state="done"] .step-progress-bar { background: #16a34a; }
+.step-progress[data-state="error"] { background: var(--red-surface); border-color: #80515b; }
+.step-progress[data-state="done"] .step-progress-percent, .step-progress[data-state="done"] .step-progress-phase, .ligand-prep[data-state="done"] { color: var(--success); }
+.step-progress[data-state="error"] .step-progress-percent, .step-progress[data-state="error"] .step-progress-phase { color: var(--danger); }
+.step-progress[data-state="warning"] { background: var(--amber-surface); border-color: #77613b; }
+.step-progress[data-state="warning"] .step-progress-bar { background: var(--warning); }
+.step-progress[data-state="warning"] .step-progress-percent,
+.step-progress[data-state="warning"] .step-progress-phase { color: var(--warning); }
+.step-progress-foot { flex-wrap: wrap; }
+
+/* Both existing dialogs retain focus handling, dismissal and all controls. */
+.modal-overlay { background: #080c13c9; }
+.modal-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 3px; box-shadow: 0 20px 60px #0006; }
+.modal-panel .field label, .queue-details dt { color: var(--text-muted); }
+.modal-panel ul { padding-left: 20px; }
+.modal-actions { flex-wrap: wrap; }
+.queue-details { background: var(--input); border-radius: 3px; }
+.queue-details dd { min-width: 0; overflow-wrap: anywhere; }
+.queue-acknowledge { color: var(--text); }
+.custom-lipid-build-status .progress-bar { background: var(--border); }
+.lipid-option-custom { color: var(--primary); border-color: var(--border); }
+.announcement { background: var(--surface); border-color: var(--border); border-radius: 3px; }
+.announcement p { color: var(--text-muted); }
+.announcement-pinned { background: var(--amber-surface); border-color: #77613b; }
+.announcement-pin { color: var(--warning); }
+.announcement-info { border-left-color: var(--primary); }
+.announcement-notice { border-left-color: var(--success); }
+.announcement-warning { border-left-color: var(--warning); }
+.announcement-critical { border-left-color: var(--danger); }
+.announcement-link a { color: var(--primary); }
+
+/* Older inline form containers use light border literals. */
+[style*="border:1px solid #e2e8f0" i],
+[style*="border: 1px solid #e2e8f0" i],
+[style*="border: 1px solid rgb(226, 232, 240)" i] { border-color: var(--border) !important; }
+[style*="color:#166534" i], [style*="color: #166534" i],
+[style*="color: rgb(22, 101, 52)" i],
+[style*="color:#047857" i], [style*="color: #047857" i],
+[style*="color: rgb(4, 120, 87)" i] { color: var(--success) !important; }
+
+@media (max-width: 1050px) {
+  .task-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .header { padding: 12px 20px; }
+  .container, .container:has(#step-nav .step) { display: block; padding: 0 20px 24px; margin-top: 20px; }
+  .steps.dynamic { position: static; flex-direction: row; max-height: none; overflow-x: auto; margin-bottom: 24px; }
+  .steps.dynamic .step { flex: 0 0 auto; max-width: 190px; border-left: 0; border-bottom: 2px solid transparent; padding: 10px; }
+  .steps .step.active { border-bottom-color: #669dff; }
+  .steps .step-divider { flex: 0 0 1px; width: 1px; height: auto; margin: 6px 2px !important; }
+}
+@media (max-width: 600px) {
+  .header { padding: 12px 16px; gap: 8px; }
+  .logo { gap: 8px; flex-wrap: wrap; max-width: 100%; }
+  .brand-logo { width: 180px; }
+  .release-badge { font-size: 9px; }
+  .header-task-id { font-size: 11px; margin-left: 0; }
+  .container, .container:has(#step-nav .step) { padding: 0 16px 20px; }
+  .panel h2 { font-size: 23px; }
+  .task-grid { grid-template-columns: minmax(0, 1fr); }
+  .task-card { padding: 18px; }
+  .btn { padding: 10px 14px; white-space: normal; }
+  .panel-actions { gap: 10px; }
+  .ion-cols { flex-direction: column; gap: 16px; }
+  .lipid-mix-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .lipid-mix-row .mix-lipid-picker { grid-column: 1 / -1; }
+  .lipid-mix-row .mix-ratio { grid-column: 1; }
+  .lipid-mix-row .mix-remove { grid-column: 2; }
+  .lipid-picker-desc { min-width: 0; }
+  .proc-table { font-size: 12px; }
+  .proc-table th, .proc-table td { padding: 6px 4px; }
+  .structproc-tabs { gap: 0; }
+  .structproc-tab { padding: 9px 10px; }
+  .sim-stage-header { flex-wrap: wrap; }
+  .sim-stage-toggle { flex-wrap: wrap; }
+  .sim-stage-summary { text-align: left; }
+  .orient-controls { flex-direction: column; }
+  .modal-panel { padding: 18px 16px; }
+  .modal-actions .btn { flex: 1 1 140px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}
+
+/* Inline status colors written by the existing client, without changing its logic. */
+[style*="color:#2563eb" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #2563eb" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(37, 99, 235)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--primary) !important; }
+[style*="color:#3b82f6" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #3b82f6" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(59, 130, 246)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--primary) !important; }
+[style*="color:#6366f1" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #6366f1" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(99, 102, 241)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: #b3baff !important; }
+[style*="color:#4f46e5" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #4f46e5" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(79, 70, 229)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: #b3baff !important; }
+[style*="color:#64748b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #64748b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(100, 116, 139)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--text-muted) !important; }
+[style*="color:#475569" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #475569" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(71, 85, 105)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--text-muted) !important; }
+[style*="color:#334155" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #334155" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(51, 65, 85)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--text) !important; }
+[style*="color:#1e293b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #1e293b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(30, 41, 59)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--text) !important; }
+[style*="color:#888" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #888" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(136, 136, 136)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--text-muted) !important; }
+[style*="color:#94a3b8" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #94a3b8" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(148, 163, 184)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--text-muted) !important; }
+[style*="color:#dc2626" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #dc2626" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(220, 38, 38)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--danger) !important; }
+[style*="color:#ef4444" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #ef4444" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(239, 68, 68)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--danger) !important; }
+[style*="color:#c00" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #c00" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(204, 0, 0)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--danger) !important; }
+[style*="color:#b91c1c" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #b91c1c" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(185, 28, 28)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--danger) !important; }
+[style*="color:#991b1b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #991b1b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(153, 27, 27)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--danger) !important; }
+[style*="color:#d97706" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #d97706" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(217, 119, 6)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--warning) !important; }
+[style*="color:#b45309" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #b45309" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(180, 83, 9)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--warning) !important; }
+[style*="color:#92400e" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #92400e" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(146, 64, 14)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--warning) !important; }
+[style*="color:#f59e0b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #f59e0b" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(245, 158, 11)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--warning) !important; }
+[style*="color:#059669" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #059669" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(5, 150, 105)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--success) !important; }
+[style*="color:#16a34a" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #16a34a" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(22, 163, 74)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--success) !important; }
+[style*="color:#15803d" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #15803d" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(21, 128, 61)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: var(--success) !important; }
+[style*="color:#0891b2" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #0891b2" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(8, 145, 178)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: #75d7ec !important; }
+[style*="color:#7c3aed" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #7c3aed" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(124, 58, 237)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: #c5acff !important; }
+[style*="color:#db2777" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #db2777" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(219, 39, 119)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: #f8a9d0 !important; }
+[style*="color:#ea580c" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: #ea580c" i]:not([style*="background-color"]):not([style*="border-color"]),
+[style*="color: rgb(234, 88, 12)" i]:not([style*="background-color"]):not([style*="border-color"]) { color: #ffbb92 !important; }
+[style*="background:#f8fafc" i],
+[style*="background: #f8fafc" i],
+[style*="background: rgb(248, 250, 252)" i] { background-color: var(--surface) !important; }
+[style*="background:#f1f5f9" i],
+[style*="background: #f1f5f9" i],
+[style*="background: rgb(241, 245, 249)" i] { background-color: var(--surface-raised) !important; }
+[style*="background:#e2e8f0" i],
+[style*="background: #e2e8f0" i],
+[style*="background: rgb(226, 232, 240)" i] { background-color: var(--border) !important; }
+[style*="background:#fef3c7" i],
+[style*="background: #fef3c7" i],
+[style*="background: rgb(254, 243, 199)" i] { background-color: var(--amber-surface) !important; }
+[style*="background:#fef2f2" i],
+[style*="background: #fef2f2" i],
+[style*="background: rgb(254, 242, 242)" i] { background-color: var(--red-surface) !important; }
+[style*="background:#eff6ff" i],
+[style*="background: #eff6ff" i],
+[style*="background: rgb(239, 246, 255)" i] { background-color: var(--blue-surface) !important; }
+[style*="background-color:#f8fafc" i],
+[style*="background-color: #f8fafc" i],
+[style*="background-color: rgb(248, 250, 252)" i] { background-color: var(--surface) !important; }
+[style*="background-color:#f1f5f9" i],
+[style*="background-color: #f1f5f9" i],
+[style*="background-color: rgb(241, 245, 249)" i] { background-color: var(--surface-raised) !important; }
+[style*="background-color:#e2e8f0" i],
+[style*="background-color: #e2e8f0" i],
+[style*="background-color: rgb(226, 232, 240)" i] { background-color: var(--border) !important; }
+[style*="background-color:#fef3c7" i],
+[style*="background-color: #fef3c7" i],
+[style*="background-color: rgb(254, 243, 199)" i] { background-color: var(--amber-surface) !important; }
+[style*="background-color:#fef2f2" i],
+[style*="background-color: #fef2f2" i],
+[style*="background-color: rgb(254, 242, 242)" i] { background-color: var(--red-surface) !important; }
+[style*="background-color:#eff6ff" i],
+[style*="background-color: #eff6ff" i],
+[style*="background-color: rgb(239, 246, 255)" i] { background-color: var(--blue-surface) !important; }
+
+/* Molecular scenes remain white in either application appearance. */
+.viewer-box,.viewer-container,.mol-viewer { background:#fff; }

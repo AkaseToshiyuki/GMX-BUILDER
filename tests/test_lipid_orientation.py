@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
+from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
-from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.membrane.builder import _validate_bilayer_structure
 from gmxbuilder.modules.membrane.lipid_orientation import (
     LipidOrientationError,
@@ -170,12 +170,12 @@ def test_bilayer_quality_gate_is_identical_with_parallel_kdtree_workers(
         )
 
     monkeypatch.setattr(
-        "gmxbuilder.modules.membrane.builder.configured_task_threads",
+        "gmxbuilder.modules.membrane.builder.current_task_threads",
         lambda: 1,
     )
     serial = _validate_bilayer_structure(leaflet(upper.copy()), leaflet(lower.copy()), [])
     monkeypatch.setattr(
-        "gmxbuilder.modules.membrane.builder.configured_task_threads",
+        "gmxbuilder.modules.membrane.builder.current_task_threads",
         lambda: 4,
     )
     parallel = _validate_bilayer_structure(leaflet(upper.copy()), leaflet(lower.copy()), [])

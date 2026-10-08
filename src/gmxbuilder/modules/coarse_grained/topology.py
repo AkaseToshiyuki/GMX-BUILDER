@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.coarse_grained.common import molecules_table
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGTopologyModule(BaseModule):
+class CGTopologyModule(CGWorkflowAdmission, BaseModule):
     name = "cg_topology"
     description = "Validate immutable Martini 3 topology metadata"
 
@@ -16,6 +17,7 @@ class CGTopologyModule(BaseModule):
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         text = str(system.metadata.get("cg_master_topology", ""))
         if "[ molecules ]" not in text or not molecules_table(text):
             raise ModuleConfigError("Final Martini topology has no [ molecules ] table")

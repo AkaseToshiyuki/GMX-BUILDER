@@ -8,11 +8,10 @@ from typing import ClassVar
 
 import numpy as np
 
-from gmxbuilder.core.structure import Structure
-from gmxbuilder.core.topology import Topology
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
-
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.topology import Topology
 
 _CHECKPOINT_SCHEMA_VERSION = 2
 
@@ -217,17 +216,16 @@ class System:
         name = str(resname).strip().upper()
         force_field = str(self.metadata.get("force_field", "")).strip().lower()
         if force_field:
-            try:
-                from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+            from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 
-                template = load_force_field_rtp(force_field).get_residue(name)
-                if template is not None:
-                    charge = sum(float(atom[2]) for atom in template["atoms"])
-                    rounded = round(charge)
-                    if abs(charge - rounded) <= 1e-3:
-                        return float(rounded)
-            except (FileNotFoundError, KeyError, ValueError):
-                pass
+            template = load_force_field_rtp(force_field).get_residue(name)
+            if template is None:
+                raise ValueError(f"No {force_field} residue charge template for {name}")
+            charge = sum(float(atom[2]) for atom in template["atoms"])
+            rounded = round(charge)
+            if abs(charge - rounded) > 1e-3:
+                raise ValueError(f"Non-integral {force_field} RTP charge for {name}: {charge}")
+            return float(rounded)
         return float(self._RESIDUE_CHARGES.get(name, 0.0))
 
     def total_charge(self) -> float:
@@ -349,7 +347,10 @@ class System:
                 elif self.topology and comp.atom_indices:
                     for i in comp.atom_indices:
                         if i < len(self.topology.atom_types):
-                            total += self.topology.atom_types[i].charge
+                            charge = self.topology.atom_types[i].charge
+                            if not np.isfinite(charge):
+                                raise ValueError("Ligand charge requires authoritative parameters")
+                            total += charge
         return total
 
     def list_component_kinds(self) -> list[ComponentKind]:
@@ -368,6 +369,7 @@ class System:
         """
         import json
 
+        self.structure.validate_atom_fields()
         checkpoint_dir = Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -384,10 +386,11 @@ class System:
         # never silently alter atom, residue, chain, or segment identifiers.
         atom_names = _unicode_array(struct.atom_names)
         resnames = _unicode_array(struct.resnames)
-        resids = np.array(struct.resids, dtype=np.int32)
+        resids = np.array(struct.resids, dtype=np.int64)
         arrays["atom_names"] = atom_names
         arrays["resnames"] = resnames
         arrays["resids"] = resids
+        arrays["source_ids"] = _unicode_array(struct.source_ids)
         if struct.chain_ids:
             arrays["chain_ids"] = _unicode_array(struct.chain_ids)
         if struct.elements:
@@ -398,6 +401,31 @@ class System:
             arrays["occupancies"] = np.array(struct.occupancies, dtype=np.float64)
         if struct.tempfactors:
             arrays["tempfactors"] = np.array(struct.tempfactors, dtype=np.float64)
+
+        # Per-atom force-field types are one record per atom. As JSON they were
+        # the largest thing in a checkpoint by a wide margin -- 18.85 MB of the
+        # 35.9 MB written after the topology step, for 176048 of them -- and
+        # the cost was parsing and formatting, not disk. They are numeric and
+        # highly repetitive, so they belong in the array file that is already
+        # compressed. Presence of "atom_type_name" is what marks the new
+        # layout; a checkpoint written before this keeps its JSON list.
+        atom_types = list(self.topology.atom_types) if self.topology else []
+        if atom_types:
+            arrays["atom_type_name"] = _unicode_array([t.name for t in atom_types])
+            arrays["atom_type_mass"] = np.array([t.mass for t in atom_types], dtype=np.float64)
+            arrays["atom_type_charge"] = np.array([t.charge for t in atom_types], dtype=np.float64)
+            arrays["atom_type_sigma"] = np.array([t.sigma for t in atom_types], dtype=np.float64)
+            arrays["atom_type_epsilon"] = np.array(
+                [t.epsilon for t in atom_types], dtype=np.float64
+            )
+            # `atom_class` is optional and None is not the same as "", so the
+            # distinction is carried rather than flattened.
+            arrays["atom_type_class"] = _unicode_array(
+                [("" if t.atom_class is None else t.atom_class) for t in atom_types]
+            )
+            arrays["atom_type_class_set"] = np.array(
+                [t.atom_class is not None for t in atom_types], dtype=bool
+            )
         np.savez_compressed(npz_path, **arrays)
 
         # --- system.json: components + topology + metadata ---
@@ -416,17 +444,8 @@ class System:
         topo = None
         if self.topology:
             topo = {
-                "atom_types": [
-                    {
-                        "name": t.name,
-                        "mass": t.mass,
-                        "charge": t.charge,
-                        "sigma": t.sigma,
-                        "epsilon": t.epsilon,
-                        "atom_class": t.atom_class,
-                    }
-                    for t in self.topology.atom_types
-                ],
+                # Written to system.npz above; see the note there.
+                "atom_types": [],
                 "bonds": [
                     {"i": b.i, "j": b.j, "funct": b.funct, "r0": b.r0, "k_b": b.k_b}
                     for b in self.topology.bonds
@@ -480,6 +499,7 @@ class System:
             }
 
         data = {
+            "structure_source_info": struct.source_info,
             "checkpoint_schema_version": _CHECKPOINT_SCHEMA_VERSION,
             "num_atoms": struct.num_atoms,
             "components": comps,
@@ -489,7 +509,11 @@ class System:
             data["topology"] = topo
 
         with open(json_path, "w") as fh:
-            json.dump(data, fh, indent=2, default=str)
+            json.dump(data, fh, separators=(",", ":"), default=str)
+
+        from gmxbuilder.core.checkpoint_status import write_status
+
+        write_status(self, checkpoint_dir)
 
     @classmethod
     def load_checkpoint(cls, checkpoint_dir: Path) -> System:
@@ -578,6 +602,8 @@ class System:
         occupancy_arr = arrays.get("occupancies")
         tempfactor_arr = arrays.get("tempfactors")
         struct = Structure(
+            source_info=data.get("structure_source_info", {}),
+            source_ids=arrays["source_ids"].tolist() if "source_ids" in arrays else [],
             coordinates=arrays["coordinates"],
             box_vectors=arrays["box_vectors"],
             atom_names=arrays["atom_names"].tolist(),
@@ -617,27 +643,48 @@ class System:
         topo_data = data.get("topology")
         if topo_data:
             from gmxbuilder.core.topology import (
-                Topology,
+                Angle,
                 AtomType,
                 Bond,
-                Angle,
                 Dihedral,
                 Improper,
                 MoleculeBlock,
+                Topology,
             )
 
             topology = Topology(force_field=topo_data.get("force_field", ""))
-            for td in topo_data.get("atom_types", []):
-                topology.atom_types.append(
-                    AtomType(
-                        name=td["name"],
-                        mass=td["mass"],
-                        charge=td["charge"],
-                        sigma=td["sigma"],
-                        epsilon=td["epsilon"],
-                        atom_class=td.get("atom_class", ""),
+            if "atom_type_name" in arrays:
+                names = arrays["atom_type_name"].tolist()
+                masses = arrays["atom_type_mass"].tolist()
+                charges = arrays["atom_type_charge"].tolist()
+                sigmas = arrays["atom_type_sigma"].tolist()
+                epsilons = arrays["atom_type_epsilon"].tolist()
+                classes = arrays["atom_type_class"].tolist()
+                class_set = arrays["atom_type_class_set"].tolist()
+                for index, name in enumerate(names):
+                    topology.atom_types.append(
+                        AtomType(
+                            name=name,
+                            mass=masses[index],
+                            charge=charges[index],
+                            sigma=sigmas[index],
+                            epsilon=epsilons[index],
+                            atom_class=classes[index] if class_set[index] else None,
+                        )
                     )
-                )
+            else:
+                # A checkpoint written before atom types moved into the npz.
+                for td in topo_data.get("atom_types", []):
+                    topology.atom_types.append(
+                        AtomType(
+                            name=td["name"],
+                            mass=td["mass"],
+                            charge=td["charge"],
+                            sigma=td["sigma"],
+                            epsilon=td["epsilon"],
+                            atom_class=td.get("atom_class", ""),
+                        )
+                    )
             for bd in topo_data.get("bonds", []):
                 topology.bonds.append(
                     Bond(

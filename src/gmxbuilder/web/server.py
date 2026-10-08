@@ -4,11 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import gzip
-import io
-from collections import deque
-from contextlib import asynccontextmanager, nullcontext
-from datetime import datetime, timedelta, timezone
 import heapq
 import json
 import logging
@@ -20,47 +15,112 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
+from contextlib import asynccontextmanager, nullcontext
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
 
 from gmxbuilder import VERSION
-from gmxbuilder.core.structure import Structure
-from gmxbuilder.core.chemistry import is_hydrogen
-from gmxbuilder.core.system import System
 from gmxbuilder.core.exceptions import ModuleConfigError, ParseError
-from gmxbuilder.io.pdb import PDBParser, PDBValidator
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
 from gmxbuilder.io.mdp import MDPWriter
-from gmxbuilder.modules.membrane.lipids import LipidRegistry, CATEGORY_NAMES
-from gmxbuilder.modules.solvation.water_models import WaterRegistry
-from gmxbuilder.modules.forcefield.registry import ForceFieldRegistry
-from gmxbuilder.web.task_manager import task_expiry, task_manager
+from gmxbuilder.io.pdb import PDBValidator
+from gmxbuilder.modules.export.naming import read_authoritative_archive
+from gmxbuilder.modules.membrane.lipids import LipidRegistry
 from gmxbuilder.runtime.hardware import (
     configured_task_slots,
-    find_gromacs_executable,
+    configured_task_threads,
     hardware_capabilities,
+    task_thread_allocation,
+    task_thread_scope,
 )
+from gmxbuilder.web import ligand_prep
 from gmxbuilder.web.custom_lipids import (
     CustomLipidStore,
-    run_custom_lipid_build,
     task_custom_lipid_scope,
 )
+from gmxbuilder.web.resource_policy import is_worker, managed_root
 from gmxbuilder.web.security import (
     DurableRateLimiter,
     SecurityConfig,
     apply_security_headers,
     client_identity,
     request_authenticated,
+    request_host_allowed,
+    request_is_direct_lan,
     request_is_https,
     request_origin_allowed,
 )
+from gmxbuilder.web.server_parts import http_limits as _http_limits
+from gmxbuilder.web.server_parts import modification_preview as _modification_preview
+from gmxbuilder.web.server_parts import orientation_preview as _orientation_preview
+from gmxbuilder.web.server_parts import structure_files as _structure_files
+from gmxbuilder.web.server_parts import structure_processing as _structure_processing
+from gmxbuilder.web.server_parts import task_resources as _task_resource_support
+from gmxbuilder.web.server_parts.admission import (
+    BoundedAdmission,
+    TaskAdmission,
+    WorkQueueFull,
+)
+from gmxbuilder.web.server_parts.input_limits import (
+    StructureInputLimitError,
+    StructureInputLimits,
+)
+from gmxbuilder.web.server_parts.static_delivery import CatalogCompression, VersionedStaticFiles
+from gmxbuilder.web.server_parts.task_security import (
+    InvalidTaskId,
+    install_capability_log_filter,
+    task_log_reference,
+)
+from gmxbuilder.web.server_parts.task_security import (
+    validate_task_id as _validate_task_id,
+)
+from gmxbuilder.web.task_manager import task_manager
+
+# Compatibility aliases keep server.py's legacy private helper surface intact
+# while the implementations live together under server_parts/.
+RequestBodyLimitMiddleware = _http_limits.RequestBodyLimitMiddleware
+_positive_body_limit = _http_limits.positive_body_limit
+_NONSTANDARD_AA_MAP = _structure_processing.NONSTANDARD_AA_MAP
+_STRUCTURE_SUFFIX_FORMATS = _structure_processing.STRUCTURE_SUFFIX_FORMATS
+_WATER_RESNAMES = _structure_processing.WATER_RESNAMES
+_is_hydrogen = _structure_processing.is_hydrogen
+_apply_disulfide_rename = _structure_processing.apply_disulfide_rename
+_auto_clean_pdb = _structure_processing.auto_clean_pdb
+_detect_disulfides = _structure_processing.detect_disulfides
+_extract_sequences = _structure_processing.extract_sequences
+_filter_pdb_for_display = _structure_processing.filter_pdb_for_display
+_prepare_and_inspect_structure_upload = _structure_processing.prepare_and_inspect_structure_upload
+_prepare_structure_upload = _structure_processing.prepare_structure_upload
+process_uploaded_structure = _structure_processing.process_uploaded_structure
+read_bounded_pdb_display = _structure_processing.read_bounded_pdb_display
+_structure_upload_suffix = _structure_processing.structure_upload_suffix
+summarize_resume_structure = _structure_processing.summarize_resume_structure
+_normalise_small_molecule_labels = _structure_files.normalise_small_molecule_labels
+_build_modification_preview = _modification_preview.build_modification_preview
+_legacy_orientation_payload = _orientation_preview.legacy_orientation_payload
+_task_resource_helpers = _task_resource_support.TaskResourceHelpers(
+    lambda: task_manager,
+    _validate_task_id,
+)
+_SERVER_PATH_PATTERN = _task_resource_support.SERVER_PATH_PATTERN
+_validate_task_resource = _task_resource_helpers.validate_task_resource
+_resolve_input_pdb = _task_resource_helpers.resolve_input_pdb
+_resolve_pdb_path = _task_resource_helpers.resolve_pdb_path
+_resolve_propka_pdb_path = _task_resource_helpers.resolve_propka_pdb_path
+_redact_server_paths = _task_resource_helpers.redact_server_paths
+_sanitize_public_value = _task_resource_helpers.sanitize_public_value
+_public_task_state = _task_resource_helpers.public_task_state
+_public_step_result = _task_resource_helpers.public_step_result
+_authoritative_task_zip = _task_resource_helpers.authoritative_task_zip
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -71,6 +131,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("gmxbuilder.web")
+install_capability_log_filter()
 
 _MARTINI_TASK_TYPES = frozenset(
     {
@@ -104,79 +165,6 @@ _INITIAL_SECURITY = SecurityConfig.from_environment()
 _ALLOWED_ORIGINS = _INITIAL_SECURITY.allowed_origins
 
 
-def _positive_body_limit(name: str, default: int) -> int:
-    """Read a bounded positive request-body limit from the environment."""
-    raw = os.environ.get(name, str(default)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning("Ignoring invalid %s=%r", name, raw)
-        return default
-    return value if 1 <= value <= 1024 * 1024 * 1024 else default
-
-
-class RequestBodyLimitMiddleware:
-    """Reject oversized fixed-length and chunked HTTP request bodies."""
-
-    def __init__(self, application):
-        self.application = application
-
-    async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http":
-            await self.application(scope, receive, send)
-            return
-        headers = {key.lower(): value for key, value in scope.get("headers", [])}
-        content_type = headers.get(b"content-type", b"").lower()
-        if content_type.startswith(b"multipart/form-data"):
-            limit = _positive_body_limit("GMXBUILDER_UPLOAD_BODY_LIMIT", 128 * 1024 * 1024)
-        else:
-            limit = _positive_body_limit("GMXBUILDER_JSON_BODY_LIMIT", 2 * 1024 * 1024)
-        declared = headers.get(b"content-length")
-        if declared is not None:
-            try:
-                if int(declared) > limit:
-                    await JSONResponse(
-                        {"error": f"Request body exceeds the {limit}-byte limit"},
-                        status_code=413,
-                    )(scope, receive, send)
-                    return
-            except ValueError:
-                await JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)(
-                    scope, receive, send
-                )
-                return
-
-        consumed = 0
-        response_started = False
-
-        class RequestBodyTooLarge(Exception):
-            pass
-
-        async def limited_receive():
-            nonlocal consumed
-            message = await receive()
-            if message.get("type") == "http.request":
-                consumed += len(message.get("body", b""))
-                if consumed > limit:
-                    raise RequestBodyTooLarge
-            return message
-
-        async def tracked_send(message):
-            nonlocal response_started
-            if message.get("type") == "http.response.start":
-                response_started = True
-            await send(message)
-
-        try:
-            await self.application(scope, limited_receive, tracked_send)
-        except RequestBodyTooLarge:
-            if not response_started:
-                await JSONResponse(
-                    {"error": f"Request body exceeds the {limit}-byte limit"},
-                    status_code=413,
-                )(scope, receive, send)
-
-
 @asynccontextmanager
 async def _app_lifespan(_application: FastAPI):
     await startup_background_tasks()
@@ -187,18 +175,51 @@ async def _app_lifespan(_application: FastAPI):
 
 
 app = FastAPI(title="GMXBUILDER", version=VERSION, lifespan=_app_lifespan)
-app.add_middleware(RequestBodyLimitMiddleware)
+app.add_middleware(CatalogCompression)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(_ALLOWED_ORIGINS),
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type", "X-Admin-Token", "X-GMXBUILDER-Token"],
 )
-app.mount("/static", StaticFiles(directory=str(_STATIC_DIR), follow_symlink=False), name="static")
+app.mount(
+    "/static", VersionedStaticFiles(directory=str(_STATIC_DIR), follow_symlink=False), name="static"
+)
 
-# New tasks use a full 128-bit UUID.  Twelve-character IDs remain readable so
-# existing persisted tasks survive the upgrade.
-_TASK_ID_PATTERN = re.compile(r"^(?:[a-f0-9]{12}|[a-f0-9]{32})$")
+
+class InvalidJsonBody(ValueError):
+    """Expected client error for malformed or non-object JSON input."""
+
+
+@app.exception_handler(InvalidTaskId)
+async def _invalid_task_id_handler(_request: Request, _exc: InvalidTaskId):
+    return JSONResponse({"error": "Invalid task ID format"}, status_code=400)
+
+
+@app.exception_handler(InvalidJsonBody)
+async def _invalid_json_handler(_request: Request, exc: InvalidJsonBody):
+    return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.exception_handler(WorkQueueFull)
+async def _work_queue_full_handler(_request: Request, _exc: WorkQueueFull):
+    return JSONResponse(
+        {"error": "The interactive work queue is full; retry shortly."},
+        status_code=503,
+        headers={"Retry-After": "5"},
+    )
+
+
+async def _json_object(request: Request) -> dict[str, Any]:
+    """Decode one bounded JSON object without turning client errors into 500s."""
+    try:
+        value = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise InvalidJsonBody("Request body must be valid JSON") from exc
+    if not isinstance(value, dict):
+        raise InvalidJsonBody("Request body must be a JSON object")
+    return value
+
 
 _RATE_LIMITERS: dict[Path, DurableRateLimiter] = {}
 _RATE_LIMITERS_LOCK = threading.Lock()
@@ -206,7 +227,8 @@ _RATE_LIMITERS_LOCK = threading.Lock()
 
 def _rate_limiter() -> DurableRateLimiter:
     configured = os.environ.get("GMXBUILDER_RATE_LIMIT_DB", "").strip()
-    path = Path(configured) if configured else task_manager.root / ".rate-limits.sqlite3"
+    default_root = managed_root() / ".control" if managed_root() else task_manager.root
+    path = Path(configured) if configured else default_root / ".rate-limits.sqlite3"
     path = path.expanduser().resolve()
     with _RATE_LIMITERS_LOCK:
         limiter = _RATE_LIMITERS.get(path)
@@ -216,12 +238,22 @@ def _rate_limiter() -> DurableRateLimiter:
         return limiter
 
 
-def _rate_policy(path: str) -> tuple[str, int, float] | None:
+def _rate_policy(path: str, method: str) -> tuple[str, int, float] | None:
+    if method == "GET" and (path.startswith("/api/") or path == "/health"):
+        if path in {"/api/health", "/health"}:
+            return None
+        return ("api-read", int(os.environ.get("GMXBUILDER_API_READ_RATE", "600")), 60.0)
     if path == "/api/build":
         return ("finalize", int(os.environ.get("GMXBUILDER_FINALIZE_RATE", "30")), 3600.0)
-    if path in {"/api/upload-pdb", "/api/build-lipid-library"} or (
-        path.startswith("/api/task/") and path.endswith("/custom-lipids")
+    if (
+        path in {"/api/upload-pdb", "/api/build-lipid-library"}
+        or path.startswith("/api/cgenff-upload/")
+        or path.startswith("/api/ligand-chemistry-upload/")
+        or (path.startswith("/api/task/") and path.endswith("/custom-lipids"))
     ):
+        # Temporary deployment override; removing it restores the durable budget.
+        if os.environ.get("GMXBUILDER_HEAVY_RATE_DISABLED", "") == "1":
+            return None
         return ("heavy", int(os.environ.get("GMXBUILDER_HEAVY_RATE", "20")), 3600.0)
     if path.startswith("/api/") and path not in {"/api/health"}:
         return ("api-write", int(os.environ.get("GMXBUILDER_API_RATE", "240")), 60.0)
@@ -231,12 +263,19 @@ def _rate_policy(path: str) -> tuple[str, int, float] | None:
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     """Enforce deployment authentication, trusted-proxy and durable rate policy."""
+    # Only the local executable sets this flag; the worker has no network
+    # listener. Its request was authenticated and admitted by this process.
+    if is_worker():
+        return await call_next(request)
     security = SecurityConfig.from_environment()
-    public_mode = security.mode == "public"
-    live_probe = request.url.path == "/health/live"
+    public_mode = security.require_https
+    live_probe = request.url.path in {"/health/live", "/health/ready"}
 
     def secured(response):
         return apply_security_headers(response, public_mode=public_mode)
+
+    if not request_host_allowed(request, security):
+        return secured(JSONResponse({"error": "Request Host is not allowed"}, status_code=400))
 
     if security.errors and not live_probe:
         return secured(
@@ -249,7 +288,12 @@ async def security_middleware(request: Request, call_next):
             )
         )
 
-    if not live_probe and public_mode and not request_is_https(request, security):
+    if (
+        not live_probe
+        and public_mode
+        and not request_is_https(request, security)
+        and not request_is_direct_lan(request, security)
+    ):
         return secured(
             JSONResponse(
                 {"error": "HTTPS is required in public deployment mode"},
@@ -257,7 +301,7 @@ async def security_middleware(request: Request, call_next):
             )
         )
 
-    authentication_required = public_mode or security.authentication_enabled
+    authentication_required = security.mode == "public" or security.authentication_enabled
     if not live_probe and authentication_required and not request_authenticated(request, security):
         headers = {
             "WWW-Authenticate": (
@@ -268,128 +312,159 @@ async def security_middleware(request: Request, call_next):
             JSONResponse({"error": "Authentication is required"}, status_code=401, headers=headers)
         )
 
-    if authentication_required and not request_origin_allowed(request, security):
+    # Enforced in every mode. Authentication is not what makes a cross-site
+    # write dangerous; reachability is, and a loopback listener is reachable
+    # from any page the operator happens to have open.
+    if not live_probe and not request_origin_allowed(request, security):
         return secured(JSONResponse({"error": "Request Origin is not allowed"}, status_code=403))
 
-    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-        policy = _rate_policy(request.url.path)
-        if policy is not None:
-            bucket_name, limit, window = policy
-            allowed, retry_after = _rate_limiter().allow(
-                client_identity(request, security), bucket_name, limit, window
-            )
-            if not allowed:
-                return secured(
-                    JSONResponse(
-                        {
-                            "error": (
-                                "Request rate limit exceeded. Wait before retrying; "
-                                "running or queued work has not been cancelled."
-                            )
-                        },
-                        status_code=429,
-                        headers={"Retry-After": str(retry_after)},
-                    )
-                )
+    try:
+        _http_limits.validate_body_media(request.scope)
+    except _http_limits.BodyLimitError as exc:
+        return secured(JSONResponse({"error": str(exc)}, status_code=exc.status))
+    request.state.gmxbuilder_client_identity = client_identity(request, security)
 
-    response = await call_next(request)
+    policy = _rate_policy(request.url.path, request.method)
+    if policy is not None:
+        bucket_name, limit, window = policy
+        try:
+            allowed, retry_after = await _run_control(
+                _rate_limiter().allow,
+                client_identity(request, security),
+                bucket_name,
+                limit,
+                window,
+            )
+        except WorkQueueFull:
+            return secured(
+                JSONResponse({"error": "Server is busy; retry shortly"}, status_code=503)
+            )
+        if not allowed:
+            return secured(
+                JSONResponse(
+                    {
+                        "error": (
+                            "Request rate limit exceeded. Wait before retrying; "
+                            "running or queued work has not been cancelled."
+                        )
+                    },
+                    status_code=429,
+                    headers={"Retry-After": str(retry_after)},
+                )
+            )
+
+    if _resources is not None:
+        response = await _managed_request(request, call_next)
+    else:
+        response = await call_next(request)
     return secured(response)
 
 
-def _validate_task_resource(task_id: str, resource: str | Path) -> Path:
-    """Resolve a server-owned file and confine it to exactly one task."""
-    task_id = _validate_task_id(task_id)
-    task_dir = task_manager.get_task_dir(task_id).resolve()
-    candidate = Path(resource)
-    if not candidate.is_absolute():
-        candidate = task_dir / candidate
-    resolved = candidate.resolve()
-    if resolved == task_dir or task_dir not in resolved.parents:
-        raise ValueError(f"Resource is outside task {task_id}")
-    return resolved
+# The managed branch returns before call_next: its network reads must also
+# traverse the outer ASGI byte/deadline/memory guard.
+app.add_middleware(RequestBodyLimitMiddleware)
+from gmxbuilder.web.installation_guard import InstallationGuardMiddleware  # noqa: E402
+
+app.add_middleware(InstallationGuardMiddleware)
 
 
-def _resolve_input_pdb(task_id: str) -> str:
-    """Structure for the input step — filtered selection > original upload.
-
-    Structure cleaning is now handled inside PDBInputModule, so there is
-    no intermediate cleaned.pdb.
-    """
-    task_id = _validate_task_id(task_id)
-    task_dir = task_manager.get_task_dir(task_id)
-
-    filtered = task_dir / "filtered.pdb"
-    if filtered.exists():
-        return str(filtered)
-
-    state = task_manager.get_state(task_id) or {}
-    uploaded_name = state.get("uploaded_structure_name")
-    if isinstance(uploaded_name, str) and uploaded_name:
-        uploaded = _validate_task_resource(task_id, uploaded_name)
-        if uploaded.is_file() and not uploaded.is_symlink():
-            return str(uploaded)
-
-    pdb_path = task_manager.get_pdb_path(task_id)
-    if pdb_path and pdb_path.exists():
-        return str(pdb_path)
-
-    raise ValueError(f"No structure file found for task {task_id}")
+_resources = None
 
 
-def _resolve_pdb_path(task_id: str) -> str:
-    """Best-effort PDB for *preview/propka* endpoints — may use structure checkpoint.
+async def _managed_request(request, call_next):
+    from gmxbuilder.web.resource_coordinator import expensive_request, task_from_path
 
-    Priority: structure checkpoint > filtered.pdb > uploaded PDB.
-    Not used by pipeline steps (they use System.load_checkpoint, which has no fallbacks).
-    """
-    task_id = _validate_task_id(task_id)
-    task_dir = task_manager.get_task_dir(task_id)
+    cached_display = False
+    if request.method == "GET" and request.url.path.endswith("/viewer.json"):
+        from gmxbuilder.web.server_parts.viewer_data import cached_viewer
 
-    structure_pdb = task_dir / "steps" / "structure" / "viewer.pdb"
-    if structure_pdb.exists():
-        return str(structure_pdb)
+        parts = request.url.path.strip("/").split("/")
+        if len(parts) == 5 and parts[1] == "step":
+            try:
+                task_id = _validate_task_id(parts[2])
+                directory = _validate_task_resource(task_id, Path("steps") / parts[3])
+                cached_display = cached_viewer(directory) is not None
+            except (ValueError, OSError):
+                pass
+    if expensive_request(request.method, request.url.path) and not cached_display:
+        return await _resources.enqueue_request(request)
+    task_id = task_from_path(request.url.path)
+    if request.url.path.startswith("/api/operations/"):
+        parts = request.url.path.strip("/").split("/")
+        operation = _resources.queue.get(parts[2])
+        task_id = operation["task_id"] if operation else None
+        # Status remains readable after pressure cleanup so the reason is visible.
+        if not request.url.path.endswith("/result"):
+            task_id = None
+        elif operation and operation["status"] in {"failed", "cancelled"}:
+            return _resources.operation_response(parts[2], result=True)
+    leased_state = task_manager.get_state(task_id) if task_id else None
+    if task_id and leased_state is None:
+        return JSONResponse(
+            {"error": "Task expired or was removed to release storage."}, status_code=410
+        )
+    if request.method == "POST" and request.url.path in {"/api/tasks"}:
+        if not _resources.make_room(65536):
+            return JSONResponse(
+                {"error": "Storage is full; new writes are paused."}, status_code=507
+            )
+    if not task_id:
+        return await call_next(request)
+    lease = task_manager.active_task(task_id)
+    lease.__enter__()
+    try:
+        response = await call_next(request)
+    except BaseException:
+        lease.__exit__(None, None, None)
+        raise
+    original = response.body_iterator
 
-    filtered = task_dir / "filtered.pdb"
-    if filtered.exists():
-        return str(filtered)
+    async def leased_body():
+        from datetime import datetime
 
-    pdb_path = task_manager.get_pdb_path(task_id)
-    if pdb_path and pdb_path.exists():
-        return str(pdb_path)
+        deadline = datetime.fromisoformat(leased_state["expires_at"]).timestamp()
+        transfer = asyncio.current_task()
+        expiry_timer = asyncio.get_running_loop().call_later(
+            max(0, deadline - time.time()), transfer.cancel
+        )
+        try:
+            async for chunk in original:
+                yield chunk
+        finally:
+            expiry_timer.cancel()
+            lease.__exit__(None, None, None)
 
-    raise ValueError(f"No PDB file found for task {task_id}")
-
-
-def _resolve_propka_pdb_path(task_id: str) -> str:
-    """Return the stable, pre-protonation structure used by PROPKA.
-
-    A Structure-step checkpoint already contains a previous pH decision. Using
-    it as the input for a later Compute request makes the result depend on which
-    pH was checked first. Always prefer the repaired Step-1 checkpoint instead.
-    """
-    task_id = _validate_task_id(task_id)
-    task_dir = task_manager.get_task_dir(task_id)
-
-    input_pdb = task_dir / "steps" / "input" / "viewer.pdb"
-    if input_pdb.exists():
-        return str(input_pdb)
-
-    filtered = task_dir / "filtered.pdb"
-    if filtered.exists():
-        return str(filtered)
-
-    pdb_path = task_manager.get_pdb_path(task_id)
-    if pdb_path and pdb_path.exists():
-        return str(pdb_path)
-
-    raise ValueError(f"No PDB file found for task {task_id}")
+    response.body_iterator = leased_body()
+    return response
 
 
-def _validate_task_id(task_id: str) -> str:
-    """Validate task_id format and path safety. Returns sanitized task_id."""
-    if not _TASK_ID_PATTERN.match(task_id):
-        raise ValueError(f"Invalid task ID format: {task_id}")
-    return task_id
+@app.get("/api/operations/{operation_id}")
+async def api_operation_status(operation_id: str):
+    if _resources is None:
+        return JSONResponse({"error": "Managed resource service is not enabled"}, status_code=404)
+    return _resources.operation_response(operation_id)
+
+
+@app.get("/api/operations/{operation_id}/result")
+async def api_operation_result(operation_id: str):
+    if _resources is None:
+        return JSONResponse({"error": "Managed resource service is not enabled"}, status_code=404)
+    return _resources.operation_response(operation_id, result=True)
+
+
+@app.get("/api/resource-policy")
+async def api_resource_policy():
+    from gmxbuilder.web.resource_policy import ResourcePolicy
+
+    policy = ResourcePolicy.from_environment()
+    return {
+        "managed": _resources is not None,
+        "task_lifetime_hours": policy.lifetime_hours,
+        "task_storage_bytes": policy.task_storage_bytes,
+        "total_storage_bytes": policy.total_storage_bytes,
+        "task_memory_bytes": policy.task_memory_bytes,
+        "pause_reason": _resources.pause_reason if _resources else None,
+    }
 
 
 def _is_admin_request(request: Request) -> bool:
@@ -398,101 +473,13 @@ def _is_admin_request(request: Request) -> bool:
     return bool(configured and supplied and secrets.compare_digest(configured, supplied))
 
 
-_SERVER_PATH_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_])/(?:home|root|tmp|var|opt|srv|mnt|media)"
-    r"(?:/[^\s,;:)\]}]+)+"
-)
-
-
-def _redact_server_paths(value: object) -> str:
-    """Remove host filesystem locations from browser-visible build messages."""
-    redacted = str(value)
-    roots = {
-        task_manager.root.expanduser().resolve(strict=False),
-        Path(tempfile.gettempdir()).expanduser().resolve(strict=False),
-    }
-    configured_cache = os.environ.get("GMXBUILDER_CACHE_DIR")
-    if configured_cache:
-        roots.add(Path(configured_cache).expanduser().resolve(strict=False))
-    for root in sorted((str(path) for path in roots), key=len, reverse=True):
-        redacted = re.sub(
-            re.escape(root) + r"(?:/[^\s,;:)\]}]+)*",
-            "<server-path>",
-            redacted,
-        )
-    return _SERVER_PATH_PATTERN.sub("<server-path>", redacted)
-
-
-def _sanitize_public_value(value: object) -> object:
-    """Recursively remove internal path fields and redact path-like strings."""
-    if isinstance(value, dict):
-        return {
-            str(key): _sanitize_public_value(item)
-            for key, item in value.items()
-            if not str(key).lower().endswith("_path")
-        }
-    if isinstance(value, list):
-        return [_sanitize_public_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_sanitize_public_value(item) for item in value]
-    if isinstance(value, str):
-        return _redact_server_paths(value)
-    return value
-
-
-def _public_task_state(state: dict) -> dict:
-    """Return resumable task state without exposing host filesystem paths."""
-    public = copy.deepcopy(state)
-    uploads = public.get("cgenff_uploads")
-    if isinstance(uploads, dict):
-        public["cgenff_uploads"] = {
-            str(name): {
-                "force_field": package.get("force_field"),
-                "cgenff_version": package.get("cgenff_version"),
-                "maximum_penalty": package.get("maximum_penalty"),
-                "ready": True,
-            }
-            for name, package in uploads.items()
-            if isinstance(package, dict)
-        }
-    sanitized = _sanitize_public_value(public)
-    assert isinstance(sanitized, dict)
-    return sanitized
-
-
-def _public_step_result(task_id: str, result: dict) -> dict:
-    """Replace internal StepRunner paths with task-scoped resource URLs."""
-    public = dict(result)
-    viewer_available = bool(public.pop("viewer_pdb_path", None))
-    index_available = bool(public.pop("index_path", None))
-    public.pop("zip_path", None)
-    step_name = str(public.get("step", ""))
-    if viewer_available and step_name:
-        public["viewer_pdb_url"] = f"/api/step/{task_id}/{step_name}/viewer.pdb"
-    if index_available:
-        public["index_available"] = True
-    sanitized = _sanitize_public_value(public)
-    assert isinstance(sanitized, dict)
-    return sanitized
-
-
-def _authoritative_task_zip(task_id: str) -> Path | None:
-    """Return the current export ZIP, preferring it over legacy output bundles."""
-    task_dir = task_manager.get_task_dir(task_id)
-    export_dir = task_dir / "steps" / "export"
-    current = list(export_dir.glob("*.zip")) if export_dir.is_dir() else []
-    if current:
-        return max(current, key=lambda path: path.stat().st_mtime_ns)
-
-    output_dir = task_manager.get_output_dir(task_id)
-    legacy = list(output_dir.glob("*.zip"))
-    if legacy:
-        return max(legacy, key=lambda path: path.stat().st_mtime_ns)
-    return None
-
-
 # Task store (in-memory — survives as long as the server runs)
 _tasks: dict[str, dict] = {}
+# Live progress for the Check currently running on a task. Deliberately in
+# memory only: it is meaningless after a restart, and the step itself is
+# already checkpointed on disk.
+_step_progress: dict[str, dict] = {}
+_step_progress_lock = threading.Lock()
 _build_logs: dict[str, list[str]] = {}  # task_id → list of log lines
 _tasks_lock = threading.Lock()
 _build_logs_lock = threading.Lock()
@@ -518,22 +505,34 @@ _MAX_CONCURRENT_BUILDS = min(
 _build_semaphore = threading.BoundedSemaphore(_MAX_CONCURRENT_BUILDS)
 _executor: ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
+_MAX_STEP_WORKERS = min(2, _MAX_CONCURRENT_BUILDS)
+_MAX_STEP_SUBMISSIONS = min(
+    _positive_environment_integer("GMXBUILDER_MAX_STEP_SUBMISSIONS", _MAX_STEP_WORKERS * 2),
+    64,
+)
+_step_admission = TaskAdmission(_MAX_STEP_SUBMISSIONS)
+_step_executor: ThreadPoolExecutor | None = None
+_step_executor_lock = threading.Lock()
 _custom_lipid_executor: ThreadPoolExecutor | None = None
 _custom_lipid_executor_lock = threading.Lock()
+_MAX_INTERACTIVE_SUBMISSIONS = min(
+    _positive_environment_integer("GMXBUILDER_MAX_INTERACTIVE_SUBMISSIONS", 6),
+    64,
+)
+_interactive_admission = BoundedAdmission(_MAX_INTERACTIVE_SUBMISSIONS)
 _interactive_executor: ThreadPoolExecutor | None = None
 _interactive_executor_lock = threading.Lock()
+_control_executor: ThreadPoolExecutor | None = None
+_control_executor_lock = threading.Lock()
+_control_admission = BoundedAdmission(32)
 _event_loop: asyncio.AbstractEventLoop | None = None
 _lifespan_tasks: list[asyncio.Task] = []
 _pka_cache: dict[str, list[dict]] = {}  # task_id → pKa predictions
+_pka_cache_digest: dict[str, str] = {}
 _pka_cache_lock = threading.Lock()
 _pka_running: set[str] = set()  # task_ids currently being computed
 # Track which tasks are currently building (prevent duplicate builds)
 _building_tasks: set[str] = set()
-_custom_lipid_jobs: set[tuple[str, str]] = set()
-_custom_lipid_jobs_lock = threading.Lock()
-_custom_gpu_condition = threading.Condition()
-_custom_gpu_in_use: set[int] = set()
-_custom_gpu_cursor = 0
 
 
 def _configured_custom_gpu_ids() -> tuple[int, ...]:
@@ -560,7 +559,7 @@ _CUSTOM_GPU_CONCURRENCY = min(
 )
 
 # Cleanup expired tasks on startup
-_startup_removed = task_manager.cleanup_expired()
+_startup_removed = [] if managed_root() else task_manager.cleanup_expired()
 if _startup_removed:
     logger.info("Cleaned up %d expired task(s)", len(_startup_removed))
 
@@ -572,7 +571,16 @@ if _startup_removed:
 async def startup_background_tasks():
     """Start background tasks: periodic cleanup + build-queue consumer."""
     global _queue_event, _event_loop
+    global _resources
+    if managed_root() and not is_worker():
+        from gmxbuilder.web.resource_coordinator import ResourceCoordinator
+
+        _resources = ResourceCoordinator(managed_root(), task_manager)
+        await _resources.start()
+        _resources.confine_web_writes()
+        return
     _get_executor()
+    _get_step_executor()
     _get_custom_lipid_executor()
     _get_interactive_executor()
     _event_loop = asyncio.get_running_loop()
@@ -614,14 +622,9 @@ async def startup_background_tasks():
         )
     if _build_queue:
         _queue_event.set()
-    # Resume task-owned calculations that were queued or interrupted by a
-    # service restart.  Definitions and states are disk-backed.
-    for task_dir in sorted(task_manager.root.iterdir()):
-        if not task_dir.is_dir() or task_manager.is_expired(task_dir.name):
-            continue
-        store = CustomLipidStore(task_dir)
-        for lipid_name in store.pending_names():
-            _schedule_custom_lipid_build(task_dir.name, lipid_name)
+    # New lipids are reviewed and built offline by the administrator. Never
+    # restart legacy task-local pre-equilibration jobs during Web startup.
+    # Keep their records intact so users can read the previous status/results.
 
     # ---- Periodic cleanup ----
     async def _cleanup_loop():
@@ -638,6 +641,8 @@ async def startup_background_tasks():
                     with _build_logs_lock:
                         for tid in removed:
                             _build_logs.pop(tid, None)
+                    for tid in removed:
+                        ligand_prep.cancel(tid)
                     # pKa cache is keyed by file path, not task ID —
                     # reconstruct paths from removed task IDs
                     with _pka_cache_lock:
@@ -649,6 +654,7 @@ async def startup_background_tasks():
                                     break
                         for k in keys_to_drop:
                             _pka_cache.pop(k, None)
+                            _pka_cache_digest.pop(k, None)
                         for tid in removed:
                             _pka_running.discard(tid)
                     # StepRunner cache cleanup
@@ -674,7 +680,14 @@ async def startup_background_tasks():
 
 async def shutdown_event():
     """Graceful shutdown: wait for in-flight builds to complete."""
-    global _executor, _custom_lipid_executor, _interactive_executor, _event_loop
+    global _executor, _step_executor, _custom_lipid_executor, _interactive_executor, _event_loop
+    global _resources, _control_executor
+    if _resources is not None:
+        await _resources.close()
+        _resources = None
+    from gmxbuilder.web.server_parts.option_catalog import close_catalog
+
+    await asyncio.to_thread(close_catalog)
     logger.info("Shutting down — waiting for in-flight builds...")
     for task in _lifespan_tasks:
         task.cancel()
@@ -686,6 +699,11 @@ async def shutdown_event():
         _executor = None
     if executor is not None:
         executor.shutdown(wait=True, cancel_futures=False)
+    with _step_executor_lock:
+        step_executor = _step_executor
+        _step_executor = None
+    if step_executor is not None:
+        step_executor.shutdown(wait=True, cancel_futures=False)
     with _custom_lipid_executor_lock:
         custom_executor = _custom_lipid_executor
         _custom_lipid_executor = None
@@ -696,6 +714,10 @@ async def shutdown_event():
         _interactive_executor = None
     if interactive_executor is not None:
         interactive_executor.shutdown(wait=True, cancel_futures=False)
+    with _control_executor_lock:
+        control_executor, _control_executor = _control_executor, None
+    if control_executor is not None:
+        control_executor.shutdown(wait=True, cancel_futures=True)
     _event_loop = None
     logger.info("Shutdown complete")
 
@@ -713,7 +735,11 @@ def _get_executor() -> ThreadPoolExecutor:
 
 
 def _get_custom_lipid_executor() -> ThreadPoolExecutor:
-    """Dedicated two-worker queue so long NPT jobs cannot starve web Checks."""
+    """Background ligand parameterization with the existing worker allocation.
+
+    The legacy name is retained for callers; Web lipid pre-equilibration has
+    been retired and no longer uses this pool.
+    """
     global _custom_lipid_executor
     with _custom_lipid_executor_lock:
         if _custom_lipid_executor is None or getattr(_custom_lipid_executor, "_shutdown", False):
@@ -722,6 +748,18 @@ def _get_custom_lipid_executor() -> ThreadPoolExecutor:
                 thread_name_prefix="gmxbuilder-custom-lipid",
             )
         return _custom_lipid_executor
+
+
+def _get_step_executor() -> ThreadPoolExecutor:
+    """Dedicated bounded pool so interactive Checks cannot starve finalization."""
+    global _step_executor
+    with _step_executor_lock:
+        if _step_executor is None or getattr(_step_executor, "_shutdown", False):
+            _step_executor = ThreadPoolExecutor(
+                max_workers=_MAX_STEP_WORKERS,
+                thread_name_prefix="gmxbuilder-step",
+            )
+        return _step_executor
 
 
 def _get_interactive_executor() -> ThreadPoolExecutor:
@@ -736,11 +774,44 @@ def _get_interactive_executor() -> ThreadPoolExecutor:
         return _interactive_executor
 
 
+def _submit_interactive(function, /, *args, **kwargs):
+    """Release admission after completion or cancellation before execution."""
+    admission = _interactive_admission
+    if not admission.try_acquire():
+        raise WorkQueueFull("interactive work queue is full")
+    try:
+        future = _get_interactive_executor().submit(function, *args, **kwargs)
+    except BaseException:
+        admission.release()
+        raise
+    # A queued future may be cancelled without ever entering the callable. A
+    # running future cannot be cancelled and keeps its slot until it finishes.
+    future.add_done_callback(lambda _finished: admission.release())
+    return future
+
+
+async def _run_control(function, /, *args, **kwargs):
+    """Keep bounded rate-limit/control reads independent of scientific previews."""
+    global _control_executor
+    admission = _control_admission
+    if not admission.try_acquire():
+        raise WorkQueueFull("control work queue is full")
+    try:
+        with _control_executor_lock:
+            if _control_executor is None:
+                _control_executor = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="gmxbuilder-control"
+                )
+            future = _control_executor.submit(function, *args, **kwargs)
+    except BaseException:
+        admission.release()
+        raise
+    future.add_done_callback(lambda _finished: admission.release())
+    return await asyncio.wrap_future(future)
+
+
 async def _run_interactive(function, /, *args, **kwargs):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        _get_interactive_executor(), partial(function, *args, **kwargs)
-    )
+    return await asyncio.wrap_future(_submit_interactive(function, *args, **kwargs))
 
 
 def _signal_queue() -> None:
@@ -767,18 +838,36 @@ def _wizard_html() -> HTMLResponse:
     if not template_path.is_file():
         return HTMLResponse("<h1>GMXBUILDER Web</h1><p>Template not found.</p>")
     html = template_path.read_text(encoding="utf-8")
-    # Simple template variable replacement (version is the only dynamic value)
     html = html.replace("{{ version }}", VERSION)
+    # Optional deployment extensions. A build with none -- every public build --
+    # substitutes an empty string, so the region collapses rather than leaving
+    # an empty panel. Failures inside an extension are contained there; the page
+    # must render either way.
+    try:
+        from gmxbuilder.extensions import render_announcements_html
+
+        announcements = render_announcements_html()
+    except Exception:
+        logger.warning("Homepage announcements were skipped", exc_info=True)
+        announcements = ""
+    html = html.replace("{{ announcements }}", announcements)
     return HTMLResponse(html)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def index(request: Request):
     """Serve the workflow selection page."""
     return _wizard_html()
 
 
-_WORKFLOW_ROUTES = {"BilayerBuilder", "PureBilayerSystem", "Solvator", "CoarseGrainedBuilder"}
+_WORKFLOW_ROUTES = {
+    "BilayerBuilder",
+    "PureBilayerSystem",
+    "Solvator",
+    "CoarseGrainedBuilder",
+    "Martini3BilayerBuilder",
+    "Martini3SolventBuilder",
+}
 
 
 @app.get("/{workflow}/Step{step}", response_class=HTMLResponse)
@@ -801,10 +890,17 @@ async def task_step_page(workflow: str, task_id: str, step: int):
 # Health check
 
 
-@app.get("/health/live")
+@app.api_route("/health/live", methods=["GET", "HEAD"])
 async def liveness_check():
     """Minimal unauthenticated liveness probe without host fingerprinting."""
     return {"status": "ok"}
+
+
+@app.api_route("/health/ready", methods=["GET", "HEAD"])
+async def readiness_check():
+    """Report ability to use managed storage, without exposing task details."""
+    result = await _resources.readiness() if _resources else {"ready": True, "reason": "ready"}
+    return JSONResponse(result, status_code=200 if result["ready"] else 503)
 
 
 @app.get("/health")
@@ -813,17 +909,23 @@ async def health_check():
     from gmxbuilder import VERSION as _ver
 
     security = SecurityConfig.from_environment()
+    operations = _resources.queue.counts() if _resources is not None else {}
     return {
         "status": "ok",
         "version": _ver,
         "builds_active": len(_building_tasks),
         "builds_max": _MAX_CONCURRENT_BUILDS,
         "builds_queued": len(_build_queue),
+        "operations_active": operations.get("running", 0),
+        "operations_queued": operations.get("queued", 0),
+        "resource_isolation_enabled": _resources is not None,
+        "installation_lock_supported": True,
         "typical_build_seconds": int(round(_typical_build_seconds())),
         "hardware": hardware_capabilities().as_public_dict(),
         "security": {
             "deployment_mode": security.mode,
             "authentication_enabled": security.authentication_enabled,
+            "unsafe_deployment_allowed": security.allow_unsafe_deployment,
             "trusted_proxy_count": len(security.trusted_proxies),
         },
     }
@@ -862,7 +964,7 @@ async def api_task_type_detail(task_id: str):
 async def api_create_task(request: Request):
     """Create a task for a workflow that does not require an uploaded structure."""
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     task_type_id = str(data.get("task_type", "")).strip()
@@ -891,46 +993,10 @@ async def api_create_task(request: Request):
 # API: PPM orientation
 
 
-def _legacy_orientation_payload(
-    pdb_path: str,
-    algorithm: str,
-    half_thickness: float | None,
-) -> dict:
-    """Compute the legacy orientation response off the event-loop thread."""
-    parser = PDBParser()
-    structure = parser.parse(pdb_path)
-    from gmxbuilder.modules.membrane.orient import (
-        compute_orientation,
-        orient_protein,
-    )
-
-    z_offset, _, tilt_rad = compute_orientation(
-        structure, algorithm=algorithm, half_thickness=half_thickness
-    )
-    from gmxbuilder.io.pdb import PDBWriter
-
-    oriented = parser.parse(pdb_path)
-    orient_protein(
-        oriented,
-        method=algorithm,
-        half_thickness=half_thickness,
-    )
-    with tempfile.TemporaryDirectory(prefix="gmxbuilder-orient-legacy-") as tmp_dir:
-        oriented_path = Path(tmp_dir) / "oriented.pdb"
-        PDBWriter.write(oriented, oriented_path)
-        oriented_pdb = oriented_path.read_text(encoding="utf-8")
-    return {
-        "algorithm": algorithm,
-        "z_offset": round(z_offset, 2),
-        "tilt_degrees": round(np.degrees(tilt_rad), 1),
-        "oriented_pdb": oriented_pdb,
-    }
-
-
 @app.post("/api/orient-ppm")
 async def api_orient_ppm(request: Request):
     """Compute orientation for a previously uploaded PDB."""
-    data = await request.json()
+    data = await _json_object(request)
     if data.get("tmp_path"):
         return JSONResponse(
             {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
@@ -966,40 +1032,15 @@ async def api_orient_ppm(request: Request):
 
 
 def _generate_orientation_preview(task_id: str, config: dict) -> dict:
-    """Run the real Step 4 module without writing or invalidating checkpoints."""
-    task_dir = task_manager.get_task_dir(task_id)
-    structure_checkpoint = task_dir / "steps" / "structure"
-    if not (structure_checkpoint / "system.npz").exists():
-        raise FileNotFoundError(
-            "Structure checkpoint is missing; run Check Structure Processing first."
-        )
+    """Run the real Step 4 module without writing or invalidating checkpoints.
 
-    from gmxbuilder.modules.membrane.orient_module import OrientModule
-
-    system = System.load_checkpoint(structure_checkpoint)
-    preview_config = dict(config)
-    preview_config.setdefault("seed", system.metadata.get("seed", 42))
-    module = OrientModule()
-    module.validate_config(preview_config)
-    result = module.execute(system, preview_config)
-    if not result.success:
-        raise RuntimeError("Orientation module reported failure")
-
-    with tempfile.TemporaryDirectory(prefix="gmxbuilder-orient-preview-") as tmp_dir:
-        preview_path = Path(tmp_dir) / "viewer.pdb"
-        result.system.write_viewer_pdb(preview_path)
-        oriented_pdb = preview_path.read_text(encoding="utf-8")
-
-    return {
-        "status": "ok",
-        "method": result.system.metadata.get(
-            "_orientation_method", preview_config.get("method", "ppm")
-        ),
-        "orientation": result.system.metadata.get("_orient_params", {}),
-        "orientation_quality": result.system.metadata.get("_orientation_quality", {}),
-        "oriented_pdb": oriented_pdb,
-        "log": result.log,
-    }
+    Task-directory resolution stays here because it depends on the module-level
+    ``task_manager`` that tests replace; the scientific work itself lives in
+    :mod:`gmxbuilder.web.server_parts.orientation_preview`.
+    """
+    return _orientation_preview.generate_orientation_preview(
+        task_manager.get_task_dir(task_id), config
+    )
 
 
 @app.post("/api/orient-preview/{task_id}")
@@ -1009,7 +1050,7 @@ async def api_orient_preview(task_id: str, request: Request):
     if task_manager.get_state(task_id) is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
@@ -1158,7 +1199,7 @@ async def api_cg_orient_preview(task_id: str, request: Request):
             status_code=409,
         )
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
@@ -1191,7 +1232,7 @@ async def api_preview_pdb(request: Request):
     and the oriented protein PDB.  The backend writes a ``preview.pdb``
     and stores the configuration for later comparison during the build.
     """
-    data = await request.json()
+    data = await _json_object(request)
     task_id = data.get("task_id", "")
 
     # Validate task_id
@@ -1219,41 +1260,18 @@ async def api_preview_pdb(request: Request):
 
     # ---- Write preview PDB (oriented protein with box/membrane CRYST1) ----
     preview_path = None
-    tmp_name = None
     try:
         task_dir = task_manager.get_task_dir(task_id)
         preview_path = task_dir / "preview.pdb"
-
         if oriented_pdb:
-            # Use the oriented PDB from the frontend, update CRYST1 to match computed box
-            from gmxbuilder.io.pdb import PDBParser, PDBWriter
-
-            # Parse the oriented PDB to get structure
-            fd, tmp_name = tempfile.mkstemp(suffix=".pdb")
-            os.close(fd)
-            Path(tmp_name).write_text(oriented_pdb)
-            structure = PDBParser().parse(tmp_name)
-
-            # Update box to match frontend-computed dimensions
-            if box_dimensions_nm and len(box_dimensions_nm) == 3:
-                structure.box_vectors = np.diag(
-                    [
-                        float(box_dimensions_nm[0]),
-                        float(box_dimensions_nm[1]),
-                        float(box_dimensions_nm[2]),
-                    ]
-                )
-
-            PDBWriter.write(structure, preview_path, title="GMXBUILDER Preview")
+            _structure_files.write_preview_pdb(
+                oriented_pdb,
+                preview_path,
+                box_dimensions_nm,
+            )
     except Exception:
         logger.exception("Failed to write preview PDB")
         # Non-fatal — preview_config is still stored
-    finally:
-        if tmp_name is not None:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
 
     # ---- Store preview_config in task state ----
     task_manager.update_state(
@@ -1279,57 +1297,48 @@ async def api_preview_pdb(request: Request):
 # ---------------------------------------------------------------------------
 
 
-def _normalise_small_molecule_labels(
-    raw_labels: object, allowed_resnames: set[str]
-) -> dict[str, str]:
-    """Validate user-facing molecule labels without changing structural IDs."""
-    if not isinstance(raw_labels, dict):
-        raise ValueError("small_molecule_labels must be an object")
-
-    labels: dict[str, str] = {}
-    for raw_key, raw_label in raw_labels.items():
-        if not isinstance(raw_key, str) or not isinstance(raw_label, str):
-            raise ValueError("Small-molecule label keys and values must be strings")
-        key = raw_key.strip().upper()
-        label = raw_label.strip()
-        if key not in allowed_resnames:
-            raise ValueError(f"Unknown small-molecule key {key!r}")
-        if not label:
-            raise ValueError(f"Display label for {key} must not be empty")
-        if len(label) > 64:
-            raise ValueError(f"Display label for {key} must be at most 64 characters")
-        if any(ord(character) < 32 or ord(character) == 127 for character in label):
-            raise ValueError(f"Display label for {key} contains control characters")
-        labels[key] = label
-
-    effective: dict[str, str] = {key: labels.get(key, key) for key in sorted(allowed_resnames)}
-    seen: dict[str, str] = {}
-    for key, label in effective.items():
-        folded = label.casefold()
-        if folded in seen:
-            raise ValueError(
-                f"Small-molecule display label {label!r} is used for both {seen[folded]} and {key}"
-            )
-        seen[folded] = key
-    return labels
-
-
 @app.post("/api/filter-pdb/{task_id}")
 async def api_filter_pdb(task_id: str, request: Request):
     task_id = _validate_task_id(task_id)
-    data = await request.json()
-    include_chains = data.get("include_chains", [])
-    exclude_resnames = set(data.get("exclude_resnames", []))
+    data = await _json_object(request)
+    with _build_admission_lock:
+        with _queue_lock:
+            queued = any(tid == task_id for tid, _data in _build_queue)
+        if (
+            task_id in _building_tasks
+            or queued
+            or _step_admission.try_acquire(task_id) != "accepted"
+        ):
+            return JSONResponse(
+                {"error": "Task has work in progress; retry after it finishes"}, status_code=409
+            )
+    try:
+        return _filter_task_structure(task_id, data)
+    finally:
+        _step_admission.release(task_id)
+
+
+def _filter_task_structure(task_id: str, data: dict) -> dict | JSONResponse:
+    """Apply an input selection while the caller holds task admission."""
+    include_chains = data.get("include_chains")
+    excluded = data.get("exclude_resnames", [])
+    for label, values in (("include_chains", include_chains), ("exclude_resnames", excluded)):
+        if values is None and label == "include_chains":
+            continue
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            return JSONResponse({"error": f"{label} must be an array of strings"}, status_code=400)
+    exclude_resnames = set(excluded)
 
     task_dir = task_manager.get_task_dir(task_id)
-    pdb_path = task_manager.get_pdb_path(task_id)
-    # For CIF uploads the converted PDB is used as filter source
-    converted = task_dir / "converted.pdb"
-    src = converted if converted.exists() else pdb_path
+    src = task_manager.get_filter_source(task_id)
     if not src or not src.exists():
         return JSONResponse({"error": "No PDB file found"}, status_code=400)
 
-    detected_small_molecules = PDBValidator.detect_small_molecules(src)
+    from gmxbuilder.io.input_document import canonical_path, read_input
+
+    detected_small_molecules = PDBValidator.detect_small_molecules(
+        read_input(canonical_path(src) if canonical_path(src).exists() else src)
+    )
     allowed_labels = {str(item["resname"]).strip().upper() for item in detected_small_molecules}
     try:
         small_molecule_labels = _normalise_small_molecule_labels(
@@ -1339,20 +1348,23 @@ async def api_filter_pdb(task_id: str, request: Request):
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     filtered_path = task_dir / "filtered.pdb"
-    n_kept, n_removed = 0, 0
-    with open(src) as fh_in, open(filtered_path, "w") as fh_out:
-        for line in fh_in:
-            if line.startswith(("ATOM", "HETATM")):
-                chain = line[21:22].strip() if len(line) > 21 else ""
-                resname = line[17:20].strip()
-                if include_chains and chain not in include_chains:
-                    n_removed += 1
-                    continue
-                if resname in exclude_resnames:
-                    n_removed += 1
-                    continue
-                n_kept += 1
-            fh_out.write(line)
+    previous = filtered_path.read_bytes() if filtered_path.is_file() else None
+    try:
+        n_kept, n_removed = _structure_files.filter_pdb_file(
+            src,
+            filtered_path,
+            include_chains,
+            exclude_resnames,
+        )
+    except (ValueError, ParseError) as exc:
+        return JSONResponse({"error": _redact_server_paths(exc)}, status_code=400)
+
+    if filtered_path.read_bytes() != previous:
+        state = task_manager.get_state(task_id) or {}
+        pipeline = (state.get("task_type") or {}).get("id") or state.get("task_type_id")
+        runner = _get_step_runner(task_id, pipeline or "membrane-bilayer")
+        runner.invalidate_downstream("input", include_current=True)
+        task_manager.update_state(task_id, {"steps_completed": [], "current_step": "input"})
 
     task_manager.update_state(
         task_id,
@@ -1360,6 +1372,11 @@ async def api_filter_pdb(task_id: str, request: Request):
             # These are UI labels only.  The original residue key remains stable
             # in coordinates and force-field parameterization.
             "small_molecule_labels": small_molecule_labels,
+            "input_selection": {
+                "include_chains": include_chains,
+                "exclude_resnames": sorted(exclude_resnames),
+                "source_name": src.name,
+            },
         },
     )
 
@@ -1384,24 +1401,6 @@ async def api_task_status(task_id: str):
     state = task_manager.get_state(task_id)
     if state is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-    # Extend TTL on access (throttled: only writes to disk if >15 min since last write)
-    from datetime import datetime, timezone
-
-    now = datetime.now(timezone.utc)
-    new_expiry = task_expiry(now)
-    state["expires_at"] = new_expiry
-    # Only persist the extension if it's been >15 min since last write
-    last_write = state.get("_last_ttl_write", "")
-    try:
-        write_age = (
-            (now - datetime.fromisoformat(last_write)).total_seconds() if last_write else None
-        )
-    except (TypeError, ValueError):
-        write_age = None
-    if write_age is None or write_age > 900:
-        task_manager.update_state(
-            task_id, {"expires_at": new_expiry, "_last_ttl_write": now.isoformat()}
-        )
     return _public_task_state(state)
 
 
@@ -1413,7 +1412,7 @@ async def api_task_save_step(task_id: str, request: Request):
     if state is None:
         return JSONResponse({"error": "Task not found"}, status_code=404)
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
@@ -1457,7 +1456,9 @@ async def api_task_save_step(task_id: str, request: Request):
 
 @app.get("/api/task/{task_id}/resume")
 async def api_task_resume(task_id: str):
-    """Return the full state for frontend resume, including re-parsed PDB info."""
+    """Return resumable state with a cached or bounded structure summary."""
+    from gmxbuilder.modules.input.validation import INPUT_VALIDATION_VERSION
+
     task_id = _validate_task_id(task_id)
     state = task_manager.get_state(task_id)
     if state is None:
@@ -1470,43 +1471,141 @@ async def api_task_resume(task_id: str):
         and (state.get("step_input_config") or {}).get("include_protein") is False
     )
 
-    # Re-parse the PDB to get full pdb_info
-    pdb_path = task_manager.get_pdb_path(task_id)
+    # Resume is already an admitted managed operation. Upgrade legacy summaries
+    # here so subsequent status polls never deserialize scientific systems.
+    from gmxbuilder.core.checkpoint_status import refresh_status
+
+    for step in get_pipeline_steps(task_type_id):
+        await _run_interactive(refresh_status, task_manager.get_task_dir(task_id) / "steps" / step)
+
+    # Reuse the immutable upload summary where possible.  Changed input-step
+    # checkpoints and legacy tasks are parsed only in the bounded interactive
+    # executor, never on the event-loop thread.
+    pdb_path = task_manager.get_filter_source(task_id)
     input_viewer = task_manager.get_task_dir(task_id) / "steps" / "input" / "viewer.pdb"
-    if not protein_free_cg and input_viewer.is_file() and not input_viewer.is_symlink():
+    using_checkpoint = bool(
+        not protein_free_cg
+        and (input_viewer.parent / "system.npz").is_file()
+        and (input_viewer.parent / "system.json").is_file()
+        and not input_viewer.is_symlink()
+    )
+    if using_checkpoint:
         pdb_path = input_viewer
-    if not protein_free_cg and pdb_path and pdb_path.exists():
+    if (
+        not protein_free_cg
+        and pdb_path
+        and (using_checkpoint or pdb_path.is_file())
+        and not pdb_path.is_symlink()
+    ):
         try:
-            parser = PDBParser()
-            structure = parser.parse(pdb_path)
-            pdb_text = pdb_path.read_text(encoding="utf-8", errors="replace")
-            sequences = _extract_sequences(structure)
-            # Only include chains that contain at least one protein residue
-            # (small-molecule-only chains appear in the Small Molecules section)
-            chains = [s["chain_id"] for s in sequences if s.get("chain_id", "").strip()]
-            # Fallback: if the PDB has no explicit chain IDs (all blank), use "A"
-            if not chains and sequences:
-                chains = ["A"]
-                for s in sequences:
-                    s["chain_id"] = "A"
-
-            # Detect small molecules so the frontend can style them
-            small_molecules = PDBValidator.detect_small_molecules(pdb_path)
-
-            state["pdb_content"] = pdb_text
-            state["sequences"] = sequences
-            state["small_molecules"] = small_molecules
+            limits = StructureInputLimits.from_environment()
+            cached = state.get("structure_summary")
+            cached_preview = task_manager.get_task_dir(task_id) / "converted.pdb"
+            if (
+                not using_checkpoint
+                and isinstance(cached, dict)
+                and cached.get("source_name") == pdb_path.name
+                and cached.get("chain_identity_version") == 4
+                and (
+                    (
+                        _is_martini_task_type(task_type_id)
+                        and cached.get("input_status", {}).get("scope") == "coarse_grained"
+                    )
+                    or (
+                        isinstance(cached.get("input_validation"), dict)
+                        and cached["input_validation"].get("policy_version")
+                        == INPUT_VALIDATION_VERSION
+                    )
+                )
+                and cached_preview.is_file()
+                and not cached_preview.is_symlink()
+            ):
+                summary = dict(cached)
+                summary["pdb_content"] = await _run_interactive(
+                    read_bounded_pdb_display,
+                    cached_preview,
+                    limits,
+                    _filter_pdb_for_display,
+                )
+            else:
+                original_source = None
+                uploaded_name = state.get("uploaded_structure_name")
+                if uploaded_name:
+                    original_source = _task_resource_helpers.validate_task_resource(
+                        task_id, uploaded_name
+                    )
+                summary = await _run_interactive(
+                    summarize_resume_structure,
+                    pdb_path,
+                    limits,
+                    _filter_pdb_for_display,
+                    _extract_sequences,
+                    PDBInputModule._PROTEIN_RESNAMES,
+                    state.get("input_source_metadata"),
+                    original_source,
+                    not _is_martini_task_type(task_type_id),
+                )
+            selection_summary = summary
+            selection_source = task_manager.get_filter_source(task_id)
+            if using_checkpoint and selection_source:
+                selection_summary = await _run_interactive(
+                    summarize_resume_structure,
+                    selection_source,
+                    limits,
+                    _filter_pdb_for_display,
+                    _extract_sequences,
+                    PDBInputModule._PROTEIN_RESNAMES,
+                    None,
+                    None,
+                    not _is_martini_task_type(task_type_id),
+                )
+            state["input_selection_summary"] = {
+                key: selection_summary.get(key)
+                for key in (
+                    "num_atoms",
+                    "box_nm",
+                    "sequences",
+                    "chains",
+                    "chain_mapping",
+                    "pdb_content",
+                    "small_molecules",
+                )
+            }
+            state["chain_mapping"] = summary.get("chain_mapping", {})
+            state["pdb_content"] = summary["pdb_content"]
+            state["sequences"] = summary["sequences"]
+            state["small_molecules"] = summary["small_molecules"]
+            state["input_validation"] = (
+                None if _is_martini_task_type(task_type_id) else summary.get("input_validation")
+            )
+            state["input_status"] = summary.get("input_status")
+            state["cell_info"] = summary.get("cell_info")
+            state["validation_warnings"] = summary.get("validation", {}).get("warnings", [])
             state["pdb_info_full"] = {
                 "filename": (state.get("pdb_info") or {}).get("filename", pdb_path.name),
-                "num_atoms": structure.num_atoms,
-                "chains": sorted(chains),
-                "box_nm": [round(v, 3) for v in structure.dimensions().tolist()],
-                "small_molecules": small_molecules,
+                "num_atoms": summary["num_atoms"],
+                "chains": summary["chains"],
+                "box_nm": summary["box_nm"],
+                "small_molecules": summary["small_molecules"],
             }
+        except WorkQueueFull:
+            raise
         except Exception:
-            logger.exception("Failed to re-parse PDB while resuming task %s", task_id)
+            logger.exception(
+                "Failed to prepare resume structure for %s", task_log_reference(task_id)
+            )
 
-    visible_steps = list(task_type.get("visible_modules") or [])
+    from gmxbuilder.web.task_types import get_task_type_detail
+
+    current_type = get_task_type_detail(task_type_id)
+    visible_steps = list((current_type or task_type).get("visible_modules") or [])
+    if (
+        task_type_id == "pure-membrane"
+        and (state.get("step_solvation_config") or {}).get("enabled") is False
+    ):
+        visible_steps = [step for step in visible_steps if step != "ions"]
+    if current_type:
+        state["task_type"] = {**current_type, "visible_modules": visible_steps}
     try:
         runner = _get_step_runner(task_id, task_type_id)
         checkpoint_steps = {
@@ -1514,6 +1613,10 @@ async def api_task_resume(task_id: str):
         }
     except ValueError:
         checkpoint_steps = set(state.get("steps_completed") or [])
+        state["input_check_required"] = True
+    else:
+        state["input_check_required"] = not runner.input_validation_current()
+    state["steps_completed"] = [name for name in visible_steps if name in checkpoint_steps]
     existing_zip = _authoritative_task_zip(task_id)
     build_status = state.get("build_status")
     if not isinstance(build_status, dict):
@@ -1544,6 +1647,7 @@ async def api_task_resume(task_id: str):
         build_status.get("status") == "completed"
         and build_status.get("download_available")
         and "simparams" in visible_steps
+        and not state["input_check_required"]
     ):
         resume_step = "simparams"
     else:
@@ -1569,6 +1673,8 @@ async def api_task_resume(task_id: str):
 async def api_task_download(task_id: str):
     """Download the build output ZIP for a task (works post-restart too)."""
     task_id = _validate_task_id(task_id)
+    if task_manager.get_state(task_id) is None:
+        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
     output_dir = task_manager.get_output_dir(task_id)
 
     # The checked build is authoritative. Never let a larger legacy archive
@@ -1626,90 +1732,33 @@ async def api_task_list(request: Request):
     return tasks
 
 
+def _offline_lipid_request_response() -> JSONResponse:
+    """Retire every Web entry point that accepted a new lipid calculation."""
+    return JSONResponse(
+        {
+            "error": (
+                "New lipid submission and pre-equilibration are not available on the website. "
+                "Contact the administrator by email using the address on the homepage or "
+                "announcement board. Include the lipid name, SMILES and requested force field."
+            ),
+            "code": "lipid_submission_offline_only",
+            "contact_url": "/",
+        },
+        status_code=403,
+    )
+
+
 @app.post("/api/build-lipid-library")
 async def api_build_lipid_library(request: Request):
-    """Build a genuinely new custom lipid by explicit-solvent NPT.
+    """Retired: administrators maintain lipid libraries through the offline CLI."""
+    return _offline_lipid_request_response()
 
-    Built-in entries are intentionally generated only by the offline CLI;
-    this endpoint is not a user-facing way to rebuild the packaged matrix.
-    """
-    if os.environ.get("GMXBUILDER_ALLOW_ONLINE_LIPID_BUILD", "0") != "1":
-        return JSONResponse(
-            {
-                "error": (
-                    "Online lipid pre-equilibration is disabled because it is a "
-                    "long-running administrator operation. Ask the administrator "
-                    "to build and validate this lipid with the offline lipid-library command."
-                )
-            },
-            status_code=403,
-        )
-    if not _is_admin_request(request):
-        return JSONResponse({"error": "Administrator authorization is required"}, status_code=403)
-    data = await request.json()
-    lipid_name = data.get("lipid_name", "").strip().upper()
-    if not lipid_name:
-        return JSONResponse({"error": "lipid_name is required"}, status_code=400)
-    if data.get("is_custom") is not True:
-        return JSONResponse(
-            {"error": "Built-in lipid libraries are generated by the offline coverage command"},
-            status_code=403,
-        )
-    force_field = str(data.get("force_field", "")).strip().lower()
-    lipid_ff = str(data.get("lipid_ff", "gaff2")).strip().lower()
-    if not force_field.startswith("amber") or lipid_ff != "gaff2":
-        return JSONResponse(
-            {"error": "New custom lipids currently require an Amber + GAFF2 selection"},
-            status_code=400,
-        )
-    try:
-        from gmxbuilder.modules.membrane.lipid_equilibration import LipidEquilibrationBuilder
-        from gmxbuilder.modules.membrane.lipids import (
-            LipidRegistry,
-            find_registered_lipid_matches,
-        )
 
-        properties = data.get("properties") or {}
-        matches = find_registered_lipid_matches(str(properties.get("smiles", "")))
-        exact = [match for match in matches if match["match"] == "exact"]
-        if exact:
-            return JSONResponse(
-                {"error": f"Structure already exists as {exact[0]['name']}; use that entry"},
-                status_code=409,
-            )
-        try:
-            LipidRegistry.get(lipid_name)
-        except KeyError:
-            LipidRegistry.register_custom(lipid_name, properties)
-        npt_ps = float(data.get("npt_ps", 1000.0))
-        if not math.isfinite(npt_ps) or not 500.0 <= npt_ps <= 5000.0:
-            return JSONResponse(
-                {"error": "npt_ps must be between 500 and 5000 ps"}, status_code=400
-            )
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            _get_custom_lipid_executor(),
-            partial(
-                LipidEquilibrationBuilder().build,
-                lipid_name,
-                force_field,
-                lipid_ff,
-                npt_ps=npt_ps,
-                force=bool(data.get("force", False)),
-            ),
-        )
-        return {
-            "status": "ok",
-            "lipid_name": lipid_name,
-            "force_field": force_field,
-            "lipid_ff": lipid_ff,
-            "library_ready": True,
-            "message": "Validated explicit-solvent NPT library is ready",
-        }
-    except (ValueError, KeyError) as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+@app.get("/api/lipid-library-list")
+async def api_lipid_library_list():
+    from gmxbuilder.web.server_parts.option_catalog import get_catalog
+
+    return JSONResponse(get_catalog().read(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/lipid-library-status")
@@ -1721,29 +1770,61 @@ async def api_lipid_library_status(
     """Check if a lipid's conformation library is built."""
     if not lipid_name:
         return JSONResponse({"error": "lipid_name query parameter required"}, status_code=400)
-    from gmxbuilder.modules.membrane.equilibrated_library import (
-        get_equilibrated_lipid_library,
+    from gmxbuilder.modules.forcefield.catalog import get_force_field_profile
+    from gmxbuilder.modules.membrane.equilibrated_library import lipid_parameter_family
+    from gmxbuilder.web.server_parts.option_catalog import get_catalog
+
+    try:
+        force_field = get_force_field_profile(force_field.strip().lower().removesuffix(".ff")).name
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    lipid_name = lipid_name.strip().upper()
+    snapshot = get_catalog().read(options=True)
+    option = next((row for row in snapshot.get("lipids", []) if row["name"] == lipid_name), {})
+    effective_lipid_ff = lipid_ff or (
+        ("lipid21" if "lipid21" in option.get("parameter_sources", []) else "gaff2")
+        if force_field.startswith("amber")
+        else force_field
     )
-
-    lib = get_equilibrated_lipid_library()
-    if lipid_ff:
-        effective_lipid_ff = lipid_ff
-    elif force_field.startswith("amber"):
-        from gmxbuilder.modules.forcefield.lipid_policy import amber_lipid_backend
-
-        effective_lipid_ff, reason = amber_lipid_backend([lipid_name])
-        if effective_lipid_ff is None:
-            return JSONResponse({"error": reason}, status_code=400)
-    else:
-        effective_lipid_ff = force_field
-    entry = lib.inspect(lipid_name, force_field, effective_lipid_ff)
+    if effective_lipid_ff not in {
+        "lipid21",
+        "gaff2",
+        "amber-mixed",
+        "charmm36",
+        "charmm36m",
+        "oplsaa",
+    }:
+        return JSONResponse({"error": "Unknown lipid parameter source"}, status_code=400)
+    source = (
+        ("lipid21" if "lipid21" in option.get("parameter_sources", []) else "gaff2")
+        if effective_lipid_ff == "amber-mixed"
+        else effective_lipid_ff
+    )
+    family = lipid_parameter_family(force_field, source)
+    availability = snapshot.get("availability", {})
+    row = next(
+        (
+            item
+            for item in availability.get("entries", [])
+            if item["lipid_name"] == lipid_name
+            and item["lipid_ff"] == source
+            and item["parameter_family"] == family
+        ),
+        None,
+    )
+    ready = bool(availability.get("status") == "ready" and row and row["ready"])
+    if effective_lipid_ff == "amber-mixed":
+        ready = ready and bool(row.get("amber_mixed_ready"))
     return {
-        "lipid_name": lipid_name.upper(),
+        "lipid_name": lipid_name,
         "force_field": force_field,
         "lipid_ff": effective_lipid_ff,
-        "has_library": entry is not None,
-        "n_conformations": len(entry.conformer_files) if entry else 0,
-        "metadata": entry.metadata if entry else None,
+        "status": availability.get("status", "checking"),
+        "has_library": ready,
+        "n_conformations": row["n_conformations"] if ready else 0,
+        "validation_scope": row.get("validation_scope") if ready else None,
+        "metadata_scope": "availability_summary",
+        "metadata": row if ready else None,
     }
 
 
@@ -1761,165 +1842,15 @@ async def api_orient_algorithms():
 
 @app.post("/api/custom-lipid")
 async def api_custom_lipid(request: Request):
-    """Parse a SMILES string and estimate lipid physical properties."""
-    data = await request.json()
-    smiles = data.get("smiles", "").strip()
-    name = data.get("name", "").strip()
-
-    try:
-        from gmxbuilder.modules.membrane.lipids import parse_custom_lipid
-
-        result = parse_custom_lipid(smiles, name)
-        return result
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    except Exception as exc:
-        return JSONResponse({"error": f"Failed to parse SMILES: {exc}"}, status_code=500)
-
-
-def _run_custom_lipid_job(task_id: str, lipid_name: str) -> None:
-    """Worker entry point with task cleanup protection and public-safe errors."""
-    key = (task_id, lipid_name)
-    task_dir = task_manager.get_task_dir(task_id)
-    gpu_id = _acquire_custom_gpu()
-    try:
-        with task_manager.active_task(task_id):
-            if task_manager.get_state(task_id) is None:
-                return
-            from gmxbuilder.modules.membrane.lipid_equilibration import (
-                lipid_gpu_device,
-            )
-
-            with lipid_gpu_device(gpu_id):
-                run_custom_lipid_build(task_dir, lipid_name)
-    except Exception as exc:
-        logger.exception("Task %s custom lipid %s failed", task_id, lipid_name)
-        try:
-            CustomLipidStore(task_dir).update_status(
-                lipid_name,
-                state="failed",
-                phase="failed",
-                progress=0,
-                message=_redact_server_paths(exc),
-            )
-        except Exception:
-            logger.exception("Could not persist custom lipid failure state")
-    finally:
-        _release_custom_gpu(gpu_id)
-        with _custom_lipid_jobs_lock:
-            _custom_lipid_jobs.discard(key)
-
-
-def _acquire_custom_gpu() -> int | None:
-    """Allocate at most two distinct GPUs in round-robin order."""
-    global _custom_gpu_cursor
-    if not _CUSTOM_GPU_IDS:
-        return None
-    with _custom_gpu_condition:
-        while len(_custom_gpu_in_use) >= _CUSTOM_GPU_CONCURRENCY or all(
-            gpu in _custom_gpu_in_use for gpu in _CUSTOM_GPU_IDS
-        ):
-            _custom_gpu_condition.wait()
-        for offset in range(len(_CUSTOM_GPU_IDS)):
-            index = (_custom_gpu_cursor + offset) % len(_CUSTOM_GPU_IDS)
-            gpu = _CUSTOM_GPU_IDS[index]
-            if gpu not in _custom_gpu_in_use:
-                _custom_gpu_in_use.add(gpu)
-                _custom_gpu_cursor = (index + 1) % len(_CUSTOM_GPU_IDS)
-                return gpu
-    return None
-
-
-def _release_custom_gpu(gpu_id: int | None) -> None:
-    if gpu_id is None:
-        return
-    with _custom_gpu_condition:
-        _custom_gpu_in_use.discard(gpu_id)
-        _custom_gpu_condition.notify_all()
-
-
-def _schedule_custom_lipid_build(task_id: str, lipid_name: str) -> bool:
-    """Schedule one idempotent task-owned calculation."""
-    key = (task_id, str(lipid_name).upper())
-    with _custom_lipid_jobs_lock:
-        if key in _custom_lipid_jobs:
-            return False
-        _custom_lipid_jobs.add(key)
-    _get_custom_lipid_executor().submit(_run_custom_lipid_job, *key)
-    return True
+    """Retired: email SMILES to the administrator instead of submitting online."""
+    return _offline_lipid_request_response()
 
 
 @app.post("/api/task/{task_id}/custom-lipids")
 async def api_submit_task_custom_lipid(task_id: str, request: Request):
-    """Submit a genuinely new lipid to one task and start its calculation."""
-    task_id = _validate_task_id(task_id)
-    task_state = task_manager.get_state(task_id)
-    if task_state is None:
-        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-    try:
-        data = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
-    if not isinstance(data, dict):
-        return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-    # Submission only needs a usable executable.  Full hardware discovery also
-    # validates optional operator GPU exposure and must not turn a CPU-capable
-    # custom-lipid submission into a 500 response when that optional probe is
-    # unavailable or stale.
-    if find_gromacs_executable() is None:
-        return JSONResponse(
-            {
-                "error": (
-                    "GROMACS is not installed or was not detected. Custom lipid "
-                    "pre-equilibration cannot start."
-                )
-            },
-            status_code=503,
-        )
-
-    force_field = str(data.get("force_field", "")).strip().lower()
-    lipid_ff = str(data.get("lipid_ff", "gaff2")).strip().lower()
-    if not force_field.startswith("amber") or lipid_ff != "gaff2":
-        return JSONResponse(
-            {"error": "Custom lipids currently require an Amber + GAFF2 selection"},
-            status_code=400,
-        )
-    try:
-        from gmxbuilder.modules.membrane.lipids import (
-            find_registered_lipid_matches,
-            parse_custom_lipid,
-        )
-
-        properties = parse_custom_lipid(
-            str(data.get("smiles", "")).strip(),
-            str(data.get("name", "")).strip(),
-        )
-        exact = [
-            match
-            for match in find_registered_lipid_matches(properties["canonical_smiles"])
-            if match["match"] == "exact"
-        ]
-        if exact:
-            return JSONResponse(
-                {
-                    "error": (
-                        f"This molecule already exists in the standard lipid "
-                        f"library as {exact[0]['name']}; duplicate custom submission "
-                        "is not permitted."
-                    ),
-                    "existing_lipid": exact[0]["name"],
-                },
-                status_code=409,
-            )
-        store = CustomLipidStore(task_manager.get_task_dir(task_id))
-        record = store.save_submission(properties, force_field)
-        _schedule_custom_lipid_build(task_id, record["name"])
-        return JSONResponse(record, status_code=202)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
-    except Exception as exc:
-        logger.exception("Custom lipid submission failed")
-        return JSONResponse({"error": _redact_server_paths(exc)}, status_code=500)
+    """Reject legacy clients before parsing, persisting or scheduling a molecule."""
+    _validate_task_id(task_id)
+    return _offline_lipid_request_response()
 
 
 @app.get("/api/task/{task_id}/custom-lipids")
@@ -1951,56 +1882,115 @@ async def api_task_custom_lipid_status(task_id: str, lipid_name: str):
 
 @app.post("/api/task/{task_id}/custom-lipids/{lipid_name}/retry")
 async def api_retry_task_custom_lipid(task_id: str, lipid_name: str):
-    """Retry a failed task-private parameterization without duplicating data."""
-    task_id = _validate_task_id(task_id)
-    if task_manager.get_state(task_id) is None:
-        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-    store = CustomLipidStore(task_manager.get_task_dir(task_id))
-    try:
-        record = store.public_record(lipid_name)
-        if record.get("state") != "failed":
-            return JSONResponse(
-                {"error": "Only failed custom lipid calculations can be retried"},
-                status_code=409,
-            )
-        store.update_status(
-            record["name"],
-            state="queued",
-            phase="queued",
-            progress=0,
-            message="Retry queued",
-        )
-        _schedule_custom_lipid_build(task_id, record["name"])
-        return JSONResponse(store.public_record(record["name"]), status_code=202)
-    except (KeyError, ValueError):
-        return JSONResponse({"error": "Custom lipid not found for this task"}, status_code=404)
+    """Retired retries must not restart an existing expensive calculation."""
+    _validate_task_id(task_id)
+    return _offline_lipid_request_response()
 
 
 # ---------------------------------------------------------------------------
 # API: protonation & modifications
 
 
+def _pka_digest(tmp_path: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(Path(tmp_path).read_bytes()).hexdigest()
+
+
+def _durable_pka_cache(tmp_path: str, predictions=None, expected_digest=None):
+    """Keep precomputed pKa values useful across isolated operation processes."""
+    if not managed_root():
+        return None
+    import hashlib
+    from importlib.metadata import version
+
+    if expected_digest is not None and _pka_digest(tmp_path) != expected_digest:
+        raise ValueError("PROPKA input changed during analysis; recompute protonation")
+    source = Path(tmp_path).resolve()
+    if task_manager.root.resolve() not in source.parents or not source.is_file():
+        return None
+    relative = source.relative_to(task_manager.root.resolve())
+    directory = task_manager.root / relative.parts[0]
+    digest = (
+        VERSION + ":" + version("propka") + ":" + hashlib.sha256(source.read_bytes()).hexdigest()
+    )
+    cache = directory / ".propka-cache.json"
+    if predictions is not None:
+        temp = cache.with_suffix(".tmp")
+        temp.write_text(json.dumps({"sha256": digest, "predictions": predictions}))
+        temp.replace(cache)
+        return predictions
+    try:
+        saved = json.loads(cache.read_text())
+        if saved["sha256"] == digest:
+            return saved["predictions"]
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def _publish_propka_status(tmp_path, status, residues=0, expected=None):
+    from gmxbuilder.core.checkpoint_status import atomic_json, file_stamp
+
+    source = Path(tmp_path)
+    try:
+        stamp = file_stamp(source)
+        if expected is not None and expected != stamp:
+            return
+        atomic_json(
+            source.parent / ".propka-status.json",
+            {
+                "adapter": stamp,
+                "status": status,
+                "residues": residues,
+                "pid": os.getpid(),
+            },
+        )
+    except OSError:
+        logger.debug("Unable to persist optional PROPKA status", exc_info=True)
+
+
 def _schedule_propka_precompute(tmp_path: str) -> None:
     """Kick off PROPKA in a background thread so results are ready later."""
+    from gmxbuilder.core.checkpoint_status import file_stamp
+
+    stamp = file_stamp(tmp_path)
+    digest = _pka_digest(tmp_path)
     with _pka_cache_lock:
-        if tmp_path in _pka_cache or tmp_path in _pka_running:
+        if tmp_path in _pka_cache and _pka_cache_digest.get(tmp_path) == digest:
+            _publish_propka_status(tmp_path, "ready", len(_pka_cache[tmp_path]), stamp)
+            return
+        if tmp_path in _pka_running:
             return
         _pka_running.add(tmp_path)
+    _publish_propka_status(tmp_path, "computing", expected=stamp)
 
     def _run():
         try:
             from gmxbuilder.modules.modifications.protonation import predict_pka_from_pdb
 
             preds = predict_pka_from_pdb(tmp_path)
+            if _pka_digest(tmp_path) != digest:
+                return
+            _durable_pka_cache(tmp_path, preds, digest)
             with _pka_cache_lock:
                 _pka_cache[tmp_path] = preds
+                _pka_cache_digest[tmp_path] = digest
+            _publish_propka_status(tmp_path, "ready", len(preds), stamp)
         except Exception as exc:
+            _publish_propka_status(tmp_path, "not_started", expected=stamp)
             logger.warning("PROPKA background calculation failed: %s", exc)
         finally:
             with _pka_cache_lock:
                 _pka_running.discard(tmp_path)
 
-    _get_executor().submit(_run)
+    try:
+        _submit_interactive(_run)
+    except WorkQueueFull:
+        with _pka_cache_lock:
+            _pka_running.discard(tmp_path)
+        _publish_propka_status(tmp_path, "not_started", expected=stamp)
+        logger.info("Deferred PROPKA precompute because the interactive queue is full")
 
 
 async def _get_propka_results(tmp_path: str) -> list[dict]:
@@ -2009,8 +1999,17 @@ async def _get_propka_results(tmp_path: str) -> list[dict]:
     Uses the bounded interactive executor so repeated polling cannot bypass
     the configured process resource budget.
     """
+    from gmxbuilder.core.checkpoint_status import file_stamp
+
+    stamp = file_stamp(tmp_path)
+    digest = _pka_digest(tmp_path)
+    durable = _durable_pka_cache(tmp_path)
+    if durable is not None:
+        _publish_propka_status(tmp_path, "ready", len(durable), stamp)
+        return durable
     with _pka_cache_lock:
-        if tmp_path in _pka_cache:
+        if tmp_path in _pka_cache and _pka_cache_digest.get(tmp_path) == digest:
+            _publish_propka_status(tmp_path, "ready", len(_pka_cache[tmp_path]), stamp)
             return _pka_cache[tmp_path]
 
     # Not cached — run in thread pool to keep event loop free
@@ -2018,9 +2017,14 @@ async def _get_propka_results(tmp_path: str) -> list[dict]:
         from gmxbuilder.modules.modifications.protonation import predict_pka_from_pdb
 
         preds = await _run_interactive(predict_pka_from_pdb, tmp_path)
+        if _pka_digest(tmp_path) != digest:
+            raise ValueError("PROPKA input changed during analysis; recompute protonation")
+        _durable_pka_cache(tmp_path, preds, digest)
         with _pka_cache_lock:
             _pka_cache[tmp_path] = preds
+            _pka_cache_digest[tmp_path] = digest
             _pka_running.discard(tmp_path)
+        _publish_propka_status(tmp_path, "ready", len(preds), stamp)
         return preds
     except Exception as exc:
         logger.warning("PROPKA calculation failed; using model pKa values: %s", exc)
@@ -2043,14 +2047,22 @@ async def api_propka_status(tmp_path: str = "", task_id: str = ""):
         task_id = _validate_task_id(task_id)
         if task_manager.get_state(task_id) is None:
             return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-        tmp_path = str(_validate_task_resource(task_id, _resolve_propka_pdb_path(task_id)))
+        manifest = _task_resource_helpers.propka_manifest(task_id)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
-    with _pka_cache_lock:
-        if tmp_path in _pka_cache:
-            return {"status": "ready", "residues": len(_pka_cache[tmp_path])}
-        if tmp_path in _pka_running:
-            return {"status": "computing"}
+    if manifest is not None:
+        from gmxbuilder.core.checkpoint_status import read_json
+
+        try:
+            saved = read_json(task_manager.get_task_dir(task_id) / ".propka-status.json")
+            if saved.get("adapter") == manifest["adapter"]:
+                if saved.get("status") == "ready":
+                    return {"status": "ready", "residues": saved["residues"]}
+                if saved.get("status") == "computing":
+                    os.kill(int(saved["pid"]), 0)
+                    return {"status": "computing"}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
     return {"status": "not_started"}
 
 
@@ -2061,10 +2073,14 @@ async def api_protonate(request: Request):
     If task_id is provided, runs PROPKA for environment-sensitive pKa
     prediction. Otherwise falls back to standard model-pKa values.
     """
-    data = await request.json()
+    data = await _json_object(request)
     residues = data.get("residues", [])
     pH = data.get("pH", 7.0)
     his_tautomer = data.get("his_tautomer", "HSE")
+    # Residue names for the non-default states differ between Amber and
+    # CHARMM, so the preview must name them for the force field this task has
+    # actually chosen. Without it the panel offered ASH to a CHARMM build.
+    force_field = str(data.get("force_field", "") or "").strip()
     if data.get("tmp_path"):
         return JSONResponse(
             {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
@@ -2075,13 +2091,21 @@ async def api_protonate(request: Request):
     if task_id_val:
         try:
             task_id_val = _validate_task_id(str(task_id_val))
-            if task_manager.get_state(task_id_val) is None:
+            task_state = task_manager.get_state(task_id_val)
+            if task_state is None:
                 return JSONResponse({"error": "Task not found or expired"}, status_code=404)
+            # The task's own choice wins over anything the client says, and
+            # covers a client that does not send one at all.
+            saved_force_field = str(
+                (task_state.get("step_forcefield_config") or {}).get("name", "") or ""
+            ).strip()
+            if saved_force_field:
+                force_field = saved_force_field
             tmp_path = str(
                 _validate_task_resource(task_id_val, _resolve_propka_pdb_path(task_id_val))
             )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except (ValueError, ParseError) as exc:
+            return JSONResponse({"error": _redact_server_paths(exc)}, status_code=400)
     structure_residues = data.get("structure_residues", [])  # [{resname, chain, resid, index}]
 
     if not residues:
@@ -2122,13 +2146,36 @@ async def api_protonate(request: Request):
                 )
 
         if used_propka and structure_residues:
+            from gmxbuilder.web.server_parts.protonation_identity import map_predictions
+
+            pka_predictions = map_predictions(pka_predictions, structure_residues, tmp_path)
             assignments = assign_protonation_with_propka(
-                structure_residues, pka_predictions, pH=float(pH), his_tautomer=his_tautomer
+                structure_residues,
+                pka_predictions,
+                pH=float(pH),
+                his_tautomer=his_tautomer,
+                force_field=force_field,
             )
         else:
-            assignments = assign_all_protonations(residues, pH=float(pH), his_tautomer=his_tautomer)
+            assignments = assign_all_protonations(
+                residues,
+                pH=float(pH),
+                his_tautomer=his_tautomer,
+                force_field=force_field,
+            )
 
         modified = [a for a in assignments if a["is_titratable"]]
+        matched = sum("predicted_pKa" in assignment for assignment in modified)
+        used_propka = matched > 0
+        if propka_requested and matched < len(modified):
+            propka_warning = (propka_warning + " " if propka_warning else "") + (
+                f"PROPKA matched {matched}/{len(modified)} titratable residues. "
+                "Unmatched residues use model pKa values; inspect their identities and states."
+            )
+        for assignment in assignments:
+            assignment["prediction_source"] = (
+                "PROPKA" if "predicted_pKa" in assignment else "Model pKa"
+            )
         method = (
             "PROPKA 3.5 (environment-sensitive)"
             if used_propka
@@ -2138,6 +2185,8 @@ async def api_protonate(request: Request):
             "pH": pH,
             "assignments": assignments,
             "titratable_count": len(modified),
+            "prediction_matched": matched,
+            "prediction_expected": len(modified),
             "used_propka": used_propka,
             "method": method,
             "propka_requested": propka_requested,
@@ -2156,6 +2205,8 @@ async def api_protonate(request: Request):
                 for a in modified
             ],
         }
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception:
         logger.exception("Unhandled error in protonate")
         return JSONResponse({"error": "Internal server error"}, status_code=500)
@@ -2217,7 +2268,7 @@ async def api_coarse_grained_capabilities():
 @app.post("/api/apply-modifications")
 async def api_apply_modifications(request: Request):
     """Apply a set of modifications and protonation to the uploaded structure."""
-    data = await request.json()
+    data = await _json_object(request)
     if data.get("tmp_path"):
         return JSONResponse(
             {"error": ("Client-supplied filesystem paths are not accepted; provide task_id")},
@@ -2244,102 +2295,17 @@ async def api_apply_modifications(request: Request):
         return JSONResponse({"error": "PDB file not found"}, status_code=400)
 
     try:
-        from gmxbuilder.io.pdb import PDBParser
-        from gmxbuilder.modules.modifications.protonation import assign_all_protonations
-
-        parser = PDBParser()
-        structure = parser.parse(tmp_path)
-
-        # Build residue list from structure
-        residues = structure.resnames
-
-        # Protonation
-        prot_assignments = assign_all_protonations(
-            list(residues), pH=float(pH), his_tautomer=his_tautomer
+        return _build_modification_preview(
+            tmp_path,
+            pH,
+            his_tautomer,
+            modifications,
+            force_field,
+            nter_patch,
+            cter_patch,
         )
-
-        # Collect applied modifications
-        applied: list[dict] = []
-        for mod in modifications:
-            idx = mod.get("index")
-            patch_id = mod.get("patch_id")
-            if idx is not None and idx < len(residues):
-                applied.append(
-                    {
-                        "index": idx,
-                        "original_resname": residues[idx],
-                        "patch_id": patch_id,
-                    }
-                )
-
-        # Convert protonation assignments to residue-level summary
-        residue_changes = []
-        for a in prot_assignments:
-            if a["is_titratable"]:
-                residue_changes.append(
-                    {
-                        "index": a["index"],
-                        "original": a["original"],
-                        "new_name": a["assigned_name"],
-                        "charge": a["charge"],
-                        "pKa": a["pKa"],
-                        "state": a["state_label"],
-                    }
-                )
-
-        from gmxbuilder.modules.modifications.protonation import compute_net_charge_from_protonation
-
-        net_charge = compute_net_charge_from_protonation(prot_assignments)
-
-        # Add modification charge shifts (side-chain PTMs + N/C-terminal patches)
-        from gmxbuilder.modules.modifications.patches import (
-            effective_patch_charge_shift,
-            get_patch,
-        )
-
-        for mod in applied:
-            patch = get_patch(mod["patch_id"])
-            if patch:
-                net_charge += effective_patch_charge_shift(mod["patch_id"], force_field)
-
-        # Apply N-terminal patch charge (e.g. ACE: 0, standard NH3+: +1)
-        if nter_patch:
-            nter_p = get_patch(nter_patch)
-            if nter_p:
-                net_charge += nter_p.charge_shift
-                applied.append(
-                    {
-                        "index": 0,
-                        "original_resname": residues[0] if residues else "?",
-                        "patch_id": nter_patch,
-                        "term": "N",
-                    }
-                )
-
-        # Apply C-terminal patch charge (e.g. NME: 0, standard COO-: -1)
-        if cter_patch:
-            cter_p = get_patch(cter_patch)
-            if cter_p:
-                net_charge += cter_p.charge_shift
-                applied.append(
-                    {
-                        "index": len(residues) - 1 if residues else 0,
-                        "original_resname": residues[-1] if residues else "?",
-                        "patch_id": cter_patch,
-                        "term": "C",
-                    }
-                )
-
-        return {
-            "pH": pH,
-            "protonation_count": len(residue_changes),
-            "residue_changes": residue_changes,
-            "modifications_applied": len(applied),
-            "modifications": applied,
-            "nter_patch": nter_patch,
-            "cter_patch": cter_patch,
-            "net_charge": net_charge,
-        }
+    except (ValueError, ModuleConfigError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception:
         logger.exception("Unhandled error in apply-modifications")
         return JSONResponse({"error": "Internal server error"}, status_code=500)
@@ -2352,101 +2318,9 @@ async def api_apply_modifications(request: Request):
 @app.get("/api/options")
 async def api_options():
     """Return all available choices for the UI dropdowns."""
-    from gmxbuilder.modules.forcefield.gaff_backend import gaff_available
-    from gmxbuilder.modules.forcefield.catalog import get_force_field_profile
-    from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
-    from gmxbuilder.modules.forcefield.lipid_policy import (
-        gaff_lipid_capability,
-        lipid_has_rtp,
-    )
-    from gmxbuilder.modules.solvation.water_models import supported_force_fields
+    from gmxbuilder.web.server_parts.option_catalog import get_catalog
 
-    gaff_ready = gaff_available()
-
-    def _lipid_option(name: str) -> dict:
-        lipid = LipidRegistry.get(name)
-        sources = []
-        lipid21_supported, _lipid21_reason = lipid21_capability(name)
-        if lipid21_supported:
-            sources.append("lipid21")
-        gaff_supported, gaff_reason = gaff_lipid_capability(name)
-        if gaff_ready and gaff_supported:
-            sources.append("gaff2")
-        if lipid_has_rtp(name, "charmm36m"):
-            sources.append("charmm36m")
-        if lipid_has_rtp(name, "charmm36"):
-            sources.append("charmm36")
-        source_labels = {
-            "lipid21": "Amber Lipid21 v1.0 (exact)",
-            "gaff2": "Amber/GAFF2",
-            "charmm36m": "CHARMM36m RTP",
-            "charmm36": "CHARMM36 RTP",
-        }
-        return {
-            "name": name,
-            "common_name": lipid.common_name,
-            "category": lipid.category,
-            "formula": lipid.formula,
-            "headgroup": lipid.headgroup,
-            "tail1": list(lipid.tail1),
-            "tail2": list(lipid.tail2),
-            "area_per_lipid": lipid.area_per_lipid,
-            "charge": lipid.charge,
-            "thickness": lipid.bilayer_thickness,
-            "smiles": lipid.smiles,
-            "parameterizations": sources,
-            "parameterization": " + ".join(source_labels[item] for item in sources)
-            if sources
-            else "Unavailable",
-            "gaff2_unavailable_reason": gaff_reason if not gaff_supported else "",
-        }
-
-    return {
-        "lipids": [_lipid_option(name) for name in LipidRegistry.list()],
-        "lipid_categories": {
-            cat: {"label": CATEGORY_NAMES.get(cat, cat), "lipids": names}
-            for cat, names in LipidRegistry.list_by_category().items()
-        },
-        "water_models": [
-            {
-                "name": n,
-                "full_name": WaterRegistry.get(n).full_name,
-                "n_atoms": WaterRegistry.get(n).n_atoms,
-                "supported_force_fields": supported_force_fields(n),
-            }
-            for n in WaterRegistry.list()
-        ],
-        "solvents": [
-            # Water models (full molecular generation supported)
-            {"name": "tip3p", "label": "TIP3P Water", "category": "water", "density": 0.998},
-            {"name": "spc", "label": "SPC Water", "category": "water", "density": 0.978},
-            {"name": "spce", "label": "SPC/E Water", "category": "water", "density": 0.998},
-            {"name": "tip4p", "label": "TIP4P Water", "category": "water", "density": 0.997},
-            # Organic solvents (ITP bundled in OPLS-AA, geometry TBD)
-            {
-                "name": "methanol",
-                "label": "Methanol (MeOH)",
-                "category": "organic",
-                "density": 0.791,
-            },
-            {"name": "ethanol", "label": "Ethanol (EtOH)", "category": "organic", "density": 0.789},
-            {
-                "name": "1propanol",
-                "label": "1-Propanol (PrOH)",
-                "category": "organic",
-                "density": 0.803,
-            },
-        ],
-        "force_fields": [
-            {
-                **get_force_field_profile(n).as_dict(),
-                "version": ForceFieldRegistry.get(n).version,
-                "water_model": ForceFieldRegistry.get(n).water_model,
-            }
-            for n in ForceFieldRegistry.list()
-        ],
-        "gaff2_available": gaff_ready,
-    }
+    return get_catalog().read(options=True)
 
 
 @app.post("/api/forcefield-compatibility/{task_id}")
@@ -2464,7 +2338,7 @@ async def api_forcefield_compatibility(task_id: str, request: Request):
             status_code=409,
         )
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
@@ -2503,6 +2377,17 @@ async def api_forcefield_compatibility(task_id: str, request: Request):
             name = str(ligand.get("name", ""))
             ligand["display_name"] = labels.get(name, name)
         return report
+    except FileNotFoundError:
+        return JSONResponse(
+            {
+                "error": (
+                    "Required force-field or checkpoint data is unavailable. "
+                    "Complete installation with ./install-local.sh and rerun the input Check."
+                ),
+                "code": "missing_compatibility_data",
+            },
+            status_code=503,
+        )
     except (ValueError, KeyError, OSError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -2515,7 +2400,7 @@ async def api_ligand_charge_suggestions(task_id: str, request: Request):
     if state is None:
         return JSONResponse({"error": "Task not found"}, status_code=404)
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
@@ -2572,6 +2457,97 @@ async def api_ligand_charge_suggestions(task_id: str, request: Request):
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
+@app.post("/api/ligand-chemistry/{task_id}")
+async def api_ligand_chemistry(task_id: str, request: Request):
+    """Identify ligands independently of parameter generation or simulation."""
+    from gmxbuilder.web.server_parts.ligand_chemistry import preview, trusted_config
+
+    task_id = _validate_task_id(task_id)
+    if task_manager.get_state(task_id) is None:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    checkpoint = task_manager.get_task_dir(task_id) / "steps" / "input"
+    if not (checkpoint / "system.npz").is_file():
+        return JSONResponse({"error": "Run Step 1 Check Upload first"}, status_code=409)
+    try:
+        data = await _json_object(request)
+        if not isinstance(data, dict):
+            raise ValueError("Request must be a JSON object")
+        config = trusted_config(task_id, data, task_manager, _validate_task_resource)
+        records = await _run_interactive(preview, checkpoint, config)
+        return {"ligands": records, "pH": config.get("ligand_pH", 7.0)}
+    except (ValueError, OSError, KeyError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/ligand-chemistry-upload/{task_id}")
+async def api_ligand_chemistry_upload(
+    task_id: str,
+    ligand_name: str = Form(...),
+    mol2_file: UploadFile = File(...),
+):
+    """Validate a MOL2 identity against every retained instance before saving it."""
+    import hashlib
+
+    from gmxbuilder.modules.forcefield.ligand_identity import MAX_IDENTITY_BYTES
+
+    task_id = _validate_task_id(task_id)
+    if task_manager.get_state(task_id) is None:
+        return JSONResponse({"error": "Task not found"}, status_code=404)
+    name = ligand_name.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9_]{1,8}", name):
+        return JSONResponse({"error": "Invalid ligand name"}, status_code=400)
+    if not (mol2_file.filename or "").lower().endswith(".mol2"):
+        return JSONResponse({"error": "Use a .mol2 file"}, status_code=400)
+    checkpoint = task_manager.get_task_dir(task_id) / "steps" / "input"
+    if not (checkpoint / "system.npz").is_file():
+        return JSONResponse({"error": "Run Step 1 Check Upload first"}, status_code=409)
+    payload = await mol2_file.read(MAX_IDENTITY_BYTES + 1)
+    if len(payload) > MAX_IDENTITY_BYTES:
+        return JSONResponse({"error": "MOL2 must be 2 MiB or smaller"}, status_code=413)
+    root = task_manager.get_task_dir(task_id) / "ligand_chemistry"
+    root.mkdir(parents=True, exist_ok=True)
+    # Content-addressed files do not invalidate a concurrent build's input.
+    digest = hashlib.sha256(payload).hexdigest()
+    path = root / f"{name}-{digest}.mol2"
+    with tempfile.NamedTemporaryFile(dir=root, suffix=".mol2", delete=False) as handle:
+        handle.write(payload)
+        temporary = Path(handle.name)
+    try:
+        from gmxbuilder.web.server_parts.ligand_chemistry import identify_groups
+
+        def validate():
+            return identify_groups(
+                System.load_checkpoint(checkpoint),
+                {"charmm_compat_mol2": {name: str(temporary)}},
+                only=name,
+            )
+
+        records = await _run_interactive(validate)
+        record = records.get(name)
+        if not record or record["status"] != "ok":
+            raise ValueError((record or {}).get("error", "No retained ligand with that name"))
+        temporary.replace(path)
+        state = task_manager.get_state(task_id) or {}
+        uploads = dict(state.get("ligand_chemistry_uploads") or {})
+        uploads[name] = {"file": path.name, "sha256": digest, "smiles": record["smiles"]}
+        task_manager.update_state(task_id, {"ligand_chemistry_uploads": uploads})
+        return {"ready": True, "smiles": record["smiles"], "sha256": digest}
+    except (ValueError, OSError, KeyError, ModuleConfigError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _inspect_cgenff_checkpoint(checkpoint: Path, ligand_name: str) -> bool:
+    """Inspect task-owned ligand groups outside the event-loop thread."""
+    from gmxbuilder.modules.forcefield.compatibility import molecule_groups
+
+    instances = molecule_groups(System.load_checkpoint(checkpoint)).get(ligand_name, [])
+    if any(len(instance) > 2048 for instance in instances):
+        raise ValueError("CGenFF small molecules may contain at most 2,048 atoms")
+    return bool(instances)
+
+
 @app.post("/api/cgenff-upload/{task_id}")
 async def api_cgenff_upload(
     task_id: str,
@@ -2598,14 +2574,14 @@ async def api_cgenff_upload(
     if not (checkpoint / "system.npz").is_file():
         return JSONResponse({"error": "Run Step 1 Check Upload first"}, status_code=409)
     try:
-        from gmxbuilder.modules.forcefield.compatibility import molecule_groups
-
-        groups = molecule_groups(System.load_checkpoint(checkpoint))
+        ligand_present = await _run_interactive(_inspect_cgenff_checkpoint, checkpoint, name)
+    except WorkQueueFull:
+        raise
     except (OSError, ValueError, KeyError) as exc:
         return JSONResponse(
             {"error": f"Could not inspect input checkpoint: {exc}"}, status_code=400
         )
-    if name not in groups:
+    if not ligand_present:
         return JSONResponse(
             {"error": f"The retained input system has no small molecule named {name}"},
             status_code=400,
@@ -2628,13 +2604,18 @@ async def api_cgenff_upload(
     try:
         from gmxbuilder.modules.forcefield.cgenff_import import prepare_cgenff_molecule
 
-        template = prepare_cgenff_molecule(
+        template = await _run_interactive(
+            prepare_cgenff_molecule,
             name,
             mol2_path,
             stream_path,
             selected_ff,
             package_dir / "generated",
         )
+    except WorkQueueFull:
+        mol2_path.unlink(missing_ok=True)
+        stream_path.unlink(missing_ok=True)
+        raise
     except (ModuleConfigError, OSError, ValueError) as exc:
         mol2_path.unlink(missing_ok=True)
         stream_path.unlink(missing_ok=True)
@@ -2675,290 +2656,6 @@ async def api_cgenff_upload(
 # API: upload PDB
 
 
-# ---- PDB auto-cleanup ----
-
-# Map non-standard amino acid names to standard ones
-_NONSTANDARD_AA_MAP = {
-    # Histidine protonation states
-    "HSD": "HIS",
-    "HSE": "HIS",
-    "HSP": "HIS",
-    "HID": "HIS",
-    "HIE": "HIS",
-    "HIP": "HIS",
-    # Cysteine variants
-    "CYM": "CYS",
-    "CYX": "CYS",
-    # Aspartate / Glutamate protonation
-    "ASH": "ASP",
-    "GLH": "GLU",
-    # Lysine neutral
-    "LYN": "LYS",
-    # Selenomethionine
-    "MSE": "MET",
-    # Phosphorylated (keep as-is for PTM detection)
-    # "SEP": "SER", "TPO": "THR", "PTR": "TYR",
-}
-
-# Residue names for water and common solvents
-_WATER_RESNAMES = {"HOH", "SOL", "WAT", "TIP", "TIP3", "SPC", "SPCE", "DOD"}
-
-# Hydrogen atom names (start with H or are pure H)
-_is_hydrogen = is_hydrogen
-
-
-def _filter_pdb_for_display(pdb_text: str) -> str:
-    """Lightweight text filter — strip water and hydrogen lines for the 3D viewer.
-
-    This is a *display* filter only.  Actual structure cleaning is done
-    inside PDBInputModule.run() so the checkpoint receives the same
-    treatment regardless of whether the user came through the web UI or
-    the CLI.
-    """
-    lines: list[str] = []
-    for line in pdb_text.split("\n"):
-        if not line.startswith(("ATOM", "HETATM")):
-            lines.append(line)
-            continue
-        resname = line[17:20].strip() if len(line) > 20 else ""
-        atom_name = line[12:16].strip() if len(line) > 16 else ""
-        element = line[76:78].strip() if len(line) >= 78 else ""
-        # Skip water
-        if resname.upper() in _WATER_RESNAMES:
-            continue
-        # Skip hydrogens
-        if _is_hydrogen(atom_name, element):
-            continue
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _detect_disulfides(pdb_path: Path) -> list[tuple[str, int, str, str, int, str]]:
-    """Find CYS SG-SG pairs within disulfide bond distance (< 2.5 Å)."""
-    cys_atoms = []
-    with open(pdb_path) as fh:
-        for line in fh:
-            if not line.startswith(("ATOM", "HETATM")):
-                continue
-            resname = line[17:20].strip()
-            atom_name = line[12:16].strip()
-            if resname == "CYS" and atom_name == "SG":
-                try:
-                    x = float(line[30:38])
-                    y = float(line[38:46])
-                    z = float(line[46:54])
-                    chain = line[21:22].strip()
-                    resid = int(line[22:26].strip())
-                    cys_atoms.append((x, y, z, chain, resid))
-                except (ValueError, IndexError):
-                    continue
-
-    pairs = []
-    n = len(cys_atoms)
-    for i in range(n):
-        for j in range(i + 1, n):
-            xi, yi, zi, chi, ridi = cys_atoms[i]
-            xj, yj, zj, chj, ridj = cys_atoms[j]
-            dist = np.sqrt((xi - xj) ** 2 + (yi - yj) ** 2 + (zi - zj) ** 2)
-            if dist < 2.5:
-                pairs.append((chi, ridi, "CYS", chj, ridj, "CYS"))
-    return pairs
-
-
-def _apply_disulfide_rename(pdb_path: Path, pairs: list) -> None:
-    """Rename paired CYS residues to CYX in the PDB file."""
-    rename_set = set()
-    for ch, rid, _, ch2, rid2, _ in pairs:
-        rename_set.add((ch, rid))
-        rename_set.add((ch2, rid2))
-
-    with open(pdb_path) as fh:
-        lines = fh.readlines()
-
-    with open(pdb_path, "w") as fh:
-        for line in lines:
-            if line.startswith(("ATOM", "HETATM")):
-                resname = line[17:20].strip()
-                chain = line[21:22].strip()
-                try:
-                    resid = int(line[22:26].strip())
-                except ValueError:
-                    resid = 0
-                if resname == "CYS" and (chain, resid) in rename_set:
-                    line = line[:17] + "CYX" + line[20:]
-            fh.write(line)
-
-
-def _auto_clean_pdb(input_path: Path, output_path: Path) -> None:
-    """Clean a PDB file for downstream processing.
-
-    - Renames non-standard amino acids to standard names
-    - Removes water molecules and common solvents
-    - Removes hydrogen atoms (will be added back by topology builder)
-    - Preserves all other HETATM records (ligands, cofactors)
-    """
-    renamed = 0
-    stripped_water = 0
-    stripped_h = 0
-    kept = 0
-
-    with open(input_path) as fh_in, open(output_path, "w") as fh_out:
-        for line in fh_in:
-            if not line.startswith(("ATOM", "HETATM")):
-                # Pass through non-atom records (REMARK, CRYST1, TER, etc.)
-                fh_out.write(line)
-                continue
-
-            resname = line[17:20].strip()
-            atom_name = line[12:16].strip()
-            element = line[76:78].strip() if len(line) >= 78 else ""
-
-            # Strip water
-            if resname.upper() in _WATER_RESNAMES:
-                stripped_water += 1
-                continue
-
-            # Strip hydrogens
-            if _is_hydrogen(atom_name, element):
-                stripped_h += 1
-                continue
-
-            # Rename non-standard residues
-            new_name = _NONSTANDARD_AA_MAP.get(resname.upper())
-            if new_name and line.startswith("ATOM"):
-                # Replace resname in columns 18-20
-                line = line[:17] + f"{new_name:>3s}" + line[20:]
-                renamed += 1
-
-            fh_out.write(line)
-            kept += 1
-
-    # If nothing was kept, don't create empty file
-    if kept == 0:
-        output_path.unlink(missing_ok=True)
-        return
-
-    # ---- Center protein at origin ----
-    # Read back the cleaned file, compute centroid of ATOM records, translate to origin
-    atom_coords = []
-    with open(output_path) as fh:
-        lines = fh.readlines()
-    for line in lines:
-        if line.startswith("ATOM") or line.startswith("HETATM"):
-            try:
-                x = float(line[30:38])
-                y = float(line[38:46])
-                z = float(line[46:54])
-                atom_coords.append((x, y, z))
-            except (ValueError, IndexError):
-                pass
-    if atom_coords:
-        coords = np.array(atom_coords)
-        centroid = coords.mean(axis=0)
-        # Rewrite with centered coordinates
-        with open(output_path, "w") as fh:
-            for line in lines:
-                if line.startswith("ATOM") or line.startswith("HETATM"):
-                    try:
-                        x = float(line[30:38]) - centroid[0]
-                        y = float(line[38:46]) - centroid[1]
-                        z = float(line[46:54]) - centroid[2]
-                        line = line[:30] + f"{x:8.3f}{y:8.3f}{z:8.3f}" + line[54:]
-                    except (ValueError, IndexError):
-                        pass
-                fh.write(line)
-
-    # ---- Detect disulfide bonds ----
-    disulfide_pairs = _detect_disulfides(output_path)
-    if disulfide_pairs:
-        _apply_disulfide_rename(output_path, disulfide_pairs)
-        logger.info(
-            "PDB cleanup: %d residues renamed, %d waters removed, "
-            "%d hydrogens removed, %d atoms kept, centered at origin, "
-            "%d disulfide bond(s) detected",
-            renamed,
-            stripped_water,
-            stripped_h,
-            kept,
-            len(disulfide_pairs),
-        )
-    else:
-        logger.info(
-            "PDB cleanup: %d residues renamed, %d waters removed, "
-            "%d hydrogens removed, %d atoms kept, centered at origin",
-            renamed,
-            stripped_water,
-            stripped_h,
-            kept,
-        )
-
-
-_STRUCTURE_SUFFIX_FORMATS = {
-    ".pdb": "pdb",
-    ".ent": "pdb",
-    ".cif": "cif",
-    ".mmcif": "cif",
-}
-
-
-def _structure_upload_suffix(filename: str) -> tuple[str, bool]:
-    """Return the declared structure format and whether it is gzip-compressed."""
-    safe_name = Path(filename or "").name
-    lower = safe_name.lower()
-    compressed = lower.endswith(".gz")
-    inner_name = safe_name[:-3] if compressed else safe_name
-    declared = _STRUCTURE_SUFFIX_FORMATS.get(Path(inner_name).suffix.lower())
-    if declared is None:
-        raise ValueError(
-            "Accepted structure formats are .pdb, .ent, .cif, .mmcif, and their .gz variants"
-        )
-    return declared, compressed
-
-
-def _prepare_structure_upload(
-    filename: str,
-    content: bytes,
-    max_bytes: int,
-) -> tuple[str, bytes, str, list[str]]:
-    """Bound decompression, detect content format, and choose a canonical name."""
-    declared, compressed = _structure_upload_suffix(filename)
-    if compressed:
-        try:
-            with gzip.GzipFile(fileobj=io.BytesIO(content)) as stream:
-                content = stream.read(max_bytes + 1)
-        except (gzip.BadGzipFile, EOFError, OSError) as exc:
-            raise ValueError("The uploaded .gz file is not a valid gzip stream") from exc
-        if len(content) > max_bytes:
-            raise ValueError("Decompressed structure exceeds the upload size limit")
-    if not content:
-        raise ValueError("The uploaded structure file is empty")
-    if b"\x00" in content[: 1024 * 1024]:
-        raise ValueError("The uploaded structure contains binary data")
-
-    sample = content[: 2 * 1024 * 1024].decode("utf-8-sig", errors="replace")
-    normalized = sample.replace("\r\n", "\n").replace("\r", "\n")
-    pdb_records = any(
-        line[:6].strip().upper() in {"ATOM", "HETATM", "MODEL", "CRYST1"}
-        for line in normalized.splitlines()
-    )
-    cif_records = bool(
-        re.search(r"(?m)^\s*data_\S*", normalized)
-        and re.search(r"(?m)^\s*_atom_site\.", normalized)
-    )
-    detected = "cif" if cif_records and not pdb_records else "pdb" if pdb_records else declared
-    warnings: list[str] = []
-    if detected != declared:
-        warnings.append(
-            f"File content was detected as {detected.upper()} despite its filename; "
-            "content detection was used."
-        )
-
-    original = Path(filename[:-3] if compressed else filename).name
-    stem = Path(original).stem or "structure"
-    canonical_name = f"{stem}.{'cif' if detected == 'cif' else 'pdb'}"
-    return canonical_name, content, detected, warnings
-
-
 @app.post("/api/upload-pdb")
 async def api_upload_pdb(
     request: Request,
@@ -2973,11 +2670,8 @@ async def api_upload_pdb(
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    # Check Content-Length header first to avoid OOM from oversized uploads
-    max_upload_mb = int(os.environ.get("GMXBUILDER_MAX_UPLOAD_MB", "100"))
-    if not 1 <= max_upload_mb <= 500:
-        max_upload_mb = 100
-    MAX_UPLOAD_BYTES = max_upload_mb * 1024 * 1024
+    limits = StructureInputLimits.from_environment()
+    max_upload_mb = limits.max_bytes // 1024 // 1024
     content_length = request.headers.get("content-length")
     try:
         declared_size = int(content_length) if content_length else None
@@ -2985,7 +2679,7 @@ async def api_upload_pdb(
         return JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)
     # Multipart framing contributes to Content-Length. The streamed file read
     # below remains the authoritative per-file limit.
-    if declared_size is not None and declared_size > MAX_UPLOAD_BYTES + 1024 * 1024:
+    if declared_size is not None and declared_size > limits.max_bytes + 1024 * 1024:
         return JSONResponse(
             {
                 "error": (
@@ -2997,18 +2691,23 @@ async def api_upload_pdb(
         )
 
     # Read with size cap — read max_bytes+1 so we can detect overage
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
+    content = await file.read(limits.max_bytes + 1)
+    if len(content) > limits.max_bytes:
         return JSONResponse(
             {"error": (f"File too large (>{max_upload_mb} MB). Maximum is {max_upload_mb} MB.")},
             status_code=413,
         )
 
     try:
-        stored_name, content, structure_format, format_warnings = _prepare_structure_upload(
-            original_filename, content, MAX_UPLOAD_BYTES
+        stored_name, content, structure_format, format_warnings = await _run_interactive(
+            _prepare_and_inspect_structure_upload,
+            original_filename,
+            content,
+            limits,
         )
-    except ValueError as exc:
+    except WorkQueueFull:
+        raise
+    except (StructureInputLimitError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     is_cif = structure_format == "cif"
 
@@ -3049,44 +2748,20 @@ async def api_upload_pdb(
         task = task_manager.create_task(original_filename)
         task_id = task["task_id"]
     uploaded_path = task_manager.save_uploaded_pdb(task_id, stored_name, content)
-    tmp_path = uploaded_path
-
-    # ---- CIF → PDB conversion (for display / filtering only) ----
-    # The module handles its own format detection and parsing independently.
-    # This converted PDB enables the chain filter, small-molecule detection,
-    # and 3D viewer to work with a standard PDB-format file.
-    if is_cif:
-        try:
-            from gmxbuilder.io.cif import CIFParser
-            from gmxbuilder.io.pdb import PDBWriter
-
-            cif_structure = CIFParser().parse(tmp_path)
-            cif_pdb_path = task_manager.get_task_dir(task_id) / "converted.pdb"
-            PDBWriter.write(
-                cif_structure,
-                cif_pdb_path,
-                title="Converted from mmCIF",
-                wrap_ids_for_viewer=True,
-            )
-            tmp_path = cif_pdb_path
-        except (ParseError, UnicodeError, ValueError) as exc:
-            logger.warning("mmCIF upload rejected for task %s: %s", task_id, exc)
-            message = _redact_server_paths(str(exc)).replace("\n", " ")[:400]
-            return JSONResponse(
-                {"error": f"Failed to parse structure file: {message}"},
-                status_code=400,
-            )
-
-    # Structure cleaning is now handled inside PDBInputModule — the server
-    # layer only does transport.  We apply a lightweight text filter to the
-    # PDB content returned to the 3D viewer so it renders cleanly.
-
     try:
-        # ---- Step 1: Validate ----
-        from gmxbuilder.io.pdb import PDBValidator
-
-        validation = PDBValidator.validate(tmp_path)
-        validation["warnings"] = format_warnings + validation["warnings"]
+        summary = await _run_interactive(
+            process_uploaded_structure,
+            uploaded_path,
+            task_manager.get_task_dir(task_id),
+            structure_format,
+            format_warnings,
+            limits,
+            _filter_pdb_for_display,
+            _extract_sequences,
+            PDBInputModule._PROTEIN_RESNAMES,
+            not _is_martini_task_type(task_type),
+        )
+        validation = summary["validation"]
         if not validation["valid"]:
             return JSONResponse(
                 {
@@ -3097,40 +2772,29 @@ async def api_upload_pdb(
                 status_code=400,
             )
 
-        # ---- Step 2: Parse ----
-        parser = PDBParser()
-        structure = parser.parse(tmp_path)
-        # tmp_path is always PDB-format at this point (converted from CIF
-        # above if needed).  Read the file text for display filtering.
-        pdb_text = tmp_path.read_text(encoding="utf-8", errors="replace")
-        # Lightweight text filter for cleaner 3D viewer display.
-        # Actual structure cleaning is done inside PDBInputModule.run().
-        display_text = _filter_pdb_for_display(pdb_text)
+        cached_summary = {
+            key: summary[key]
+            for key in (
+                "chain_identity_version",
+                "input_status",
+                "cell_info",
+                "atom_counts_by_resname",
+                "residue_counts_by_resname",
+                "chain_mapping",
+                "num_atoms",
+                "residues",
+                "protein_residues",
+                "chains",
+                "box_nm",
+                "sequences",
+                "small_molecules",
+                "input_source_metadata",
+                "input_validation",
+            )
+        }
+        cached_summary["source_name"] = uploaded_path.name
+        cached_summary["validation"] = validation
 
-        from collections import Counter
-
-        res_counts = Counter(structure.resnames)
-        protein_res = [r for r in res_counts if r in PDBInputModule._PROTEIN_RESNAMES]
-
-        # Build per-chain sequences with residue numbering
-        sequences = _extract_sequences(structure)
-        # Only include chains that contain protein residues (small-molecule-only
-        # chains appear in the Small Molecules section, not as protein chains)
-        chains = [s["chain_id"] for s in sequences if s.get("chain_id", "").strip()]
-        # Fallback: if the PDB has no explicit chain IDs (all blank), use "A"
-        if not chains and sequences:
-            chains = ["A"]
-            for s in sequences:
-                s["chain_id"] = "A"
-
-        # ---- Step 3: Detect small molecules ----
-        small_molecules = PDBValidator.detect_small_molecules(tmp_path)
-
-        # ---- Step 4: Precompute PROPKA in background ----
-        if not _is_martini_task_type(task_type):
-            _schedule_propka_precompute(str(tmp_path))
-
-        # Update task state
         task_manager.update_state(
             task_id,
             {
@@ -3140,40 +2804,62 @@ async def api_upload_pdb(
                 "uploaded_structure_format": structure_format,
                 "pdb_info": {
                     "filename": original_filename,
-                    "num_atoms": structure.num_atoms,
-                    "chains": sorted(chains),
-                    "box_nm": [round(v, 3) for v in structure.dimensions().tolist()],
-                    "small_molecules": small_molecules,
+                    "num_atoms": summary["num_atoms"],
+                    "chains": summary["chains"],
+                    "box_nm": summary["box_nm"],
+                    "small_molecules": summary["small_molecules"],
                 },
+                "structure_summary": cached_summary,
+                "input_source_metadata": summary["input_source_metadata"],
                 "current_step": "input",
             },
         )
+
+        if not _is_martini_task_type(task_type):
+            try:
+                analysis_path = _resolve_propka_pdb_path(task_id)
+            except ValueError:
+                logger.info("PROPKA precompute deferred: input needs explicit identity review")
+            else:
+                _schedule_propka_precompute(analysis_path)
 
         return {
             "task_id": task_id,
             "filename": original_filename,
             "structure_format": "mmCIF" if is_cif else "PDB",
-            "num_atoms": structure.num_atoms,
-            "residues": dict(res_counts.most_common(20)),
-            "protein_residues": sorted(protein_res),
-            "chains": sorted(chains),
-            "box_nm": [round(v, 3) for v in structure.dimensions().tolist()],
-            "pdb_content": display_text if display_text else pdb_text,
-            "sequences": sequences,
+            "input_validation": summary["input_validation"],
+            "input_status": summary["input_status"],
+            "cell_info": summary["cell_info"],
+            "atom_counts_by_resname": summary["atom_counts_by_resname"],
+            "residue_counts_by_resname": summary["residue_counts_by_resname"],
+            "num_atoms": summary["num_atoms"],
+            "residues": summary["residues"],
+            "protein_residues": summary["protein_residues"],
+            "chains": summary["chains"],
+            "chain_mapping": summary.get("chain_mapping", {}),
+            "box_nm": summary["box_nm"],
+            "pdb_content": summary["pdb_content"],
+            "sequences": summary["sequences"],
             "validation_warnings": validation["warnings"],
-            "small_molecules": small_molecules,
+            "small_molecules": summary["small_molecules"],
         }
-    except (ParseError, UnicodeError, ValueError) as exc:
-        logger.warning("Structure upload rejected for task %s: %s", task_id, exc)
+    except WorkQueueFull:
+        raise
+    except (ParseError, StructureInputLimitError, UnicodeError, ValueError) as exc:
+        logger.warning("Structure upload rejected for %s: %s", task_log_reference(task_id), exc)
         message = _redact_server_paths(str(exc)).replace("\n", " ")[:400]
         return JSONResponse(
-            {"error": f"Failed to parse structure file: {message}"},
+            {
+                "error": f"Failed to parse structure file: {message}",
+                "parse_issues": getattr(exc, "issues", [])[:100],
+                "parse_issue_count": len(getattr(exc, "issues", [])),
+            },
             status_code=400,
         )
     except Exception:
         logger.exception("Upload PDB failed")
         return JSONResponse({"error": "Failed to process structure file"}, status_code=400)
-    # NOTE: tmp_path is intentionally kept alive — cleaned up by task TTL expiry
+    # NOTE: task-owned upload artifacts are cleaned up by task TTL expiry.
 
 
 # ---------------------------------------------------------------------------
@@ -3188,7 +2874,11 @@ _queue_event: asyncio.Event | None = None  # created in the active app event loo
 _MAX_QUEUED_BUILDS = _positive_environment_integer("GMXBUILDER_MAX_QUEUED_BUILDS", 32)
 _queue_enqueued_at: dict[str, float] = {}
 _build_started_at: dict[str, float] = {}
-_build_duration_history: deque[float] = deque(maxlen=50)
+# Cores allocated to each running build, decided when it started.
+_build_threads: dict[str, int] = {}
+# (duration, threads). A build that had 24 cores says nothing about how long
+# the same work takes on 2, so the estimate compares like with like.
+_build_duration_history: deque[tuple[float, int]] = deque(maxlen=50)
 
 
 def _baseline_build_seconds() -> float:
@@ -3199,27 +2889,66 @@ def _baseline_build_seconds() -> float:
     return value if math.isfinite(value) and value > 0 else 45.0
 
 
-def _typical_build_seconds() -> float:
-    """Return a robust recent finalization duration for queue estimates."""
-    if not _build_duration_history:
-        return _baseline_build_seconds()
-    ordered = sorted(list(_build_duration_history))
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
     middle = len(ordered) // 2
     if len(ordered) % 2:
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
+def _typical_build_seconds(threads: int | None = None) -> float:
+    """Return a robust recent finalization duration for queue estimates.
+
+    Per-task cores vary with how many builds are running, and the same work
+    takes longer on fewer of them. Where enough runs at the same allocation
+    have been observed, those are used; otherwise all of them are, which is a
+    weaker estimate but an observed one. Nothing here models a speed-up curve:
+    a made-up scaling constant would look more precise than it is.
+    """
+    if not _build_duration_history:
+        return _baseline_build_seconds()
+    # Entries are (duration, cores). A bare duration is tolerated because
+    # /api/health reads this, and a health endpoint should not fail over the
+    # shape of a statistics sample.
+    samples: list[tuple[float, int | None]] = []
+    for entry in list(_build_duration_history):
+        if isinstance(entry, tuple) and len(entry) == 2:
+            samples.append((float(entry[0]), int(entry[1])))
+        else:
+            samples.append((float(entry), None))
+    if not samples:
+        return _baseline_build_seconds()
+    if threads is not None:
+        matched = [duration for duration, used in samples if used == int(threads)]
+        if len(matched) >= 3:
+            return _median(matched)
+    return _median([duration for duration, _used in samples])
+
+
 def _queue_estimate(position: int) -> dict[str, object]:
     """Estimate when a one-based queued position can acquire a task slot."""
-    typical = _typical_build_seconds()
     now = time.time()
     with _tasks_lock:
         active_ids = tuple(_building_tasks)
+        active_threads = {task_id: _build_threads.get(task_id) for task_id in active_ids}
+
+    # A build already running keeps the cores it started with, so its
+    # remaining time is judged against runs that had the same allocation.
     remaining = [
-        max(1.0, typical - max(0.0, now - _build_started_at.get(task_id, now)))
+        max(
+            1.0,
+            _typical_build_seconds(active_threads.get(task_id))
+            - max(0.0, now - _build_started_at.get(task_id, now)),
+        )
         for task_id in active_ids
     ]
+    # A queued build starts once a slot frees, which under the allocation rule
+    # means it will be sharing with whatever is running then. Estimating it at
+    # a full machine's speed would systematically under-predict the wait.
+    queued_threads = task_thread_allocation(max(1, len(active_ids)))
+    typical = _typical_build_seconds(queued_threads)
+
     # Simulate FIFO assignment to the first available slot. Free slots start
     # at t=0; occupied slots start at their estimated remaining duration.
     availability = remaining + [0.0 for _ in range(max(0, _MAX_CONCURRENT_BUILDS - len(remaining)))]
@@ -3236,6 +2965,7 @@ def _queue_estimate(position: int) -> dict[str, object]:
         "estimated_wait_seconds": wait_seconds,
         "estimated_start_at": start.isoformat(),
         "estimate_basis_seconds": int(round(typical)),
+        "estimate_basis_threads": int(queued_threads),
     }
 
 
@@ -3265,30 +2995,32 @@ async def _consume_queue():
             # Pop the next queued build under _queue_lock only
             task_id = None
             data = None
-            with _queue_lock:
-                if not _build_queue:
+            # Keep the queue-to-running transition atomic with interactive
+            # step admission for the same task capability.
+            with _build_admission_lock:
+                with _queue_lock:
+                    if not _build_queue:
+                        break
+                    # Try to acquire a slot
+                    acquired = _build_semaphore.acquire(blocking=False)
+                    if not acquired:
+                        break  # no slot yet — wait for next finish signal
+                    task_id, data = _build_queue.pop(0)
+                    enqueued_at = _queue_enqueued_at.pop(task_id, time.time())
+
+                if task_id is None:
                     break
-                # Try to acquire a slot
-                acquired = _build_semaphore.acquire(blocking=False)
-                if not acquired:
-                    break  # no slot yet — wait for next finish signal
-                task_id, data = _build_queue.pop(0)
-                enqueued_at = _queue_enqueued_at.pop(task_id, time.time())
 
-            if task_id is None:
-                break
-
-            # Now update shared state — _queue_lock already released.
-            # Double-check: api_build may have already started this task
-            # (race between queue-pop and building_tasks-add).
-            with _tasks_lock:
-                if task_id in _building_tasks:
-                    # Already started by api_build — release slot and skip
-                    _build_semaphore.release()
-                    continue
-                _building_tasks.add(task_id)
-                _build_started_at[task_id] = time.time()
-                active_count = len(_building_tasks)
+                # Now update shared state — _queue_lock already released.
+                with _tasks_lock:
+                    if task_id in _building_tasks:
+                        # Already started by api_build — release slot and skip
+                        _build_semaphore.release()
+                        continue
+                    _building_tasks.add(task_id)
+                    _build_started_at[task_id] = time.time()
+                    _build_threads[task_id] = task_thread_allocation(len(_building_tasks))
+                    active_count = len(_building_tasks)
             waited_seconds = max(0, int(time.time() - enqueued_at))
             _persist_build_status(
                 task_id,
@@ -3393,7 +3125,7 @@ async def api_build(request: Request):
     checkpoint shown after Ion Check (or Membrane Check for a dry pure
     bilayer) is the sole coordinate source.
     """
-    data: dict[str, Any] = await request.json()
+    data = await _json_object(request)
     task_id = data.get("task_id", "")
 
     # Validate task_id format to prevent path traversal
@@ -3436,6 +3168,15 @@ async def api_build(request: Request):
     simparams = modules.get("simparams", {})
     execution = modules.get("execution", {})
     runner = _get_step_runner(task_id, persisted_task_type)
+    if not runner.input_validation_current():
+        return JSONResponse(
+            {
+                "error": "Run Check Upload again before building: the input has not passed "
+                "the current structure validation policy.",
+                "input_check_required": True,
+            },
+            status_code=409,
+        )
     try:
         from gmxbuilder.runtime.hardware import normalize_simulation_hardware
 
@@ -3446,8 +3187,6 @@ async def api_build(request: Request):
             checked = runner.load_system("cg_system")
             if checked is None:
                 raise ValueError("Final CG System Check is missing")
-            if not checked.metadata.get("system_confirmed"):
-                raise ValueError("Inspect and confirm the exact Final CG System before building")
             has_membrane = checked.metadata.get("cg_environment") == "bilayer"
             simparams = normalize_protocol(simparams, has_membrane=has_membrane)
             include_solvent = bool(
@@ -3510,8 +3249,16 @@ async def api_build(request: Request):
             },
             status_code=409,
         )
+    from gmxbuilder.web.server_parts.viewer_data import confirmed_revision
+
+    if not await _run_interactive(confirmed_revision, state, runner.step_dir(source_step)):
+        return JSONResponse(
+            {"error": "Confirm this checkpoint in Final Structure Review before building."},
+            status_code=409,
+        )
     data["task_type"] = persisted_task_type
     data["source_step"] = source_step
+    data["confirmed_revision"] = state["final_review"]["revision"]
     task_manager.update_state(
         task_id,
         {
@@ -3528,6 +3275,11 @@ async def api_build(request: Request):
     queue_full = False
     active_count = 0
     with _build_admission_lock:
+        if _step_admission.active(task_id):
+            return JSONResponse(
+                {"error": "An interactive Check is already running for this task."},
+                status_code=409,
+            )
         with _tasks_lock:
             already_building = task_id in _building_tasks
         if already_building:
@@ -3548,6 +3300,7 @@ async def api_build(request: Request):
                     with _tasks_lock:
                         _building_tasks.add(task_id)
                         _build_started_at[task_id] = time.time()
+                        _build_threads[task_id] = task_thread_allocation(len(_building_tasks))
                         _tasks[task_id] = {
                             "status": "running",
                             "progress": 0,
@@ -3632,7 +3385,10 @@ async def api_build(request: Request):
             f"Build starting ({active_count}/{_MAX_CONCURRENT_BUILDS} slots used)..."
         ]
     logger.info(
-        "Build %s started immediately (%d/%d slots)", task_id, active_count, _MAX_CONCURRENT_BUILDS
+        "Build %s started immediately (%d/%d slots)",
+        task_log_reference(task_id),
+        active_count,
+        _MAX_CONCURRENT_BUILDS,
     )
 
     loop = asyncio.get_event_loop()
@@ -3669,7 +3425,7 @@ def _run_background_build(data: dict, task_id: str, retry: bool = False) -> None
             result=summary,
         )
     except Exception as exc:
-        logger.exception("Build %s failed", task_id)
+        logger.exception("Build %s failed", task_log_reference(task_id))
         public_error = _redact_server_paths(exc)
         with _tasks_lock:
             _tasks[task_id] = {
@@ -3690,9 +3446,10 @@ def _run_background_build(data: dict, task_id: str, retry: bool = False) -> None
         with _tasks_lock:
             _building_tasks.discard(task_id)
             started_at = _build_started_at.pop(task_id, None)
+            threads_used = _build_threads.pop(task_id, configured_task_threads())
         if started_at is not None:
             duration = max(0.001, time.time() - started_at)
-            _build_duration_history.append(duration)
+            _build_duration_history.append((duration, int(threads_used)))
         _build_semaphore.release()
         _update_queue_positions()
         _signal_queue()
@@ -3710,6 +3467,16 @@ def _run_queued_build(data: dict, task_id: str):
 
 def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
     """Finalize the exact checked checkpoint without rebuilding coordinates."""
+    with _tasks_lock:
+        allocated = _build_threads.get(task_id, configured_task_threads())
+    # The budget decided when this build acquired its slot, made visible to
+    # everything it calls. GROMACS fixes its thread count at launch, so there
+    # is no point revisiting this while the build runs.
+    with task_thread_scope(allocated):
+        return _run_build_body(data, task_id)
+
+
+def _run_build_body(data: dict[str, Any], task_id: str) -> dict:
     # Build state is already initialized by api_build via _tasks_lock
     with _build_logs_lock:
         _build_logs[task_id] = ["Build starting..."]
@@ -3739,9 +3506,17 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
             else task_custom_lipid_scope(task_manager.get_task_dir(task_id))
         )
         with task_manager.active_task(task_id), lipid_scope:
+            from gmxbuilder.web.server_parts.viewer_data import require_final_review
+
+            require_final_review(
+                task_manager.get_state(task_id) or {},
+                runner.step_dir(source_step),
+                data.get("confirmed_revision"),
+            )
             result = runner.finalize_from_checkpoint(
                 source_step,
                 topology_config=dict(modules_config.get("topology") or {}),
+                structure_config=modules_config.get("structure"),
                 export_config=export_config,
                 simparams=simparams,
             )
@@ -3776,7 +3551,7 @@ def _run_build_sync(data: dict[str, Any], task_id: str) -> dict:
         return summary
 
     except Exception:
-        logger.exception("Build %s failed", task_id)
+        logger.exception("Build %s failed", task_log_reference(task_id))
         raise
 
 
@@ -3803,10 +3578,12 @@ async def api_status(task_id: str):
 @app.get("/api/download/{task_id}")
 async def api_download(task_id: str):
     task_id = _validate_task_id(task_id)
+    state = task_manager.get_state(task_id)
+    if state is None:
+        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
     t = _tasks.get(task_id)
     ready = t is not None and t.get("status") == "completed"
     if not ready:
-        state = task_manager.get_state(task_id) or {}
         persisted = state.get("build_status") or {}
         ready = isinstance(persisted, dict) and persisted.get("status") == "completed"
     if not ready:
@@ -3831,8 +3608,18 @@ def _get_step_runner(task_id: str, pipeline_type: str = "membrane-bilayer") -> S
     """Get or create a StepRunner for the given task."""
     from gmxbuilder.pipeline.step_executor import StepRunner
 
+    if task_manager.get_state(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found or expired")
     with _step_runners_lock:
         if task_id not in _step_runners:
+            if len(_step_runners) >= 256:
+                for cached in list(_step_runners):
+                    if not _step_admission.active(cached) and cached not in _building_tasks:
+                        if _resources is None or not _resources.queue.task_active(cached):
+                            del _step_runners[cached]
+                            break
+                else:
+                    raise HTTPException(status_code=503, detail="All cached tasks are active")
             task_dir = task_manager.get_task_dir(task_id)
             _step_runners[task_id] = StepRunner(task_dir, pipeline_type)
         return _step_runners[task_id]
@@ -3849,7 +3636,9 @@ def _require_task_custom_lipids_ready(task_id: str) -> list[dict]:
         )
         raise ValueError(
             "Custom lipid calculation must finish successfully before this "
-            f"task can proceed: {details}"
+            f"task can proceed: {details}. Online calculation and retry are no longer "
+            "available. Contact the administrator using the email address on the homepage "
+            "or announcement board, or start a new task using installed lipids."
         )
     return records
 
@@ -3908,23 +3697,26 @@ async def api_steps_status(task_id: str):
     runner = _get_step_runner(task_id, pipeline_type)
     step_status = []
     for s in steps:
+        from gmxbuilder.core.checkpoint_status import read_status
+
         has_checkpoint = runner.has_checkpoint(s)
+        summary = read_status(runner.step_dir(s)) if has_checkpoint else None
         preview_available = has_checkpoint
         confirmed = None
+        membrane_metrics = None
+        if s in {"membrane", "cg_environment"} and has_checkpoint:
+            membrane_metrics = summary.get("membrane_metrics") if summary else None
         if _is_martini_task_type(pipeline_type) and s == "cg_system" and has_checkpoint:
-            checked_system = runner.load_system(s)
-            confirmed = bool(
-                checked_system is not None and checked_system.metadata.get("system_confirmed")
-            )
-            # Frontend completion means scientific Check plus explicit WYSIWYG
-            # confirmation; retain preview availability as a separate field.
-            has_checkpoint = confirmed
+            confirmed = summary.get("system_confirmed") if summary else None
+            # Construction completion and final visual confirmation are separate steps.
         step_status.append(
             {
                 "name": s,
                 "has_checkpoint": has_checkpoint,
                 "preview_available": preview_available,
                 "confirmed": confirmed,
+                "membrane_metrics": membrane_metrics,
+                "summary_pending": has_checkpoint and summary is None,
             }
         )
 
@@ -3933,6 +3725,70 @@ async def api_steps_status(task_id: str):
         "pipeline_type": pipeline_type,
         "steps": step_status,
     }
+
+
+@app.get("/api/step/{task_id}/progress")
+async def api_step_progress(task_id: str):
+    """Report how far the Check currently running on this task has got.
+
+    A Check can run for minutes with nothing to show but a spinner. This gives
+    the browser a phase name, a fraction and an elapsed time. Absence of an
+    entry means nothing is running, which is a normal answer rather than an
+    error -- the step may have finished between two polls.
+    """
+    try:
+        task_id = _validate_task_id(task_id)
+    except InvalidTaskId as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if task_manager.get_state(task_id) is None:
+        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
+
+    with _step_progress_lock:
+        entry = dict(_step_progress.get(task_id, {}))
+    if _resources is not None:
+        for operation in _resources.queue.active():
+            if operation["task_id"] == task_id and operation.get("progress"):
+                entry = json.loads(operation["progress"])
+                break
+    if not entry:
+        return JSONResponse({"running": False})
+    started = entry.get("started_at", time.time())
+    return JSONResponse(
+        {
+            "running": True,
+            "step": entry.get("step"),
+            "phase": entry.get("phase"),
+            "fraction": entry.get("fraction", 0.0),
+            "elapsed_s": round(max(0.0, time.time() - started), 1),
+        }
+    )
+
+
+@app.get("/api/ligand-prep/{task_id}")
+async def api_ligand_prep_status(task_id: str):
+    """Report the background ligand parameterization started after Step 1.
+
+    Purely informational: the forcefield step runs the same calculation and
+    does not consult this. It exists so the Force Field panel can say that a
+    wait is already being worked on, rather than presenting it as new.
+    """
+    try:
+        task_id = _validate_task_id(task_id)
+    except InvalidTaskId as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if task_manager.get_state(task_id) is None:
+        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
+    if _resources is not None:
+        try:
+            snapshot = json.loads(
+                (task_manager.get_task_dir(task_id) / ".ligand-prep.json").read_text()
+            )
+            if snapshot.get("state") == "running" and not _resources.queue.task_active(task_id):
+                snapshot["state"] = "interrupted"
+            return JSONResponse(snapshot)
+        except (OSError, ValueError):
+            pass
+    return JSONResponse(ligand_prep.status(task_id))
 
 
 @app.post("/api/step/{task_id}/{step_name}")
@@ -3949,7 +3805,7 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
 
     try:
-        data = await request.json()
+        data = await _json_object(request)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
     if not isinstance(data, dict):
@@ -3973,6 +3829,19 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
             config = _trusted_membrane_config(task_id, config)
         except (KeyError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
+
+    if step_name == "forcefield":
+        from gmxbuilder.web.server_parts.ligand_chemistry import trusted_config
+
+        config = dict(config)
+        config.pop("_ligand_source_path", None)
+        if str(config.get("ligand_ff", "")).lower() == "charmm_compat":
+            try:
+                config = trusted_config(task_id, config, task_manager, _validate_task_resource)
+            except (ValueError, OSError) as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+        else:
+            config.pop("charmm_compat_mol2", None)
 
     # CGenFF paths are server-owned upload artifacts.  Never trust arbitrary
     # filesystem paths supplied in a step request.
@@ -4053,13 +3922,14 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
     if step_name == "input" and not protein_free_cg:
         try:
             pdb_path = _resolve_input_pdb(task_id)
-        except ValueError:
-            return JSONResponse({"error": "No PDB file found for input step"}, status_code=400)
+        except ValueError as exc:
+            return JSONResponse({"error": _redact_server_paths(exc)}, status_code=400)
 
     # Build initial system for first step
-    from gmxbuilder.core.system import System
-    from gmxbuilder.core.structure import Structure
     import numpy as np
+
+    from gmxbuilder.core.structure import Structure
+    from gmxbuilder.core.system import System
 
     seed = data.get("seed", task_state.get("seed", 42))
     initial = System(
@@ -4067,20 +3937,134 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
             coordinates=np.empty((0, 3)),
             box_vectors=np.eye(3) * 10.0,
         ),
-        metadata={"seed": seed},
+        metadata={"seed": seed, "input_source_metadata": task_state.get("input_source_metadata")},
     )
 
-    # Run step in thread pool (all steps are synchronous)
-    loop = asyncio.get_event_loop()
+    # Admit before submitting so the executor's internal queue is never the
+    # first (unbounded) line of defence.  Finalization and Check operations for
+    # one task are mutually exclusive to protect checkpoint integrity.
+    with _build_admission_lock:
+        with _tasks_lock:
+            finalizing = task_id in _building_tasks
+        with _queue_lock:
+            queued_for_finalization = any(tid == task_id for tid, _data in _build_queue)
+        if finalizing or queued_for_finalization:
+            return JSONResponse(
+                {"error": "This task is queued or running finalization."}, status_code=409
+            )
+        admission = _step_admission.try_acquire(task_id)
+    if admission == "duplicate":
+        return JSONResponse(
+            {"error": "A Check operation is already running for this task."}, status_code=409
+        )
+    if admission == "full":
+        return JSONResponse(
+            {"error": "The Check queue is full; retry shortly."},
+            status_code=503,
+            headers={"Retry-After": "5"},
+        )
+
+    # Run step in its dedicated thread pool (all steps are synchronous).
+    loop = asyncio.get_running_loop()
+
+    def _publish(fraction: float, phase: str) -> None:
+        with _step_progress_lock:
+            _step_progress[task_id] = {
+                "step": step_name,
+                "fraction": round(float(fraction), 3),
+                "phase": phase,
+                "started_at": _step_progress.get(task_id, {}).get("started_at", time.time()),
+                "updated_at": time.time(),
+            }
+            published = dict(_step_progress[task_id])
+        if is_worker():
+            from gmxbuilder.web.resource_queue import ResourceQueue
+
+            ResourceQueue(managed_root() / ".control" / "queue.sqlite3").update(
+                os.environ["GMXBUILDER_OPERATION_ID"], progress=published
+            )
 
     def _run_scoped_step():
-        with (
-            task_manager.active_task(task_id),
-            task_custom_lipid_scope(task_manager.get_task_dir(task_id)),
-        ):
-            return runner.run_step(step_name, config, initial_system=initial, pdb_path=pdb_path)
+        try:
+            with (
+                task_manager.active_task(task_id),
+                task_custom_lipid_scope(task_manager.get_task_dir(task_id)),
+            ):
+                if (
+                    step_name == "input"
+                    and not _is_martini_task_type(pipeline_type)
+                    and initial.metadata.get("input_source_metadata") is None
+                ):
+                    from gmxbuilder.modules.input.validation import read_polymer_metadata
 
-    result = await loop.run_in_executor(_get_executor(), _run_scoped_step)
+                    uploaded_name = task_state.get("uploaded_structure_name")
+                    if uploaded_name:
+                        original = _task_resource_helpers.validate_task_resource(
+                            task_id, uploaded_name
+                        )
+                        if original.is_file() and not original.is_symlink():
+                            initial.metadata["input_source_metadata"] = read_polymer_metadata(
+                                original
+                            )
+                step_result = runner.run_step(
+                    step_name,
+                    config,
+                    initial_system=initial,
+                    pdb_path=pdb_path,
+                    on_progress=_publish,
+                )
+                if step_name == "input" and step_result.get("status") == "ok":
+                    # Summaries use canonical coordinates, never wrapped viewer identities.
+                    checked = System.load_checkpoint(runner.step_dir("input")).structure
+                    sequences = _extract_sequences(checked)
+                    # Retain excluded fragments as selectable choices on recheck/resume.
+                    # This is a coordinate-only preview, without repair or dynamics.
+                    from gmxbuilder.io.input_document import read_input
+                    from gmxbuilder.modules.input.reconstruction import reconstruct_input
+
+                    fragment_choices = []
+                    if pdb_path:
+                        choices = read_input(pdb_path)
+                        reconstruct_input(choices, {**config, "exclude_fragments": []})
+                        fragment_choices = _extract_sequences(choices)
+                    checked_by_key = {row.get("fragment_key"): row for row in sequences}
+                    fragment_choices = [
+                        checked_by_key.get(row.get("fragment_key"), row) for row in fragment_choices
+                    ]
+                    step_result.setdefault("metrics", {})["input_summary"] = {
+                        "num_atoms": checked.num_atoms,
+                        "box_nm": checked.dimensions().tolist(),
+                        "chains": [chain["chain_id"] for chain in sequences],
+                        "sequences": sequences,
+                        "fragment_choices": fragment_choices,
+                        "small_molecules": PDBValidator.detect_small_molecules(checked),
+                    }
+                return step_result
+        finally:
+            _step_admission.release(task_id)
+            with _step_progress_lock:
+                _step_progress.pop(task_id, None)
+
+    try:
+        step_future = _get_step_executor().submit(_run_scoped_step)
+    except BaseException:
+        _step_admission.release(task_id)
+        with _step_progress_lock:
+            _step_progress.pop(task_id, None)
+        raise
+    admission = _step_admission
+
+    def _release_cancelled_step(completed):
+        if completed.cancelled():
+            admission.release(task_id)
+            with _step_progress_lock:
+                _step_progress.pop(task_id, None)
+
+    step_future.add_done_callback(_release_cancelled_step)
+    # Client cancellation must not release task admission while the worker is
+    # still mutating checkpoints. Only an unstarted cancellation uses the callback;
+    # a running worker's finally block owns its release.
+    result = await asyncio.wrap_future(step_future, loop=loop)
 
     if result["status"] == "ok":
         # Update task state
@@ -4089,11 +4073,22 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
             f"step_{step_name}_config": config,
         }
         if step_name == "input":
+            state_update["input_fragment_choices"] = list(
+                (result.get("metrics", {}).get("input_summary") or {}).get("fragment_choices", [])
+            )
             state_update["input_modifications"] = dict(
                 (result.get("metrics") or {}).get("input_modifications") or {}
             )
             state_update["input_sequences"] = list(
                 (result.get("metrics") or {}).get("input_sequences") or []
+            )
+            # Ligand parameterization is the slowest thing a Check does and
+            # depends on nothing the user has yet to choose. Starting it here
+            # overlaps it with the Force Field panel instead of making the
+            # user wait through it. Speculative, so it runs on the custom
+            # lipid pool and never takes a build slot.
+            ligand_prep.start(
+                task_id, task_manager.get_task_dir(task_id), _get_custom_lipid_executor()
             )
         if step_name == "structure":
             state_update["modification_geometry"] = list(
@@ -4105,50 +4100,143 @@ async def api_run_step(task_id: str, step_name: str, request: Request):
             state_update["orient"] = saved_orientation
         if step_name == "cg_system":
             state_update["cg_system_confirmed"] = False
+        state_update["final_review"] = None
         task_manager.update_state(task_id, state_update)
 
     return JSONResponse(_public_step_result(task_id, result))
 
 
-@app.post("/api/step/{task_id}/cg_system/confirm")
-async def api_confirm_cg_system(task_id: str):
-    """Confirm an already-built exact CG checkpoint without rebuilding it."""
+@app.get("/api/step/{task_id}/{step_name}/viewer.json")
+async def api_step_viewer_data(task_id: str, step_name: str, request: Request):
+    from gmxbuilder.web.server_parts.viewer_data import build_viewer
+
     task_id = _validate_task_id(task_id)
     task_state = task_manager.get_state(task_id)
-    task_type = ((task_state or {}).get("task_type") or {}).get("id") or (task_state or {}).get(
-        "task_type_id"
-    )
     if task_state is None:
         return JSONResponse({"error": "Task not found or expired"}, status_code=404)
-    if not _is_martini_task_type(task_type):
-        return JSONResponse({"error": "This task is not a Martini 3 workflow"}, status_code=409)
-    runner = _get_step_runner(task_id, task_type)
-    system = runner.load_system("cg_system")
-    if system is None:
+    task_type = (task_state.get("task_type") or {}).get("id") or task_state.get("task_type_id")
+    if step_name not in get_pipeline_steps(task_type):
+        return JSONResponse({"error": "Unknown checkpoint"}, status_code=400)
+    directory = _validate_task_resource(task_id, Path("steps") / step_name)
+    try:
+        path = await _run_interactive(build_viewer, directory)
+    except FileNotFoundError:
         return JSONResponse(
-            {"error": "Build and inspect the Final CG System first"}, status_code=409
+            {"error": "Run this step's Check before loading its viewer"}, status_code=404
         )
-    scientific_check = system.metadata.get("cg_scientific_check") or {}
-    if scientific_check.get("passed") is not True:
-        return JSONResponse(
-            {"error": "The final CG scientific quality gate has not passed"},
-            status_code=409,
-        )
-    system.metadata["system_confirmed"] = True
-    system.save_checkpoint(runner.step_dir("cg_system"))
-    task_manager.update_state(
-        task_id,
-        {
-            "cg_system_confirmed": True,
-            "current_step": "cg_system",
-        },
-    )
-    return {
-        "status": "ok",
-        "task_id": task_id,
-        "confirmed": True,
-        "coordinate_checkpoint": "cg_system",
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    from gmxbuilder.web.server_parts.viewer_data import SCHEMA
+
+    etag = f'"viewer-{SCHEMA}-{path.name}"'
+    headers = {"Content-Encoding": "gzip", "Cache-Control": "private, no-cache", "ETag": etag}
+    previous = {
+        value.strip().removeprefix("W/")
+        for value in request.headers.get("if-none-match", "").split(",")
     }
+    if etag in previous or "*" in previous:
+        return Response(status_code=304, headers=headers)
+    return FileResponse(path, media_type="application/json", headers=headers)
+
+
+@app.post("/api/task/{task_id}/final-review")
+async def api_confirm_final_review(task_id: str, request: Request):
+    from gmxbuilder.web.server_parts.viewer_data import checkpoint_revision, final_source
+
+    task_id = _validate_task_id(task_id)
+    task_state = task_manager.get_state(task_id)
+    if task_state is None:
+        return JSONResponse({"error": "Task not found or expired"}, status_code=404)
+    data = await _json_object(request)
+    source = data.get("source_step")
+    task_type = (task_state.get("task_type") or {}).get("id") or task_state.get("task_type_id")
+    permitted = {final_source(task_state)}
+    if task_type == "pure-membrane":
+        permitted = {"membrane", "ions"}
+    if not isinstance(source, str) or source not in permitted:
+        return JSONResponse({"error": "Wrong final checkpoint for this workflow"}, status_code=409)
+    if _resources is not None and _resources.queue.task_active(task_id):
+        return JSONResponse(
+            {"error": "Wait for the current operation before confirming"}, status_code=409
+        )
+    with _build_admission_lock:
+        with _queue_lock:
+            queued = any(tid == task_id for tid, _data in _build_queue)
+        if (
+            queued
+            or task_id in _building_tasks
+            or _step_admission.try_acquire(task_id) != "accepted"
+        ):
+            return JSONResponse({"error": "Task has work in progress"}, status_code=409)
+    try:
+        directory = _validate_task_resource(task_id, Path("steps") / source)
+        try:
+            revision = await _run_interactive(checkpoint_revision, directory)
+        except FileNotFoundError:
+            return JSONResponse({"error": "Final checkpoint is missing"}, status_code=409)
+        if data.get("revision") != revision:
+            return JSONResponse(
+                {"error": "The checkpoint changed. Reload and inspect the current system."},
+                status_code=409,
+            )
+        rendered_revision = revision
+        if source == "cg_system":
+            checked = await _run_interactive(System.load_checkpoint, directory)
+            if (checked.metadata.get("cg_scientific_check") or {}).get("passed") is not True:
+                return JSONResponse(
+                    {"error": "The final CG scientific quality gate has not passed"},
+                    status_code=409,
+                )
+            # The existing CG exporter requires this bookkeeping flag. Record both
+            # digests; confirmation changes metadata only, never viewed coordinates.
+            if checked.metadata.get("system_confirmed") is not True:
+                checked.metadata["system_confirmed"] = True
+                await _run_interactive(checked.save_checkpoint, directory)
+                revision = await _run_interactive(checkpoint_revision, directory)
+        record = {
+            "confirmed": True,
+            "source_step": source,
+            "revision": revision,
+            "rendered_revision": rendered_revision,
+        }
+        updates = {"final_review": record, "current_step": "final_review"}
+        if task_type == "pure-membrane":
+            updates["step_solvation_config"] = {
+                **(task_state.get("step_solvation_config") or {}),
+                "enabled": source == "ions",
+            }
+        task_manager.update_state(task_id, updates)
+        return {"status": "ok", **record}
+    finally:
+        _step_admission.release(task_id)
+
+
+@app.post("/api/step/{task_id}/cg_system/confirm")
+async def api_confirm_cg_system(task_id: str):
+    """Retired: confirmations must identify the exact inspected revision."""
+    return JSONResponse(
+        {"error": "Use /api/task/{task_id}/final-review with source_step and checkpoint revision"},
+        status_code=410,
+    )
+
+
+def _render_step_viewer(runner, step_name: str, pipeline_type: str) -> bool:
+    """Write a step's viewer PDB from its saved checkpoint. Returns success."""
+    system = runner.load_system(step_name)
+    if system is None:
+        return False
+    target = runner.step_dir(step_name) / "viewer.pdb"
+    try:
+        if _is_martini_task_type(pipeline_type):
+            from gmxbuilder.modules.coarse_grained.common import write_cg_viewer_pdb
+
+            write_cg_viewer_pdb(system, target, task_dir=runner.task_dir)
+        else:
+            system.write_viewer_pdb(target)
+    except Exception:
+        logger.debug("Viewer PDB could not be rendered for %s", step_name, exc_info=True)
+        return False
+    return target.exists()
 
 
 @app.get("/api/step/{task_id}/{step_name}/viewer.pdb")
@@ -4179,7 +4267,14 @@ async def api_step_viewer_pdb(task_id: str, step_name: str):
         if step_root in resolved.parents and resolved.is_file() and not resolved.is_symlink():
             pdb_path = resolved
     if not pdb_path.exists():
-        return JSONResponse({"error": f"No viewer PDB for step '{step_name}'"}, status_code=404)
+        # Rendered on demand from the step's checkpoint and then kept. Writing
+        # one after every step spent most of its effort on steps the interface
+        # never shows.
+        rendered = await asyncio.get_running_loop().run_in_executor(
+            _get_interactive_executor(), _render_step_viewer, runner, step_name, pipeline_type
+        )
+        if not rendered:
+            return JSONResponse({"error": f"No viewer PDB for step '{step_name}'"}, status_code=404)
 
     # Enrich an already checked Martini orientation from the immutable mapped
     # protein graph. This also repairs the active task after a service update
@@ -4232,96 +4327,21 @@ async def api_step_export_download(task_id: str):
     if not zip_files:
         return JSONResponse({"error": "No ZIP file in export directory"}, status_code=404)
 
-    zip_path = max(zip_files, key=lambda p: p.stat().st_mtime_ns)
+    # Prefer the archive the exporter marked; fall back to the timestamp only
+    # for tasks written before that marker existed.
+    zip_path = read_authoritative_archive(export_dir) or max(
+        zip_files, key=lambda p: p.stat().st_mtime_ns
+    )
     return FileResponse(
         str(zip_path), media_type="application/zip", filename=f"gmxbuilder_{task_id}.zip"
     )
 
 
-# Import for step runner
-from gmxbuilder.pipeline.step_executor import StepRunner, get_pipeline_steps  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Helpers
-
-
-def _extract_sequences(structure) -> list[dict]:
-    """Extract per-chain residue sequences with 1-based residue numbering.
-
-    Protein and nucleic-acid polymer residues are included.  Independent small
-    molecules, water, and ions are excluded and rendered separately.
-
-    Returns a list of dicts: {chain_id, sequence: [{resname, resid, is_protein}]}
-    """
-    from collections import OrderedDict
-    from gmxbuilder.io.pdb import _PROTEIN_RESNAMES, _SOLVENT_IONS, _LIPID_DETERGENT
-    from gmxbuilder.modules.nucleic_acid.support import (
-        classify_nucleic_residue,
-        nucleic_polymer_residues,
-    )
-
-    # Build a set of residue names that should NOT appear in chain sequences
-    _NON_PROTEIN = _SOLVENT_IONS | _LIPID_DETERGENT
-
-    chain_data: dict[str, list[dict]] = OrderedDict()
-    seen: dict[str, set] = {}  # chain -> set of seen (resname, resid) pairs
-
-    n = structure.num_atoms
-    nucleic_residues = nucleic_polymer_residues(structure)
-    for i in range(n):
-        chain = structure.chain_ids[i] if i < len(structure.chain_ids) else "?"
-        resname = structure.resnames[i] if i < len(structure.resnames) else "UNK"
-        resid = structure.resids[i] if i < len(structure.resids) else i + 1
-
-        # Skip solvent-like components; decide polymer identity below.
-        if resname in _NON_PROTEIN:
-            continue
-        is_protein = resname in _PROTEIN_RESNAMES
-        is_nucleic = (str(chain), int(resid)) in nucleic_residues
-        nucleic_type = (
-            nucleic_residues[(str(chain), int(resid))]
-            if is_nucleic
-            else classify_nucleic_residue(resname)
-        )
-        if not is_protein and not is_nucleic:
-            continue
-
-        if chain not in chain_data:
-            chain_data[chain] = []
-            seen[chain] = set()
-
-        key = (resname, resid)
-        if key not in seen[chain]:
-            seen[chain].add(key)
-            record = {
-                "resname": resname,
-                "resid": resid,
-                "is_protein": is_protein,
-            }
-            if is_nucleic:
-                record["is_nucleic"] = True
-                record["polymer_type"] = nucleic_type or "modified"
-            chain_data[chain].append(record)
-
-    # Convert to list of dicts
-    result = []
-    for chain_id, residues in chain_data.items():
-        if not residues:
-            continue
-        # Preserve coordinate encounter order.  The StructureProcessor uses
-        # this same order for residue indices; sorting by residue number here
-        # made frontend modifications target a different residue in PDB files
-        # with insertion codes or non-monotonic author numbering.
-        result.append(
-            {
-                "chain_id": chain_id,
-                "length": len(residues),
-                "residues": residues,
-            }
-        )
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Cleanup import (avoid circular)
+# Imported at the end of the module on purpose: the step runner and the PDB
+# input module both import this module, so a top-of-file import would be
+# circular.  E402 is suppressed rather than silenced globally.
 from gmxbuilder.modules.input.pdb_input import PDBInputModule  # noqa: E402
+from gmxbuilder.pipeline.step_executor import (  # noqa: E402
+    StepRunner,
+    get_pipeline_steps,
+)

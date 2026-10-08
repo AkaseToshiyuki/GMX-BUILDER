@@ -66,9 +66,7 @@ def test_queue_uses_every_configured_gpu_with_disjoint_cpu_lanes(tmp_path, monke
     monkeypatch.setattr(
         library_queue,
         "_run_job",
-        lambda job, **kwargs: (
-            calls.append((job, kwargs)) or (job, True, str(tmp_path / "job.log"))
-        ),
+        lambda job, **kwargs: calls.append((job, kwargs)) or (job, True, str(tmp_path / "job.log")),
     )
 
     results = library_queue.run_library_queue(log_dir=tmp_path)

@@ -1,9 +1,53 @@
+import json
 import signal
 import subprocess
 
+import numpy as np
 import pytest
 
 from gmxbuilder.modules.forcefield import gaff_backend
+
+
+def test_coordinate_cache_signature_is_linear_versioned_and_translation_invariant():
+    names = ("C1", "N2", "O3")
+    elements = ("C", "N", "O")
+    coordinates = np.asarray(
+        [[0.0, 0.0, 0.0], [0.14, 0.0, 0.0], [0.21, 0.08, 0.0]],
+        dtype=float,
+    )
+
+    signature = gaff_backend._coordinate_identity_signature(names, elements, coordinates, 7.0)
+    translated = gaff_backend._coordinate_identity_signature(
+        names, elements, coordinates + np.asarray([100.0, -20.0, 3.0]), 7.0
+    )
+    changed = coordinates.copy()
+    changed[2, 1] += 0.001
+
+    assert translated == signature
+    assert gaff_backend._coordinate_identity_signature(names, elements, changed, 7.0) != signature
+    assert (
+        gaff_backend._coordinate_identity_signature(
+            tuple(reversed(names)),
+            tuple(reversed(elements)),
+            coordinates[::-1],
+            7.0,
+        )
+        != signature
+    )
+    payload = json.loads(signature)
+    assert payload["schema"].startswith("gaff-coordinate-v4-")
+    assert payload["atom_count"] == 3
+    assert set(payload) == {"atom_count", "protonation_pH", "schema", "sha256"}
+
+
+def test_gaff_rejects_oversized_ligand_before_external_tool_discovery(monkeypatch):
+    def unexpected_tool_check():
+        raise AssertionError("tool discovery must not run for an oversized ligand")
+
+    monkeypatch.setattr(gaff_backend, "gaff_available", unexpected_tool_check)
+    indices = tuple(range(gaff_backend.MAX_GAFF_LIGAND_ATOMS + 1))
+    with pytest.raises(ValueError, match="2048 atoms"):
+        gaff_backend.prepare_gaff_molecule("LIG", object(), indices, 0)
 
 
 class _TimedOutProcess:
@@ -51,7 +95,9 @@ def test_external_timeout_terminates_the_complete_process_group(monkeypatch, tmp
     assert process.calls == 2
 
 
-def test_gaff_thread_limit_is_scoped_to_external_tools(monkeypatch, tmp_path):
+@pytest.mark.parametrize("available_cpus", [2, 32])
+def test_gaff_thread_limit_is_scoped_to_external_tools(monkeypatch, tmp_path, available_cpus):
+    monkeypatch.setattr(gaff_backend.os, "cpu_count", lambda: available_cpus)
     monkeypatch.setenv("GMXBUILDER_GAFF_ENV", str(tmp_path / "gaff"))
     monkeypatch.setenv("GMXBUILDER_GAFF_THREADS", "24")
     monkeypatch.setenv("GMXBUILDER_TASK_THREADS", "24")
@@ -60,8 +106,8 @@ def test_gaff_thread_limit_is_scoped_to_external_tools(monkeypatch, tmp_path):
 
     child_env = gaff_backend._gaff_tool_environment()
 
-    assert child_env["OMP_NUM_THREADS"] == "24"
-    assert child_env["OMP_THREAD_LIMIT"] == "24"
+    assert child_env["OMP_NUM_THREADS"] == str(min(24, available_cpus))
+    assert child_env["OMP_THREAD_LIMIT"] == str(min(24, available_cpus))
     assert "OMP_NUM_THREADS" not in gaff_backend.os.environ
 
 

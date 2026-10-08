@@ -15,15 +15,17 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-
 POLAR_ELEMENTS = frozenset({"N", "O", "P", "S"})
+# Exclude carbons near polar atoms when identifying a hydrophobic tail region.
 HYDROPHOBIC_MIN_POLAR_DISTANCE_NM = 0.28
+# Reject an unresolved head-tail axis, then screen its signed normal projection.
 MIN_HEAD_TAIL_SEPARATION_NM = 0.15
 MIN_INWARD_PROJECTION_NM = 0.10
-MIN_INWARD_COSINE = 0.10
+MIN_INWARD_COSINE = 0.10  # Dimensionless; exclude nearly tangential or reversed axes.
 # Atom-centre separation at the bilayer midplane.  Removing two carbon van
 # der Waals radii (~0.34 nm) leaves at most ~0.28 nm, below a water molecule's
 # effective diameter, while allowing finite coordinate/percentile noise.
+# This global gap heuristic does not certify the absence of local pores or water.
 MAX_TAIL_CORE_GAP_NM = 0.62
 
 # A leaflet change is an orientation change, not a mirror operation.  This

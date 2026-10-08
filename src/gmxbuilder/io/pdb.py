@@ -6,14 +6,17 @@ Coordinates are converted from Angstroms (PDB) to nanometers (internal).
 
 from __future__ import annotations
 
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
 
 from gmxbuilder.core.chemistry import PROTEIN_RESNAMES
-
-from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import ParseError
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.io.cell import classify_cell, display_envelope
+from gmxbuilder.io.residue_identity import working_residue_ids
+from gmxbuilder.io.source_document import source_bytes, source_text
 
 # PDB column specifications (1-indexed)
 # ATOM/HETATM format:
@@ -192,7 +195,7 @@ class PDBParser:
         """Return only the REMARK lines from a PDB file."""
         path = Path(path)
         lines = []
-        with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        with StringIO(source_text(path)) as fh:
             for raw in fh:
                 if raw.startswith("REMARK"):
                     lines.append(raw.rstrip("\n"))
@@ -210,8 +213,12 @@ class PDBParser:
         active_model = model_index == 1
         self._remarks = []
         connectivity: list[tuple[int, int]] = []
+        source_records = []
+        segment = 0
+        cell_present = False
+        selected_model_number = None
 
-        with open(path, encoding="utf-8-sig", errors="replace") as fh:
+        with StringIO(source_text(path)) as fh:
             for line_number, raw in enumerate(fh, start=1):
                 line = raw.rstrip("\n")
                 if not line:
@@ -223,23 +230,34 @@ class PDBParser:
                     saw_model = True
                     model_ordinal += 1
                     active_model = model_ordinal == model_index
+                    if active_model:
+                        selected_model_number = line[10:14].strip()
                 elif record == "REMARK":
                     self._remarks.append(line)
                     # Try to parse CRYST1 from REMARK 290 (common in membrane-protein PDB files)
                 elif record == "CRYST1":
+                    cell_present = True
                     box = self._parse_cryst1(line)
                 elif record in ("ATOM", "HETATM"):
                     if (not saw_model and model_index == 1) or active_model:
-                        atoms.append(self._parse_atom_line(line, record, line_number))
+                        atom = self._parse_atom_line(line, record, line_number)
+                        atom["formal_charge"] = line[78:80].strip()
+                        atom["source_line"] = line_number
+                        atom["segment"] = segment
+                        atoms.append(atom)
                 elif record == "ENDMDL":
                     if active_model and atoms:
-                        break
+                        active_model = False
                     active_model = False
                 elif record == "TER":
-                    pass  # Chain terminator — could track chains here
+                    segment += 1
                 elif record == "CONECT":
                     # Store connectivity hints
-                    entries = line[6:].split()
+                    entries = [
+                        line[i : i + 5].strip()
+                        for i in range(6, len(line), 5)
+                        if line[i : i + 5].strip()
+                    ]
                     if len(entries) >= 2:
                         try:
                             src = int(entries[0])
@@ -249,32 +267,71 @@ class PDBParser:
                             # Hybrid-36 identifiers are valid in large PDBs,
                             # but connectivity is only a non-authoritative hint.
                             pass
+                elif record in ("LINK", "SSBOND"):
+                    source_records.append(line)
                 elif record in ("END", "MASTER"):
                     break
 
         if not atoms:
             raise ParseError(f"No atoms found in PDB file: {path}")
 
-        insertion = next((atom for atom in atoms if atom["icode"]), None)
-        if insertion is not None:
-            raise ParseError(
-                "PDB insertion codes are not yet representable in the integer residue "
-                f"model (chain {insertion['chain'] or '?'} residue "
-                f"{insertion['resid']}{insertion['icode']}); renumber residues uniquely "
-                "before upload"
-            )
+        # TER distinguishes logical polymers even when author chain labels are reused.
+        from collections import defaultdict
 
-        # Resolve explicit alternate locations before constructing Structure.
-        # Highest occupancy wins; blank and then A are deterministic tie-breaks.
-        selected: dict[tuple[str, int, str, str], tuple[int, tuple[float, int]]] = {}
-        for index, atom in enumerate(atoms):
-            key = (atom["chain"], atom["resid"], atom["resname"], atom["name"])
-            preference = 2 if not atom["altloc"] else 1 if atom["altloc"] == "A" else 0
-            rank = (float(atom["occupancy"]), preference)
-            previous = selected.get(key)
-            if previous is None or rank > previous[1]:
-                selected[key] = (index, rank)
-        keep_indices = sorted(index for index, _rank in selected.values())
+        segments = defaultdict(set)
+        for atom in atoms:
+            segments[atom["chain"]].add(atom["segment"])
+        reserved = set(segments)
+        logical_chains = {}
+        for chain, values in segments.items():
+            for ordinal, segment_id in enumerate(sorted(values)):
+                logical = chain
+                if len(values) > 1:
+                    logical = f"{chain or 'unnamed'}~{ordinal + 1}"
+                    while logical in reserved:
+                        logical += "~"
+                    reserved.add(logical)
+                logical_chains[(chain, segment_id)] = logical
+        for atom in atoms:
+            atom["author_chain"] = atom["chain"]
+            atom["chain"] = logical_chains[(atom["chain"], atom["segment"])]
+        from gmxbuilder.io.altloc import select_residue_conformers
+
+        keep_indices = select_residue_conformers(
+            (
+                index,
+                (a["chain"], str(a["resid"]), a["icode"]),
+                a["resname"],
+                a["name"],
+                a["altloc"],
+                float(a["occupancy"]),
+            )
+            for index, a in enumerate(atoms)
+        )
+        from gemmi import Element
+
+        unknown = [
+            {
+                "code": "unknown_element",
+                "line": atom["source_line"],
+                "chain": atom["author_chain"],
+                "resid": atom["resid"],
+                "insertion_code": atom["icode"],
+                "resname": atom["resname"],
+                "atom": atom["name"],
+                "element": atom["element"],
+            }
+            for atom in atoms
+            if Element(atom["element"]).atomic_number == 0
+        ]
+        if unknown:
+            raise ParseError(
+                f"Unknown element in {len(unknown)} atom(s); first at line {unknown[0]['line']}: "
+                f"{unknown[0]['element']!r}. Identify or explicitly exclude unknown sites "
+                "before re-uploading; elements are not guessed.",
+                issues=unknown,
+            )
+        all_atom_count = len(atoms)
         atoms = [atoms[index] for index in keep_indices]
 
         n = len(atoms)
@@ -299,19 +356,41 @@ class PDBParser:
             occupancies[i] = a["occupancy"]
             tempfactors[i] = a["tempfactor"]
 
-        # Estimate box from coordinates when CRYST1 is absent OR physically
-        # unreasonable (e.g. placeholder 1.0 Å cell in some CIF→PDB conversions).
-        dims = np.sqrt((box**2).sum(axis=1))
-        if np.allclose(box, np.eye(3) * 10.0) or np.any(dims < 1.0) or np.any(dims > 1000.0):
-            cmin = coords.min(axis=0)
-            cmax = coords.max(axis=0)
-            extent = cmax - cmin
-            # Use the max extent + 30% padding, minimum 3 nm
-            box_size = max(extent.max() * 1.3, 3.0)
-            # Build a cubic box
-            box = np.eye(3) * box_size
+        resids, residue_mapping = working_residue_ids(
+            [(a["chain"], str(a["segment"]), str(a["resid"]), a["icode"]) for a in atoms]
+        )
+        original_cell = box.tolist() if cell_present else None
+        cell_status = classify_cell(original_cell)
+        estimated = cell_status in {"missing", "placeholder"}
+        if estimated:
+            box = display_envelope(coords)
 
+        import hashlib
+
+        digest = hashlib.sha256(source_bytes(path)).hexdigest()
+        source_ids = [f"{digest}:{a['source_line']}" for a in atoms]
+        source_atoms = {
+            uid: {key: value for key, value in a.items() if key != "xyz"}
+            for uid, a in zip(source_ids, atoms, strict=True)
+        }
         return Structure(
+            source_ids=source_ids,
+            source_info={
+                "schema": 1,
+                "format": "pdb",
+                "sha256": digest,
+                "selected_model_ordinal": model_index,
+                "selected_model_number": selected_model_number,
+                "model_count": model_ordinal or 1,
+                "input_atoms": all_atom_count,
+                "atoms": source_atoms,
+                "connections": connectivity,
+                "link_records": source_records,
+                "cell_vectors_nm": original_cell,
+                "box_source": "estimated" if estimated else "deposited",
+                "cell_status": cell_status,
+                "residue_mapping": residue_mapping,
+            },
             coordinates=coords,
             box_vectors=box,
             atom_names=atom_names,
@@ -338,6 +417,14 @@ class PDBParser:
             alpha = float(line[33:40])
             beta = float(line[40:47])
             gamma = float(line[47:54])
+            values = [a, b, c, alpha, beta, gamma]
+            if not np.isfinite(values).all() or min(a, b, c) <= 0:
+                raise ValueError("cell lengths must be finite and positive")
+            if not all(0 < x < 180 for x in (alpha, beta, gamma)):
+                raise ValueError("cell angles must be between 0 and 180 degrees")
+            cosines = np.cos(np.radians([alpha, beta, gamma]))
+            if 1 - np.dot(cosines, cosines) + 2 * np.prod(cosines) <= 0:
+                raise ValueError("cell angles must define positive volume")
 
             if abs(alpha - 90) < 1e-6 and abs(beta - 90) < 1e-6 and abs(gamma - 90) < 1e-6:
                 return np.diag([a, b, c])
@@ -361,8 +448,8 @@ class PDBParser:
             box[2, 2] = np.sqrt(c * c - box[2, 0] ** 2 - box[2, 1] ** 2)
             return box
 
-        except (ValueError, IndexError):
-            return np.eye(3) * 10.0
+        except (ValueError, IndexError) as exc:
+            raise ParseError(f"Invalid CRYST1 unit cell: {exc}") from exc
 
     @staticmethod
     def _parse_atom_line(line: str, record: str, line_number: int | None = None) -> dict:
@@ -560,6 +647,17 @@ class PDBWriter:
     """Write a Structure to PDB format."""
 
     @staticmethod
+    def identifiers_fit(structure: Structure) -> bool:
+        """Whether atom serials and residue IDs fit without viewer wrapping."""
+        return (
+            structure.num_atoms <= 99999
+            and all(-999 <= int(resid) <= 9999 for resid in structure.resids)
+            and all(len(x) <= 1 for x in structure.chain_ids)
+            and all(0 < len(x) <= 4 for x in structure.atom_names)
+            and all(0 < len(x) <= 3 for x in structure.resnames)
+        )
+
+    @staticmethod
     def write(
         structure: Structure,
         path: str | Path,
@@ -584,16 +682,17 @@ class PDBWriter:
         coords = structure.coordinates
         box = structure.box_vectors
         dims = np.sqrt((box**2).sum(axis=1))
-        if not wrap_ids_for_viewer:
-            invalid_resids = [
-                int(resid) for resid in structure.resids if int(resid) < -999 or int(resid) > 9999
-            ]
-            if structure.num_atoms > 99999 or invalid_resids:
-                raise ValueError(
-                    "Structure exceeds fixed-width PDB atom/residue identifier limits; "
-                    "use GRO/mmCIF for simulation data or explicit viewer wrapping"
-                )
+        if not wrap_ids_for_viewer and not PDBWriter.identifiers_fit(structure):
+            raise ValueError(
+                "Structure exceeds fixed-width PDB atom/residue identifier limits; "
+                "use GRO/mmCIF for simulation data or explicit viewer wrapping"
+            )
 
+        if not np.isfinite(coords).all() or not np.isfinite(box).all() or np.any(dims <= 0):
+            raise ValueError("PDB output requires finite coordinates and a valid cell")
+        if any(len(f"{value:8.3f}") > 8 for value in (coords / _ANGSTROM_TO_NM).flat):
+            raise ValueError("Coordinates exceed PDB field width; use mmCIF")
+        polymer_names = _PROTEIN_RESNAMES | _known_nucleic_resnames()
         with open(path, "w") as fh:
             # Title
             if title:
@@ -602,16 +701,21 @@ class PDBWriter:
 
             # REMARK
             fh.write("REMARK    Generated by GMXBUILDER\n")
-            if wrap_ids_for_viewer and structure.num_atoms > 99999:
+            if wrap_ids_for_viewer and not PDBWriter.identifiers_fit(structure):
                 fh.write(
-                    "REMARK    Atom/residue identifiers wrap at PDB field limits; "
-                    "coordinates and ordering remain exact\n"
+                    "REMARK    Display identifiers may wrap or be abbreviated. "
+                    "Use canonical data for scientific processing.\n"
                 )
 
-            # CRYST1 — assume orthorhombic for simplicity.  nm → Å conversion
+            # Preserve the full triclinic metric, not just edge lengths.
+            angles = [
+                np.degrees(np.arccos(np.clip(np.dot(box[i], box[j]) / (dims[i] * dims[j]), -1, 1)))
+                for i, j in ((1, 2), (0, 2), (0, 1))
+            ]
             fh.write(
                 f"CRYST1{dims[0] * 10:9.3f}{dims[1] * 10:9.3f}"
-                f"{dims[2] * 10:9.3f}  90.00  90.00  90.00 P 1           1\n"
+                f"{dims[2] * 10:9.3f}{angles[0]:7.2f}{angles[1]:7.2f}{angles[2]:7.2f}"
+                " P 1           1\n"
             )
 
             for i in range(structure.num_atoms):
@@ -622,17 +726,21 @@ class PDBWriter:
                 serial = i + 1
                 if wrap_ids_for_viewer:
                     serial = (i % 99999) + 1
-                    resid = ((int(resid) - 1) % 9999) + 1
+                    if not -999 <= int(resid) <= 9999:
+                        resid = ((int(resid) - 1) % 9999) + 1
                 chain = structure.chain_ids[i] if i < len(structure.chain_ids) else " "
+                if wrap_ids_for_viewer:
+                    chain = chain[:1]
                 element = structure.elements[i] if i < len(structure.elements) else "C"
                 occupancy = structure.occupancies[i] if i < len(structure.occupancies) else 1.0
                 tempfactor = structure.tempfactors[i] if i < len(structure.tempfactors) else 0.0
 
-                record = (
-                    "HETATM"
-                    if resname in ("HOH", "SOL", "NA", "CL", "K", "CA", "ZN", "MG")
-                    else "ATOM"
+                source_atom = structure.source_info.get("atoms", {}).get(
+                    structure.source_ids[i], {}
                 )
+                record = source_atom.get("record", source_atom.get("_atom_site.group_PDB"))
+                if record not in {"ATOM", "HETATM"}:
+                    record = "ATOM" if (structure.resnames[i] in polymer_names) else "HETATM"
 
                 fh.write(
                     f"{record:<6}{serial:5d} {format_pdb_atom_name(atom_name, element)}"
@@ -741,7 +849,8 @@ class PDBValidator:
 
             except (ValueError, IndexError):
                 errors.append(
-                    f"Malformed coordinate line — cannot parse atom record around serial {serial if 'serial' in dir() else '?'}"
+                    f"Malformed coordinate line — cannot parse atom record around serial "
+                    f"{serial if 'serial' in dir() else '?'}"
                 )
                 break
 
@@ -788,43 +897,15 @@ class PDBValidator:
         Returns a list of dicts, each describing one small-molecule instance:
             resname, chain, resid, atom_count, elements (set of element symbols)
         """
-        path = Path(path)
+        from gmxbuilder.io.input_document import read_input
         from gmxbuilder.modules.nucleic_acid.support import nucleic_polymer_residues
 
-        try:
-            polymer_residues = nucleic_polymer_residues(PDBParser().parse(path))
-        except (ParseError, OSError, ValueError):
-            polymer_residues = {}
-        content = path.read_text()
-        lines = [line for line in content.split("\n") if line[:6].strip() in ("ATOM", "HETATM")]
-
-        # Group by (resname, chain, resid)
+        structure = path if isinstance(path, Structure) else read_input(path)
+        polymer_residues = nucleic_polymer_residues(structure)
         groups: dict[tuple[str, str, int], list[tuple[str, str]]] = {}
-        for line in lines:
-            try:
-                resname = line[17:20].strip()
-                chain = line[21:22].strip() if len(line) > 21 else ""
-                resid_str = line[22:26].strip()
-                resid = int(resid_str) if resid_str else 0
-                key = (resname, chain, resid)
-                if key not in groups:
-                    groups[key] = []
-                # Extract element
-                element = ""
-                if len(line) >= 78:
-                    element = line[76:78].strip()
-                if not element:
-                    aname = line[12:16].strip()
-                    element = aname.lstrip("0123456789 ")[:2].strip()
-                    if element.upper() not in _ELEMENTS:
-                        element = element[0].upper()
-                    else:
-                        element = element.upper()
-                else:
-                    aname = line[12:16].strip()
-                groups[key].append((element or "?", aname))
-            except (ValueError, IndexError):
-                continue
+        for i in range(structure.num_atoms):
+            key = (structure.resnames[i], structure.chain_ids[i], structure.resids[i])
+            groups.setdefault(key, []).append((structure.elements[i], structure.atom_names[i]))
 
         # Report every non-protein molecule except water. Crystallographic
         # ions, buffers, detergents and lipids must be visible in Step 1 so the
@@ -844,7 +925,7 @@ class PDBValidator:
             small_mols.append(
                 {
                     "resname": resname,
-                    "chain": chain or " ",
+                    "chain": chain,
                     "resid": resid,
                     "atom_count": len(elements),
                     "formula": "".join(

@@ -7,9 +7,16 @@ from pathlib import Path
 
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
+from gmxbuilder.io.mdp import derive_velocity_seed
+from gmxbuilder.modules.export.layout import STRUCTURE_DIR, TOPOLOGY_DIR
 
 
-def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
+def normalize_protocol(
+    raw: dict | None,
+    *,
+    has_membrane: bool,
+    velocity_seed: int | None = None,
+) -> dict:
     raw = dict(raw or {})
     allowed = {
         "temperature",
@@ -41,6 +48,7 @@ def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
         "has_membrane",
         "equilibration_1",
         "equilibration_2",
+        "velocity_seed",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -75,6 +83,18 @@ def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
         raise ModuleConfigError("comm_mode must be Linear or None")
     if "has_membrane" in raw and not isinstance(raw["has_membrane"], bool):
         raise ModuleConfigError("has_membrane must be true or false")
+    resolved_velocity_seed = (
+        velocity_seed if velocity_seed is not None else raw.get("velocity_seed")
+    )
+    if resolved_velocity_seed is None:
+        resolved_velocity_seed = derive_velocity_seed(42)
+    if (
+        isinstance(resolved_velocity_seed, bool)
+        or not isinstance(resolved_velocity_seed, (int, float))
+        or not float(resolved_velocity_seed).is_integer()
+        or not 1 <= int(resolved_velocity_seed) <= 2_147_483_647
+    ):
+        raise ModuleConfigError("velocity_seed must be an integer from 1 to 2147483647")
     return {
         "minimization_steps": int(minimization_steps_number),
         "minimization_tolerance": number("minimization_tolerance", 200.0, 1.0, 10000.0),
@@ -105,6 +125,7 @@ def normalize_protocol(raw: dict | None, *, has_membrane: bool) -> dict:
         "equilibration_1": bool(raw.get("equilibration_1", True)),
         "equilibration_2": bool(raw.get("equilibration_2", True)),
         "has_membrane": bool(has_membrane),
+        "velocity_seed": int(resolved_velocity_seed),
     }
 
 
@@ -195,7 +216,11 @@ def write_mdp_files(directory: Path, config: dict) -> list[tuple[str, str]]:
             f"ref-t = {temperature:g}",
         ]
         if gen_vel:
-            lines += ["gen-vel = yes", f"gen-temp = {temperature:g}", "gen-seed = -1"]
+            lines += [
+                "gen-vel = yes",
+                f"gen-temp = {temperature:g}",
+                f"gen-seed = {config['velocity_seed']}",
+            ]
         else:
             lines += ["gen-vel = no"]
         if npt:
@@ -294,21 +319,33 @@ def write_run_script(
         'GMX="${GMX:-gmx}"',
         f"NTMPI=${{NTMPI:-{hardware['mpi_ranks']}}}",
         f"NTOMP=${{NTOMP:-{hardware['omp_threads']}}}",
-        'command -v "$GMX" >/dev/null || { echo "GROMACS executable not found: $GMX" >&2; exit 127; }',
-        'coord="input.gro"',
+        (
+            'command -v "$GMX" >/dev/null || { echo "GROMACS executable not found: $GMX" >&2; exit '
+            "127; }"
+        ),
+        f'coord="{STRUCTURE_DIR}/input.gro"',
         'checkpoint=""',
     ]
     for stage, filename in stages:
         lines += [
             f'echo "[GMXBUILDER] Preparing {stage}"',
             'if [[ -n "$checkpoint" ]]; then',
-            f'  "$GMX" grompp -f "mdp/{filename}" -c "$coord" -t "$checkpoint" -p topol.top -n index.ndx -o "{stage}.tpr" -maxwarn 0',
+            (
+                f'  "$GMX" grompp -f "mdp/{filename}" -c "$coord" -t "$checkpoint" '
+                f"-p {TOPOLOGY_DIR}/topol.top -n "
+                f'{STRUCTURE_DIR}/index.ndx -o "{stage}.tpr" -maxwarn 0'
+            ),
             "else",
-            f'  "$GMX" grompp -f "mdp/{filename}" -c "$coord" -p topol.top -n index.ndx -o "{stage}.tpr" -maxwarn 0',
+            (
+                f'  "$GMX" grompp -f "mdp/{filename}" -c "$coord" -p {TOPOLOGY_DIR}/topol.top '
+                f"-n {STRUCTURE_DIR}/index.ndx -o "
+                f'"{stage}.tpr" -maxwarn 0'
+            ),
             "fi",
             f'"$GMX" mdrun -deffnm "{stage}" -ntmpi "$NTMPI" -ntomp "$NTOMP"{gpu}',
             f'coord="{stage}.gro"',
-            f'checkpoint="{stage}.cpt"',
+            # Steepest descent writes coordinates but no dynamics checkpoint.
+            'checkpoint=""' if stage == "mini" else f'checkpoint="{stage}.cpt"',
         ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     path.chmod(0o755)

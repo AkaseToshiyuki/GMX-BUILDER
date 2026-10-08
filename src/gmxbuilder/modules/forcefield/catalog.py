@@ -7,11 +7,12 @@ parameter sources, and minimum GROMACS version required by the bundled port.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,20 @@ _PROFILES = {
         # grompp versions can parse the files while producing different terms.
         minimum_gromacs=(2026, 0),
     ),
+    "amber14sb_ol24": ForceFieldProfile(
+        name="amber14sb_ol24",
+        label="AMBER ff14SB + OL24 DNA / OL3 RNA",
+        family="amber",
+        release="GROMACS-2026.3+OL24",
+        default_water="tip3p",
+        ligand_backends=("gaff2",),
+        lipid_backends=("gaff2",),
+        defaults_signature=(1, 2, "yes", "0.5", "0.83333333333333333"),
+        # Assembled at install time from the bundled ff14SB and the Olomouc
+        # nucleic-acid parameters, so it inherits the base's requirement:
+        # _FF_AMBER_LEAP_ATOM_REORDERING needs GROMACS 2026 or later.
+        minimum_gromacs=(2026, 0),
+    ),
     "amber99sb-ildn": ForceFieldProfile(
         name="amber99sb-ildn",
         label="AMBER ff99SB-ILDN (legacy)",
@@ -88,7 +103,7 @@ _PROFILES = {
         family="charmm",
         release="Jul2022",
         default_water="tip3p",
-        ligand_backends=("cgenff-import",),
+        ligand_backends=("charmm_compat", "cgenff-import"),
         lipid_backends=("charmm36m",),
         defaults_signature=(1, 2, "yes", "1.0", "1.0"),
         cgenff_version="4.6",
@@ -100,7 +115,7 @@ _PROFILES = {
         family="charmm",
         release="Mar2019",
         default_water="tip3p",
-        ligand_backends=("cgenff-import",),
+        ligand_backends=("charmm_compat", "cgenff-import"),
         lipid_backends=("charmm36",),
         defaults_signature=(1, 2, "yes", "1.0", "1.0"),
         cgenff_version="4.1",
@@ -118,6 +133,37 @@ _PROFILES = {
         legacy=True,
     ),
 }
+
+
+#: A force field is usable only once its bonded and non-bonded parameters are
+#: on disk. The directory alone proves nothing: several are populated by the
+#: installer, and one is assembled there.
+_REQUIRED_PARAMETER_FILES = ("ffbonded.itp", "ffnonbonded.itp")
+
+
+def force_field_directory(name: str) -> Path | None:
+    """Return the data directory for *name*, accepting both naming styles.
+
+    The GROMACS-derived trees keep their ``.ff`` suffix; the ones this project
+    assembles do not.
+    """
+    root = Path(__file__).resolve().parents[2] / "data" / "forcefields"
+    for candidate in (root / name, root / f"{name}.ff"):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def force_field_installed(name: str) -> bool:
+    """Return whether *name* can actually be built with right now.
+
+    Deliberately not cached. A user can run the installer while the service is
+    running, and a cached "no" would keep the option greyed out until restart.
+    """
+    directory = force_field_directory(name)
+    if directory is None:
+        return False
+    return all((directory / required).is_file() for required in _REQUIRED_PARAMETER_FILES)
 
 
 def get_force_field_profile(name: str) -> ForceFieldProfile:

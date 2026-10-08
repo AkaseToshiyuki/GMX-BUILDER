@@ -2,3 +2,20 @@
 src/gmxbuilder/data/prebuilt_assets/*.tar.xz filter=lfs diff=lfs merge=lfs -text
 src/gmxbuilder/data/martini3/v3.0.0/*.itp whitespace=-trailing-space,-blank-at-eof
 src/gmxbuilder/data/martini3/v3.0.0/martini_v3.0.0.itp filter=lfs diff=lfs merge=lfs -text
+# Preserve upstream parameter bytes and raw audit evidence, including whitespace.
+src/gmxbuilder/data/forcefields/amber99sb.ff/*.itp whitespace=-trailing-space,-blank-at-eof
+src/gmxbuilder/data/forcefields/amber99sb-ildn.ff/*.itp whitespace=-trailing-space,-blank-at-eof
+src/gmxbuilder/data/forcefields/oplsaa.ff/*.itp whitespace=-trailing-space,-blank-at-eof
+Private/reports/checkdsh-repair-20260922/*.str whitespace=-trailing-space,-blank-at-eof
+Private/reports/checkdsh-repair-20260922/*.txt whitespace=-trailing-space,-blank-at-eof
+Private/reports/psm-policy-implementation-20261006/*.log whitespace=-trailing-space,-blank-at-eof
+Private/reports/asset-release-preparation-20261008/*.log whitespace=-trailing-space,-blank-at-eof
+
+# Release source archives contain product material only; Git history uses the export guard.
+Private export-ignore
+AGENTS.md export-ignore
+CLAUDE.md export-ignore
+src/gmxbuilder/data/forcefields/charmm36 export-ignore
+src/gmxbuilder/data/forcefields/charmm36m export-ignore
+src/gmxbuilder/data/forcefields/amber14sb_ol24 export-ignore
+Private/reports/release-1.0.0-20261008/*.log whitespace=-trailing-space,-blank-at-eof

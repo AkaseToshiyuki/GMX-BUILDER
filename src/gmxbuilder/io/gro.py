@@ -9,8 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import ParseError
+from gmxbuilder.core.structure import Structure
 
 
 def _validate_gro_name(value: object, label: str, atom_index: int) -> str:
@@ -50,6 +50,8 @@ class GROReader:
             n_atoms = int(lines[1].strip())
         except ValueError as exc:
             raise ParseError(f"Invalid atom count in GRO file: {lines[1].strip()!r}") from exc
+        if n_atoms < 0:
+            raise ParseError("GRO atom count cannot be negative")
         atom_lines = lines[2 : 2 + n_atoms]
 
         if len(lines) < 2 + n_atoms + 1:
@@ -72,23 +74,21 @@ class GROReader:
                 resids[i] = int(line[:5].strip())
                 resnames[i] = line[5:10].strip()
                 atom_names[i] = line[10:15].strip()
-                x = float(line[20:28].strip())
-                y = float(line[28:36].strip())
-                z = float(line[36:44].strip())
-                coords[i] = [x, y, z]
+                int(line[15:20])  # Atom serial belongs to the fixed-width header.
+                _validate_gro_name(resnames[i], "residue name", i)
+                _validate_gro_name(atom_names[i], "atom name", i)
+                # GROMACS n+5 columns for coordinates with n decimal places.
+                # Infer precision from decimal-point spacing, not whitespace:
+                # adjacent negative fields need not have a separating space.
+                points = [j for j, c in enumerate(line[20:]) if c == "."]
+                if len(points) < 3:
+                    raise ValueError("GRO coordinates require three decimal fields")
+                width = points[1] - points[0]
+                if width < 6 or points[2] - points[1] != width:
+                    raise ValueError("Inconsistent GRO coordinate field widths")
+                coords[i] = [float(line[20 + j * width : 20 + (j + 1) * width]) for j in range(3)]
             except (ValueError, IndexError) as exc:
-                # Fallback: try free-format parsing
-                parts = line.split()
-                if len(parts) >= 6:
-                    try:
-                        resids[i] = int(parts[0])
-                        resnames[i] = parts[1] if len(parts) > 1 else ""
-                        atom_names[i] = parts[2] if len(parts) > 2 else ""
-                        coords[i] = [float(parts[3]), float(parts[4]), float(parts[5])]
-                    except (ValueError, IndexError):
-                        raise ParseError(f"Malformed atom line {i + 1}: {line[:60]}") from exc
-                else:
-                    raise ParseError(f"Malformed atom line {i + 1}: {line[:60]}") from exc
+                raise ParseError(f"Malformed atom line {i + 1}: {line[:60]}") from exc
 
         # Parse box vectors (GROMACS formats: 1/3/5/9 values).  The official
         # nine-field order is v1(x), v2(y), v3(z), v1(y), v1(z), v2(x),

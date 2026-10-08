@@ -12,6 +12,10 @@ from collections.abc import Iterable
 
 import numpy as np
 
+# Shared gross-connectivity limits, also used for explicit input connections.
+MIN_BACKBONE_BOND_NM = 0.12
+MAX_BACKBONE_BOND_NM = 0.25
+
 
 CANONICAL_DNA_RESNAMES = frozenset(
     {
@@ -143,7 +147,8 @@ def nucleic_polymer_residues(structure) -> dict[tuple[str, int], str]:
         elif classification == "modified" or is_nucleic_like_residue(resnames[key], atoms[key]):
             candidates.add(key)
 
-    for left, right in zip(residue_order, residue_order[1:]):
+    # strict=False on purpose: consecutive pairs: the tail is one shorter.
+    for left, right in zip(residue_order, residue_order[1:], strict=False):
         if left[0] != right[0] or left not in candidates or right not in candidates:
             continue
         left_o3 = atoms[left].get("O3'")
@@ -157,6 +162,29 @@ def nucleic_polymer_residues(structure) -> dict[tuple[str, int], str]:
             result.setdefault(left, classify_nucleic_residue(resnames[left]) or "modified")
             result.setdefault(right, classify_nucleic_residue(resnames[right]) or "modified")
     return result
+
+
+def canonical_backbone_connections(structure) -> set[frozenset[int]]:
+    """Supported linear O3'-P bonds, independent of CONECT/struct_conn presence."""
+    chains = {}
+    for index in range(structure.num_atoms):
+        key = (structure.resids[index], structure.resnames[index])
+        atoms = chains.setdefault(structure.chain_ids[index], {}).setdefault(key, {})
+        atoms[structure.atom_names[index].upper().replace("*", "'")] = index
+    edges = set()
+    for residues in chains.values():
+        ordered = list(residues.items())
+        for (left, a), (right, b) in zip(ordered, ordered[1:]):
+            polymer = classify_nucleic_residue(left[1])
+            if polymer not in {"DNA", "RNA"} or classify_nucleic_residue(right[1]) != polymer:
+                continue
+            if "O3'" not in a or "P" not in b:
+                continue
+            i, j = a["O3'"], b["P"]
+            distance = np.linalg.norm(structure.coordinates[i] - structure.coordinates[j])
+            if MIN_BACKBONE_BOND_NM <= distance <= MAX_BACKBONE_BOND_NM:
+                edges.add(frozenset((i, j)))
+    return edges
 
 
 def validate_nucleic_backbone(structure, component) -> list[str]:
@@ -173,7 +201,10 @@ def validate_nucleic_backbone(structure, component) -> list[str]:
         lookup[key][name] = index
 
     issues: list[str] = []
-    for (left_key, left_atoms), (right_key, right_atoms) in zip(residues, residues[1:]):
+    # strict=False on purpose: consecutive pairs: the tail is one shorter.
+    for (left_key, left_atoms), (right_key, right_atoms) in zip(
+        residues, residues[1:], strict=False
+    ):
         left_o3 = left_atoms.get("O3'")
         right_p = right_atoms.get("P")
         label = f"chain {left_key[0] or '?'} residues {left_key[1]}-{right_key[1]}"
@@ -188,7 +219,7 @@ def validate_nucleic_backbone(structure, component) -> list[str]:
         distance = float(
             np.linalg.norm(structure.coordinates[left_o3] - structure.coordinates[right_p])
         )
-        if not 0.12 <= distance <= 0.25:
+        if not MIN_BACKBONE_BOND_NM <= distance <= MAX_BACKBONE_BOND_NM:
             issues.append(f"{label} has O3'-P distance {distance:.3f} nm (expected 0.12-0.25 nm)")
     if len(residues) > 1:
         first_key, first_atoms = residues[0]
@@ -211,6 +242,12 @@ def validate_nucleic_backbone(structure, component) -> list[str]:
 def nucleic_force_field_capability(force_field: str) -> tuple[bool, str]:
     """Return the validated canonical nucleic-acid capability."""
     name = str(force_field).strip().lower()
+    if name == "amber14sb_ol24":
+        return True, (
+            "canonical DNA/RNA use the Olomouc OL24 (DNA) and ff99bsc0-chiOL3 "
+            "(RNA) parameters merged onto the bundled ff14SB, through native "
+            "GROMACS pdb2gmx topology generation"
+        )
     if name == "charmm36m":
         return True, (
             "canonical DNA/RNA use the bundled CHARMM36 nucleic-acid "
@@ -224,9 +261,9 @@ def nucleic_force_field_capability(force_field: str) -> tuple[bool, str]:
         )
     if name == "amber14sb":
         return False, (
-            "Amber ff14SB is a protein force field; modern Amber nucleic-acid "
-            "support requires a separately validated DNA OL15/bsc1 or RNA OL3 "
-            "parameter set, which is not bundled"
+            "Amber ff14SB is a protein force field. Select "
+            "'amber14sb_ol24', which adds the Olomouc OL24 DNA and chiOL3 RNA "
+            "parameters to it; run ./install-local.sh if it is not offered"
         )
     if name in {"amber99sb", "amber99sb-ildn"}:
         return False, (

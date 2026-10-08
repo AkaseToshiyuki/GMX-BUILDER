@@ -1,9 +1,16 @@
+prune Private
+exclude AGENTS.md CLAUDE.md
 include install-local.sh
+include uv.lock
 include CITATION.cff
 include THIRD_PARTY_NOTICES.md
 include THIRD_PARTY_NOTICES.zh-CN.md
 recursive-include deploy *
 recursive-include docs *.md *.pdf *.svg
-recursive-include scripts *.py *.json
+recursive-include scripts *.py *.json *.txt
 prune src/gmxbuilder/web/static/output
 recursive-exclude * __pycache__/* *.py[cod]
+prune src/gmxbuilder/data/forcefields/charmm36
+prune src/gmxbuilder/data/forcefields/charmm36m
+prune src/gmxbuilder/data/forcefields/amber14sb_ol24
+recursive-exclude src/gmxbuilder/data/forcefields *.installing* *.backup*

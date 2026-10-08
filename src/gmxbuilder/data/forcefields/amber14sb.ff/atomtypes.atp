@@ -373,3 +373,13 @@ Ce4+_tip4pew    140.12
 U4+_tip4pew     238.03            
 Pu4+_tip4pew    244.06            
 Th4+_tip4pew    232.04            
+
+; phosphorylated amino-acid types (see ffphosaa14sb.itp)
+PHOP         16.00000
+PHOQ         16.00000
+PHOR         16.00000
+PHOT         16.00000
+PHOV         16.00000
+PHOX         16.00000
+PHOZ         16.00000
+PHCG         12.01000

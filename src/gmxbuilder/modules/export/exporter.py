@@ -2,32 +2,46 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
 import re
 import shutil
 import zipfile
+from pathlib import Path
+
+import numpy as np
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.system import System
-from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 from gmxbuilder.io.gro import GROWriter
+from gmxbuilder.io.mdp import MDPWriter, derive_velocity_seed
+from gmxbuilder.io.pdb import PDBWriter
 from gmxbuilder.io.top import TopologyWriter
-from gmxbuilder.io.mdp import MDPWriter
 from gmxbuilder.modules import register_module
+from gmxbuilder.modules.export.layout import (
+    FORCEFIELD_DIR,
+    LEGACY_ROOT_ARTIFACTS,
+    LEGACY_TOPOLOGY_SUFFIXES,
+    MDP_DIR,
+    STRUCTURE_DIR,
+    TOPOLOGY_DIR,
+)
+from gmxbuilder.modules.export.naming import (
+    confined_archive_path,
+    record_authoritative_archive,
+    validated_system_name,
+)
+from gmxbuilder.pipeline.base import BaseModule, ModuleResult
+from gmxbuilder.pipeline.provenance import build_manifest, file_inventory, readable_summary
 
 
 @register_module
 class ExportModule(BaseModule):
     """Write the final GROMACS simulation package.
 
-    Produces:
-    - input.gro           — system coordinates
-    - topol.top           — master topology
-    - index.ndx           — system-specific index groups
-    - root-level *.itp    — force-field and per-molecule topologies
-    - mdp/*.mdp           — simulation parameter files
-    - run_md.sh           — launcher for the generated stage set
+    The package is sorted rather than flat; see
+    :mod:`gmxbuilder.modules.export.layout` for the layout and for why the
+    nesting is safe for ``grompp``. The root holds only what a person opens
+    first: what to cite, what was built, and the command that runs it.
     """
 
     name = "export"
@@ -51,51 +65,54 @@ class ExportModule(BaseModule):
         for key in ("mdp_params", "simparams", "execution_hardware"):
             if key in config and not isinstance(config[key], dict):
                 raise ModuleConfigError(f"export.{key} must be an object")
-        system_name = config.get("system_name")
-        if system_name is not None:
-            if not isinstance(system_name, str) or not system_name.strip():
-                raise ModuleConfigError("export.system_name must be a non-empty string")
-            if not all(character.isalnum() or character in "_-" for character in system_name):
-                raise ModuleConfigError(
-                    "export.system_name may contain only letters, numbers, '_' and '-'"
-                )
+        if "system_name" in config:
+            validated_system_name(config["system_name"], default="system")
         return True
 
     def run(self, system: System, config: dict) -> ModuleResult:
+        from gmxbuilder.modules.solvation.membrane_exclusion import assert_membrane_water_free
+        from gmxbuilder.pipeline.progress import report_progress
+
+        assert_membrane_water_free(system)
+
         output_dir = Path(config.get("output_dir", "./output"))
-        system_name = config.get("system_name", "system")
+        system_name = validated_system_name(config.get("system_name"), default="system")
         write_mdp = config.get("write_mdp", True)
         log = []
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "input.pdb").unlink(missing_ok=True)
-        (output_dir / "run_md.sh").unlink(missing_ok=True)
-        if (output_dir / "mdp").is_dir():
-            shutil.rmtree(output_dir / "mdp")
+        structure_dir = output_dir / STRUCTURE_DIR
+        topology_dir = output_dir / TOPOLOGY_DIR
+        self._clear_previous_export(output_dir)
+        for directory in (structure_dir, topology_dir):
+            directory.mkdir(parents=True, exist_ok=True)
 
         # ---- 0. Write index (.ndx) file ----
-        ndx_path = output_dir / "index.ndx"
+        report_progress(0.05, "Writing the index file")
+        ndx_path = structure_dir / "index.ndx"
         self._write_index(system, ndx_path)
         log.append("Wrote index.ndx")
 
         # ---- 1. Write .gro + .pdb (input.gro + input.pdb) ----
-        gro_path = output_dir / "input.gro"
+        report_progress(0.15, "Writing coordinates")
+        gro_path = structure_dir / "input.gro"
         GROWriter.write(system.structure, gro_path, title=f"GMXBUILDER: {system_name}")
         log.append("Wrote input.gro")
-        # Write PDB for visual reference (skip if >99,999 atoms — PDB format limit)
-        if system.num_atoms <= 99999:
-            from gmxbuilder.io.pdb import PDBWriter
-
-            pdb_path = output_dir / "input.pdb"
+        # Optional visual reference: both serials and residue IDs must fit.
+        # Use the writer's own check so a PDB limit cannot block a GRO package.
+        if PDBWriter.identifiers_fit(system.structure):
+            pdb_path = structure_dir / "input.pdb"
             PDBWriter.write(system.structure, pdb_path, title=f"GMXBUILDER: {system_name}")
             log.append("Wrote input.pdb")
         else:
             log.append(
-                f"Skipped input.pdb ({system.num_atoms} atoms exceeds PDB 99999-atom serial limit; use input.gro instead)"
+                "Skipped input.pdb (PDB identifier limits exceeded: at most 99999 atoms "
+                "and residue IDs from -999 to 9999; use structure/input.gro instead)"
             )
 
         # ---- 2. Write topology and flat root-level parameter files ----
-        top_path = output_dir / "topol.top"
+        report_progress(0.35, "Writing the topology and parameter files")
+        top_path = topology_dir / "topol.top"
         # Read the force field from system metadata (set by ForceFieldAssigner)
         ff_name = system.metadata.get("force_field", config.get("protein", "amber14sb"))
         ff_config = {
@@ -112,10 +129,11 @@ class ExportModule(BaseModule):
         log.append("Wrote topol.top")
 
         # ---- 3. Write MDP files ----
+        report_progress(0.55, "Writing the MDP protocol")
         written: list[Path] = []
         execution_hardware: dict[str, object] = {}
         if write_mdp:
-            mdp_dir = output_dir / "mdp"
+            mdp_dir = output_dir / MDP_DIR
             mdp_writer = MDPWriter()
 
             # simparams comes from system.metadata (set by web server or CLI)
@@ -127,7 +145,11 @@ class ExportModule(BaseModule):
             has_protein = bool(system.component_by_kind(ComponentKind.PROTEIN))
             has_nucleic = bool(system.component_by_kind(ComponentKind.NUCLEIC_ACID))
             lipid_ff = str(system.metadata.get("lipid_ff", "")).lower()
-            has_lipid_dihedral_restraints = has_membrane and lipid_ff not in {"gaff2", "lipid21"}
+            has_lipid_dihedral_restraints = has_membrane and lipid_ff not in {
+                "gaff2",
+                "lipid21",
+                "amber-mixed",
+            }
             # Workflow metadata, execution hardware, and per-stage MDP values
             # are separate contracts. The completed system supplies only the
             # scientific context that a browser must not be allowed to forge.
@@ -147,12 +169,28 @@ class ExportModule(BaseModule):
                 "protein_position_restraints": has_protein or has_nucleic,
                 "lipid_position_restraints": has_membrane,
                 "lipid_dihedral_restraints": has_lipid_dihedral_restraints,
+                "gen_seed": derive_velocity_seed(
+                    system.metadata.get("seed", config.get("seed", 42))
+                ),
+                **self._scientific_geometry_context(system, has_membrane=has_membrane),
             }
             raw_sim = {**requested, **dict(sim or {})}
             normalized_sim = mdp_writer.normalize_simulation_config(raw_sim, mdp_context)
             minimization = normalized_sim["minimization"]
             eq_stages = normalized_sim["eq_stages"]
             prod_iters = normalized_sim["prod_iters"]
+            derived_velocity_seed = int(mdp_context["gen_seed"])
+            for stage in [*eq_stages, *prod_iters]:
+                if int(stage.get("gen_seed", -1)) == -1:
+                    stage["gen_seed"] = derived_velocity_seed
+            velocity_seed = next(
+                (
+                    int(stage["gen_seed"])
+                    for stage in [*eq_stages, *prod_iters]
+                    if stage.get("enabled", True)
+                ),
+                derived_velocity_seed,
+            )
             requested_dih = eq_stages or []
             if eq_stages:
                 enabled_indices = [
@@ -188,14 +226,15 @@ class ExportModule(BaseModule):
                 prod_iters=prod_iters,
                 minimization=minimization,
             )
-            log.append(f"Wrote {len(written)} .mdp files to mdp/")
+            if mdp_writer.last_velocity_seed is not None:
+                velocity_seed = mdp_writer.last_velocity_seed
+            log.append(f"Wrote {len(written)} .mdp files to {MDP_DIR}/")
             from gmxbuilder.runtime.hardware import normalize_simulation_hardware
 
-            execution_hardware = normalize_simulation_hardware(
-                config.get("execution_hardware")
-            )
+            execution_hardware = normalize_simulation_hardware(config.get("execution_hardware"))
 
         # ---- 3.5 Write run script + README (one-click launcher) ----
+        report_progress(0.75, "Writing the run script")
         readme_path = output_dir / "README.txt"
         self._write_readme(
             readme_path,
@@ -205,8 +244,24 @@ class ExportModule(BaseModule):
             ff_config["water_model"],
             written,
             execution_hardware,
+            velocity_seed=velocity_seed if write_mdp else None,
+            build_summary=readable_summary(system),
         )
         log.append("Wrote README.txt")
+        research_ligands = [
+            name
+            for name, params in ff_config["ligand_parameters"].items()
+            if params.get("export_eligibility") == "research_only"
+        ]
+        if research_ligands:
+            notice = (
+                "EXPERIMENTAL LOCAL CHARMM LIGAND ASSIGNMENT: "
+                + ", ".join(research_ligands)
+                + "\nPhysical accuracy has not been validated. This is not official CGenFF "
+                "output. Review topology/*_assignment.json before using this model.\n\n"
+            )
+            readme_path.write_text(notice + readme_path.read_text())
+            log.append(notice.strip())
         from gmxbuilder.runtime.citations import atomistic_citations
 
         citations_path = output_dir / "CITATIONS.json"
@@ -226,8 +281,26 @@ class ExportModule(BaseModule):
             )
             log.append("Wrote run_md.sh")
 
+        # ---- 3.9 Write the replayable manifest ----
+        # After every other file exists so the inventory is complete, and
+        # before the archive so the manifest is inside it.
+        report_progress(0.82, "Recording how the system was built")
+        manifest_path = output_dir / "manifest.json"
+        manifest = build_manifest(
+            system,
+            system_name=system_name,
+            seed=int(system.metadata.get("seed", config.get("seed", 42))),
+            files=file_inventory(output_dir),
+        )
+        manifest["membrane_composition_warnings"] = system.metadata.get(
+            "membrane_composition_warnings", []
+        )
+        manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", "utf-8")
+        log.append("Wrote manifest.json")
+
         # ---- 4. Write ZIP archive ----
-        zip_path = output_dir / f"{system_name}.zip"
+        report_progress(0.85, "Packing the download archive")
+        zip_path = confined_archive_path(output_dir, system_name)
         self._write_archive(
             output_dir,
             zip_path,
@@ -241,20 +314,94 @@ class ExportModule(BaseModule):
             system=system,
             log=log
             + [
-                f"  input.gro — {system.num_atoms} atoms",
-                "  topol.top — simulation-ready topology",
-                "  index.ndx — index groups (System/SOLU/MEMB/SOLV)",
-                f"  mdp/ — {len(written)} generated MD parameter files",
+                f"  {STRUCTURE_DIR}/input.gro — {system.num_atoms} atoms",
+                f"  {STRUCTURE_DIR}/index.ndx — index groups (System/SOLU/MEMB/SOLV)",
+                f"  {TOPOLOGY_DIR}/topol.top — simulation-ready topology",
+                f"  {TOPOLOGY_DIR}/{FORCEFIELD_DIR}/ — bundled force-field database",
+                f"  {MDP_DIR}/ — {len(written)} generated MD parameter files",
+                "  manifest.json — replay this build with `gmxbuilder build -c manifest.json`",
                 "  run_md.sh — executable one-click GROMACS launcher",
                 f"  {system_name}.zip — complete package",
             ],
         )
 
     @staticmethod
+    def _clear_previous_export(output_dir: Path) -> None:
+        """Remove what an earlier export left in the package root.
+
+        An export directory is reused across reruns. Before the layout was
+        sorted, every topology and coordinate file lived here; leaving those
+        behind would put a stale ``topol.top`` beside the new
+        ``topology/topol.top``, and nothing on disk would say which one
+        ``grompp`` had actually read. Only the flat artefacts of an earlier
+        export are removed -- never a subdirectory a user may have added.
+        """
+        for name in LEGACY_ROOT_ARTIFACTS:
+            (output_dir / name).unlink(missing_ok=True)
+        for path in output_dir.glob("*"):
+            if path.is_file() and path.suffix in LEGACY_TOPOLOGY_SUFFIXES:
+                path.unlink(missing_ok=True)
+        for directory in (MDP_DIR, STRUCTURE_DIR, TOPOLOGY_DIR):
+            shutil.rmtree(output_dir / directory, ignore_errors=True)
+
+    @staticmethod
+    def _scientific_geometry_context(
+        system: System, *, has_membrane: bool
+    ) -> dict[str, list[float]]:
+        """Return trusted periodic geometry used by final MDP validation.
+
+        For a membrane, X/Y are intentionally periodic through the bilayer, so
+        solute-to-face clearance is meaningful only along Z.  Solution systems
+        require clearance on all three periodic axes.
+        """
+        box = np.asarray(system.structure.box_vectors, dtype=float)
+        try:
+            inverse = np.linalg.inv(box)
+        except np.linalg.LinAlgError as exc:
+            raise ModuleConfigError("Periodic box vectors are singular") from exc
+        heights = 1.0 / np.linalg.norm(inverse, axis=0)
+        if not np.isfinite(heights).all() or np.any(heights <= 0):
+            raise ModuleConfigError("Periodic box heights must be finite and positive")
+
+        context = {"periodic_box_heights_nm": heights.tolist()}
+        from gmxbuilder.core.enums import ComponentKind
+
+        solute_indices = sorted(
+            {
+                int(index)
+                for component in system.components
+                if component.kind not in {ComponentKind.SOLVENT, ComponentKind.IONS}
+                for index in component.atom_indices
+            }
+        )
+        if not solute_indices:
+            return context
+        coordinates = np.asarray(system.structure.coordinates[solute_indices], dtype=float)
+        fractional = (coordinates @ inverse) % 1.0
+        axes = (2,) if has_membrane else (0, 1, 2)
+        face_distances = [
+            float(np.min(np.minimum(fractional[:, axis], 1.0 - fractional[:, axis])))
+            * float(heights[axis])
+            for axis in axes
+        ]
+        context["solute_face_distances_nm"] = face_distances
+        return context
+
+    @staticmethod
     def _topology_members(output_dir: Path) -> set[Path]:
-        """Resolve only safe, reachable local topology includes."""
+        """Resolve only safe, reachable local topology includes.
+
+        An include is resolved against the directory of the file that contains
+        it, exactly as ``grompp`` resolves it. That is what lets the
+        force-field database sit in its own directory while still including
+        its own members by bare name, and it is why this cannot simply join
+        every include onto the package root.
+
+        The confinement check is unchanged and still the point: a topology
+        that includes its way outside the package is not packaged.
+        """
         root = output_dir.resolve()
-        pending = [output_dir / "topol.top"]
+        pending = [output_dir / TOPOLOGY_DIR / "topol.top"]
         members: set[Path] = set()
         include_pattern = re.compile(r'^\s*#include\s+"([^"]+)"')
         while pending:
@@ -268,7 +415,7 @@ class ExportModule(BaseModule):
             for line in resolved.read_text(errors="replace").splitlines():
                 match = include_pattern.match(line)
                 if match:
-                    pending.append(output_dir / match.group(1))
+                    pending.append(resolved.parent / match.group(1))
         return members
 
     @classmethod
@@ -281,13 +428,21 @@ class ExportModule(BaseModule):
         include_run_script: bool,
     ) -> None:
         """Archive the current run manifest, never unrelated stale files."""
+        topology_members = cls._topology_members(output_dir)
         candidates = {
-            output_dir / "input.gro",
-            output_dir / "input.pdb",
-            output_dir / "index.ndx",
+            output_dir / STRUCTURE_DIR / "input.gro",
+            output_dir / STRUCTURE_DIR / "input.pdb",
+            output_dir / STRUCTURE_DIR / "index.ndx",
             output_dir / "README.txt",
+            output_dir / "manifest.json",
             output_dir / "CITATIONS.json",
-            *cls._topology_members(output_dir),
+            *topology_members,
+            # Only reports beside molecule ITPs reachable from this topology.
+            *(
+                path.with_name(path.stem + "_assignment.json")
+                for path in topology_members
+                if path.suffix == ".itp" and path.parent == (output_dir / TOPOLOGY_DIR).resolve()
+            ),
             *written_mdp,
         }
         if include_run_script:
@@ -299,6 +454,7 @@ class ExportModule(BaseModule):
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in members:
                 archive.write(path, path.relative_to(output_dir.resolve()))
+        record_authoritative_archive(zip_path)
 
     @staticmethod
     def _index_groups(system) -> dict[str, list[int]]:
@@ -346,8 +502,10 @@ class ExportModule(BaseModule):
             fh.write("; GMXBUILDER — index file\n")
             for name, indices in groups.items():
                 fh.write(f"\n[ {name} ]\n")
-                for j in range(0, len(indices), 15):
-                    fh.write(" ".join(str(x) for x in indices[j : j + 15]) + "\n")
+                fh.writelines(
+                    " ".join(str(x) for x in indices[j : j + 15]) + "\n"
+                    for j in range(0, len(indices), 15)
+                )
 
     @staticmethod
     def _write_readme(
@@ -358,6 +516,9 @@ class ExportModule(BaseModule):
         water_model: str,
         mdp_paths: list[Path],
         execution_hardware: dict[str, object] | None = None,
+        *,
+        velocity_seed: int | None = None,
+        build_summary: str = "",
     ) -> None:
         """Generate a README with usage instructions and file descriptions."""
         mdp_listing = (
@@ -366,35 +527,37 @@ class ExportModule(BaseModule):
             )
             or "    (MDP generation was disabled)"
         )
+        root = path.parent
         coordinate_listing = [
-            "    input.gro             — starting coordinates",
+            f"    {STRUCTURE_DIR}/input.gro       — starting coordinates",
         ]
-        if (path.parent / "input.pdb").is_file():
+        if (root / STRUCTURE_DIR / "input.pdb").is_file():
             coordinate_listing.append(
-                "    input.pdb             — optional visualization coordinates"
+                f"    {STRUCTURE_DIR}/input.pdb       — optional visualization coordinates"
             )
         coordinate_listing.extend(
             [
-                "    topol.top             — master topology",
-                "    index.ndx             — index groups referenced by the MDP files",
+                f"    {STRUCTURE_DIR}/index.ndx       — index groups referenced by the MDP files",
+                f"    {TOPOLOGY_DIR}/topol.top         — master topology",
             ]
         )
-        parameter_suffixes = {
-            ".arn",
-            ".atp",
-            ".hdb",
-            ".itp",
-            ".r2b",
-            ".rtp",
-            ".tdb",
-        }
-        parameter_files = sorted(
-            candidate.name
-            for candidate in path.parent.iterdir()
-            if candidate.is_file() and candidate.suffix.lower() in parameter_suffixes
+        parameter_suffixes = set(LEGACY_TOPOLOGY_SUFFIXES)
+
+        def _listing(directory: Path, prefix: str) -> list[str]:
+            if not directory.is_dir():
+                return []
+            return [
+                f"    {prefix}{candidate.name}"
+                for candidate in sorted(directory.iterdir())
+                if candidate.is_file() and candidate.suffix.lower() in parameter_suffixes
+            ]
+
+        molecule_files = _listing(root / TOPOLOGY_DIR, f"{TOPOLOGY_DIR}/")
+        forcefield_files = _listing(
+            root / TOPOLOGY_DIR / FORCEFIELD_DIR, f"{TOPOLOGY_DIR}/{FORCEFIELD_DIR}/"
         )
         parameter_listing = (
-            "\n".join(f"    {name}" for name in parameter_files)
+            "\n".join(molecule_files + forcefield_files)
             or "    (no separate parameter files were generated)"
         )
         production_names = [
@@ -416,6 +579,7 @@ class ExportModule(BaseModule):
   Force field: {force_field}
   Water model: {water_model.upper()}
   Seed:        {seed}
+  Velocity seed: {velocity_seed if velocity_seed is not None else "not generated"}
   Date:        {__import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")}
 
 ==================================================================
@@ -435,6 +599,17 @@ class ExportModule(BaseModule):
        tail -f {final_production}.log
 
 ==================================================================
+  How This System Was Built
+==================================================================
+
+{build_summary or "  (no build record was available)"}
+
+  Per-file sizes and the full machine-readable record are in
+  manifest.json, which also replays this build:
+
+    gmxbuilder build -c manifest.json
+
+==================================================================
   File Listing
 ==================================================================
 
@@ -442,16 +617,23 @@ class ExportModule(BaseModule):
 {chr(10).join(coordinate_listing)}
 
   Force-field and molecule parameters
-  These files are stored in the package root and are included by topol.top.
-  The exact set depends on the selected force field and system composition.
+  Everything below is included by topol.top. The files directly under
+  {TOPOLOGY_DIR}/ describe this system; {TOPOLOGY_DIR}/{FORCEFIELD_DIR}/ is the
+  bundled force-field database, copied unchanged. GROMACS resolves each
+  #include against the directory of the file containing it, so the package
+  works wherever it is unpacked -- but keep the directories together.
 {parameter_listing}
 
   MD Parameters (mdp/)
 {mdp_listing}
 
-  Scripts
+  Package root
     run_md.sh             — One-click MD simulation launcher
     README.txt            — This file
+    manifest.json         — The whole build, machine-readable. Rebuild this
+                            exact system with:
+                              gmxbuilder build -c manifest.json
+    CITATIONS.json        — What to cite for this system
 
 ==================================================================
   Running Individual Stages
@@ -459,10 +641,11 @@ class ExportModule(BaseModule):
 
   To run a single stage manually (e.g., minimisation):
 
-    gmx grompp -f mdp/mini.mdp \\
-               -c input.gro \\
-               -r input.gro \\
-               -p topol.top \\
+    gmx grompp -f {MDP_DIR}/mini.mdp \\
+               -c {STRUCTURE_DIR}/input.gro \\
+               -r {STRUCTURE_DIR}/input.gro \\
+               -p {TOPOLOGY_DIR}/topol.top \\
+               -n {STRUCTURE_DIR}/index.ndx \\
                -o mini.tpr
     gmx mdrun -deffnm mini -c mini.gro
 
@@ -513,9 +696,12 @@ class ExportModule(BaseModule):
 
         hardware = normalize_simulation_hardware(execution_hardware)
         gpu_ids = ",".join(str(value) for value in hardware["gpu_ids"])
-        gro = "input.gro"
-        top = "topol.top"
-        ndx = "index.ndx"
+        # The launcher runs from the package root, so every path it hands
+        # GROMACS is relative to that root and the sorted layout is visible
+        # in the commands themselves.
+        gro = f"{STRUCTURE_DIR}/input.gro"
+        top = f"{TOPOLOGY_DIR}/topol.top"
+        ndx = f"{STRUCTURE_DIR}/index.ndx"
 
         script = f"""#!/usr/bin/env bash
 # =============================================================================
@@ -678,7 +864,8 @@ for MDP in "${{EQ_MDPS[@]}}"; do
     echo "[Equilibration] $STAGE"
     CPT_ARGS=()
     if [ -n "$PREV_CPT" ]; then CPT_ARGS=(-t "$PREV_CPT"); fi
-    $GMX_BIN grompp -f "$MDP" -c "$PREV_GRO" -r "$GRO" "${{CPT_ARGS[@]}}" -p "$TOP" -n "$NDX" -o "$STAGE.tpr" -po "${{STAGE}}_out.mdp"
+    $GMX_BIN grompp -f "$MDP" -c "$PREV_GRO" -r "$GRO" "${{CPT_ARGS[@]}}" \
+        -p "$TOP" -n "$NDX" -o "$STAGE.tpr" -po "${{STAGE}}_out.mdp"
     "${{MDRUN[@]}}" -deffnm "$STAGE"
     PREV_GRO="$STAGE.gro"
     PREV_CPT="$STAGE.cpt"
@@ -692,7 +879,8 @@ for MDP in "${{PROD_MDPS[@]}}"; do
     echo "[Production] $STAGE"
     CPT_ARGS=()
     if [ -n "$PREV_CPT" ]; then CPT_ARGS=(-t "$PREV_CPT"); fi
-    $GMX_BIN grompp -f "$MDP" -c "$PREV_GRO" "${{CPT_ARGS[@]}}" -p "$TOP" -n "$NDX" -o "$STAGE.tpr" -po "${{STAGE}}_out.mdp"
+    $GMX_BIN grompp -f "$MDP" -c "$PREV_GRO" "${{CPT_ARGS[@]}}" \
+        -p "$TOP" -n "$NDX" -o "$STAGE.tpr" -po "${{STAGE}}_out.mdp"
     "${{MDRUN[@]}}" -deffnm "$STAGE"
     PREV_GRO="$STAGE.gro"
     PREV_CPT="$STAGE.cpt"

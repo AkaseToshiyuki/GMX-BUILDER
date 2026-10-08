@@ -6,9 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
-from gmxbuilder.core.topology import Topology
-from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.exceptions import TopologyError
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.topology import Topology
+from gmxbuilder.modules.export.layout import FORCEFIELD_DIR
 
 
 class TopologyWriter:
@@ -31,7 +32,7 @@ class TopologyWriter:
         """Return RTP default (angle, proper, improper) function numbers."""
         if self.force_field in {"charmm36", "charmm36m"}:
             return 5, 9, 2
-        if self.force_field in {"amber14sb", "amber99sb", "amber99sb-ildn"}:
+        if self.force_field in {"amber14sb", "amber14sb_ol24", "amber99sb", "amber99sb-ildn"}:
             return 1, 9, 4
         if self.force_field == "oplsaa":
             return 1, 3, 1
@@ -88,7 +89,7 @@ class TopologyWriter:
         """Return run-length encoded molecule types in coordinate order."""
         molecule_types: list[str] = []
         previous_key: tuple[str, int] | None = None
-        for resname, resid in zip(structure.resnames, structure.resids):
+        for resname, resid in zip(structure.resnames, structure.resids, strict=True):
             key = (str(resname), int(resid))
             if key[0] not in residue_names:
                 previous_key = None
@@ -117,7 +118,9 @@ class TopologyWriter:
         runs: list[tuple[int, str, int]] = []
         previous_key: tuple[str, int, str] | None = None
         contiguous_block = False
-        for index, (resname, resid) in enumerate(zip(structure.resnames, structure.resids)):
+        for index, (resname, resid) in enumerate(
+            zip(structure.resnames, structure.resids, strict=True)
+        ):
             if index in excluded or str(resname) not in residue_names:
                 previous_key = None
                 contiguous_block = False
@@ -152,7 +155,7 @@ class TopologyWriter:
         ----------
         topology : Topology | None
             Optional pre-built Topology from force field module.
-            When provided, its atom types/charges supplement the RTP data.
+            Protein atom parameters always use the exact native residue templates.
         """
         # Flat directory layout — all files in output root.  GROMACS
         # resolves #include relative to the working directory, and
@@ -167,7 +170,7 @@ class TopologyWriter:
             water_model = WaterRegistry.get(water_model_name)
         except KeyError as exc:
             raise TopologyError(str(exc)) from exc
-        water_itp = f"{water_model_name}.itp"
+        water_itp = f"{FORCEFIELD_DIR}/{water_model_name}.itp"
         if not (top_dir / water_itp).is_file():
             raise TopologyError(
                 f"Water model {water_model_name!r} is unavailable for "
@@ -176,8 +179,10 @@ class TopologyWriter:
         # New Amber ports bundle ion parameters per water model (for example
         # ions_tip3p.itp).  Falling through to the deprecated GROMACS-level
         # ions.itp produces a hard #error in GROMACS 2026.
-        water_ion_itp = f"ions_{water_model_name}.itp"
-        ion_itp = water_ion_itp if (top_dir / water_ion_itp).is_file() else "ions.itp"
+        water_ion_itp = f"{FORCEFIELD_DIR}/ions_{water_model_name}.itp"
+        ion_itp = (
+            water_ion_itp if (top_dir / water_ion_itp).is_file() else f"{FORCEFIELD_DIR}/ions.itp"
+        )
         if not (top_dir / ion_itp).is_file():
             raise TopologyError(
                 f"Ion parameters compatible with water model {water_model_name!r} "
@@ -249,37 +254,35 @@ class TopologyWriter:
         external_atomtype_includes: list[str] = []
         external_molecule_types: dict[str, str] = {}
         if lipid_res and self.force_field.lower().startswith("amber"):
-            selected_lipid_ff = str(self.ff_config.get("lipid_ff", "gaff2")).lower()
-            if selected_lipid_ff == "lipid21":
-                from gmxbuilder.modules.forcefield.lipid21_backend import (
-                    lipid21_atomtypes_path,
+            from gmxbuilder.modules.forcefield.lipid_policy import lipid_backend_for
+
+            for lipid_name in sorted(lipid_res):
+                selected_lipid_ff = lipid_backend_for(
+                    lipid_name, self.ff_config.get("lipid_ff", "gaff2")
                 )
+                if selected_lipid_ff == "lipid21":
+                    from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_atomtypes_path
 
-                filename = "lipid21_atomtypes.itp"
-                (top_dir / filename).write_text(lipid21_atomtypes_path().read_text())
-                external_atomtype_includes.append(filename)
-            elif selected_lipid_ff == "gaff2":
-                from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
-                from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
-                from gmxbuilder.modules.membrane.lipids import LipidRegistry
+                    filename = "lipid21_atomtypes.itp"
+                    if filename not in external_atomtype_includes:
+                        (top_dir / filename).write_text(lipid21_atomtypes_path().read_text())
+                        external_atomtype_includes.append(filename)
+                elif selected_lipid_ff == "gaff2":
+                    from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
 
-                rtp = load_force_field_rtp(self.force_field)
-                for lipid_name in sorted(lipid_res):
-                    if rtp.get_residue(lipid_name) is not None:
-                        continue
                     lipid = LipidRegistry.get(lipid_name)
                     template = prepare_gaff_lipid(lipid_name, lipid.smiles, lipid.charge)
                     external_molecule_types[lipid_name] = template.name
                     filename = f"{lipid_name}_atomtypes.itp"
                     (top_dir / filename).write_text(template.atomtypes_path.read_text())
                     external_atomtype_includes.append(filename)
-            else:
-                raise TopologyError(f"Unsupported Amber lipid backend {selected_lipid_ff!r}")
+                else:
+                    raise TopologyError(f"Unsupported Amber lipid backend {selected_lipid_ff!r}")
 
         ligand_parameters = self.ff_config.get("ligand_parameters", {}) or {}
         for ligand_name in sorted(ligand_res):
             params = ligand_parameters.get(ligand_name, {})
-            if params.get("source") not in {"gaff2", "cgenff"}:
+            if params.get("source") not in {"gaff2", "cgenff", "charmm_compat"}:
                 continue
             itp_path = Path(str(params.get("itp_path", "")))
             atomtypes_path = Path(str(params.get("atomtypes_path", "")))
@@ -287,17 +290,36 @@ class TopologyWriter:
                 raise TopologyError(
                     f"External parameter files are missing for ligand {ligand_name}"
                 )
+            if params.get("source") == "charmm_compat":
+                from gmxbuilder.modules.forcefield.charmm_compat import validate_artifacts
+
+                validate_artifacts(itp_path, self.force_field)
+                (top_dir / f"{ligand_name}_assignment.json").write_text(
+                    (itp_path.parent / "report.json").read_text()
+                )
             molecule_type = str(params.get("molecule_type") or ligand_name)
+            self._validate_external_ligand_order(structure, ligand_name, molecule_type, itp_path)
             external_molecule_types[ligand_name] = molecule_type
             atomtypes_name = f"{ligand_name}_atomtypes.itp"
             (top_dir / atomtypes_name).write_text(atomtypes_path.read_text())
             external_atomtype_includes.append(atomtypes_name)
 
         with open(path, "w") as fh:
-            fh.write("; GMXBUILDER — simulation-ready topology\n;\n")
+            research_ligands = [
+                name
+                for name, params in ligand_parameters.items()
+                if params.get("export_eligibility") == "research_only"
+            ]
+            if research_ligands:
+                fh.write(
+                    "; GMXBUILDER — experimental ligand model; physical accuracy unvalidated\n"
+                )
+            else:
+                fh.write("; GMXBUILDER — simulation-ready topology\n;\n")
 
-            # Force field includes (flat directory — no toppar/ prefix)
-            fh.write('#include "forcefield.itp"\n')
+            # The database lives in its own directory; everything else in
+            # this file is a sibling of the .top and stays a bare name.
+            fh.write(f'#include "{FORCEFIELD_DIR}/forcefield.itp"\n')
             for filename in external_atomtype_includes:
                 fh.write(f'#include "{filename}"\n')
             fh.write(f'#include "{water_itp}"\n')
@@ -337,7 +359,7 @@ class TopologyWriter:
             for ligand in sorted(ligand_res):
                 ligand_itp = top_dir / f"{ligand}.itp"
                 params = ligand_parameters.get(ligand, {})
-                if params.get("source") in {"gaff2", "cgenff"}:
+                if params.get("source") in {"gaff2", "cgenff", "charmm_compat"}:
                     source = Path(str(params.get("itp_path", "")))
                     ligand_itp.write_text(source.read_text())
                 else:
@@ -378,7 +400,9 @@ class TopologyWriter:
 
             if water_res:
                 water_atoms: dict[tuple[str, int, str], int] = {}
-                for index, (name, resid) in enumerate(zip(structure.resnames, structure.resids)):
+                for index, (name, resid) in enumerate(
+                    zip(structure.resnames, structure.resids, strict=True)
+                ):
                     if name not in water_res:
                         continue
                     chain = structure.chain_ids[index] if index < len(structure.chain_ids) else ""
@@ -410,6 +434,62 @@ class TopologyWriter:
             molecule_records.extend(self._ordered_residue_run_records(structure, ion_res))
             for _first, molecule_type, count in sorted(molecule_records, key=lambda item: item[0]):
                 fh.write(f"{molecule_type:<34s} {count}\n")
+
+    @staticmethod
+    def _validate_external_ligand_order(
+        structure: Structure, ligand_name: str, molecule_type: str, itp_path: Path
+    ) -> None:
+        """Require every coordinate instance to match its fixed external ITP.
+
+        GROMACS pairs coordinates and parameters by index, not atom name.
+        Validate here even for old checkpoints that predate the protein-only
+        hydrogen ordering fix; copying an ITP must never hide a permutation.
+        The GAFF2/CGenFF backends emit explicit, sequential [ atoms ] records.
+        """
+        section = ""
+        current_molecule = ""
+        expected: list[str] = []
+        for raw in itp_path.read_text().splitlines():
+            code = raw.partition(";")[0].strip()
+            if not code or code.startswith("#"):
+                continue
+            if code.startswith("[") and code.endswith("]"):
+                section = code.strip("[] ").lower()
+                continue
+            fields = code.split()
+            if section == "moleculetype":
+                current_molecule = fields[0]
+            elif section == "atoms" and current_molecule == molecule_type:
+                if len(fields) < 7 or fields[0] != str(len(expected) + 1):
+                    raise TopologyError(f"Invalid external ligand atom table for {ligand_name}")
+                expected.append(fields[4])
+        if not expected or len(set(expected)) != len(expected):
+            raise TopologyError(
+                f"Missing or ambiguous external ligand atom table for {ligand_name}"
+            )
+
+        previous = None
+        instances: list[list[int]] = []
+        for index, (name, resid, chain) in enumerate(
+            zip(structure.resnames, structure.resids, structure.chain_ids, strict=True)
+        ):
+            key = (name, resid, chain)
+            if name == ligand_name:
+                if key != previous:
+                    instances.append([])
+                instances[-1].append(index)
+            previous = key
+        for indices in instances:
+            observed = [structure.atom_names[index].strip() for index in indices]
+            if observed != expected:
+                first = indices[0]
+                raise TopologyError(
+                    f"External ligand {ligand_name} at "
+                    f"{structure.chain_ids[first] or '?'}:{structure.resids[first]} "
+                    "has coordinate atom names/order that differ from its parameter ITP. "
+                    "Rebuild from the Force Field Check with the current version; "
+                    "the confirmed checkpoint cannot be safely exported."
+                )
 
     # ------------------------------------------------------------------
     # Chain discovery
@@ -493,14 +573,19 @@ class TopologyWriter:
         """Write a protein ITP for a specific set of atom indices (e.g. one chain).
 
         Includes [ atoms ], [ bonds ], [ angles ], [ dihedrals ], [ impropers ]
-        sourced from the CHARMM36 .rtp residue templates.
-        When *topology* is provided, pre-computed atom types/charges from
-        the force field module are used in preference to inline RTP lookup.
+        sourced from the selected force field's residue templates.
+        Protein atom types and charges come from the same exact residue/terminal
+        templates used by in-memory assignment. Missing entries are errors.
         """
+        from gmxbuilder.core.polymer import validate_peptide_connectivity
         from gmxbuilder.modules.forcefield.rtp_parser import (
-            get_terminal_residue,
             load_force_field_rtp,
         )
+
+        try:
+            validate_peptide_connectivity(structure, atom_indices)
+        except ValueError as exc:
+            raise TopologyError(str(exc)) from exc
 
         # Load RTP for the selected force field
         if not self._rtp_loaded:
@@ -511,46 +596,9 @@ class TopologyWriter:
         n_atom_names = len(structure.atom_names)
         n_resids = len(structure.resids)
 
-        # Detect termini that StructureProcessor has reconciled with the
-        # selected force field.  Residue labels stay PDB-compatible (ALA,
-        # GLY...), while RTP lookup uses virtual NALA/CALA-style templates.
-        raw_residue_order: list[tuple[str, str, int]] = []
-        raw_residue_names: dict[tuple[str, str, int], set[str]] = {}
-        for i in atom_indices:
-            rn = structure.resnames[i] if i < n_resnames else "UNK"
-            rid = structure.resids[i] if i < n_resids else i + 1
-            chain = structure.chain_ids[i] if i < len(structure.chain_ids) else "A"
-            key = (str(chain), rn, rid)
-            if key not in raw_residue_names:
-                raw_residue_order.append(key)
-                raw_residue_names[key] = set()
-            raw_residue_names[key].add(structure.atom_names[i].strip())
+        from gmxbuilder.modules.forcefield.protein_templates import protein_template_names
 
-        terminal_templates: dict[tuple[str, str, int], str] = {}
-        residues_by_chain: dict[str, list[tuple[str, str, int]]] = {}
-        for key in raw_residue_order:
-            residues_by_chain.setdefault(key[0], []).append(key)
-        for chain_residues in residues_by_chain.values():
-            if len(chain_residues) <= 1:
-                continue
-            for key, end in ((chain_residues[0], "N"), (chain_residues[-1], "C")):
-                _chain, base_name, _rid = key
-                # Explicit ACE/NME residues are already complete RTP residues.
-                # Their adjacent amino acid must remain an internal residue so
-                # its -C/+N references form the cap peptide bond.
-                if (end == "N" and base_name == "ACE") or (end == "C" and base_name == "NME"):
-                    continue
-                variant_name, variant = get_terminal_residue(self.force_field, base_name, end)
-                base = self._rtp.get_residue(base_name)
-                if base is None:
-                    raise TopologyError(f"RTP residue {base_name} not found in {self.force_field}")
-                base_atoms = {atom[0] for atom in base["atoms"]}
-                variant_atoms = {atom[0] for atom in variant["atoms"]}
-                added = variant_atoms - base_atoms
-                removed = base_atoms - variant_atoms
-                current = raw_residue_names[key]
-                if added and added.issubset(current) and not (removed & current):
-                    terminal_templates[key] = variant_name
+        terminal_templates = protein_template_names(structure, atom_indices, self.force_field)
 
         # ---- Pass 1: write [ atoms ] and build per-residue name→seq map ----
         atoms_lines: list[str] = []
@@ -569,10 +617,6 @@ class TopologyWriter:
             rtp_result = self._rtp.get_atom_type(template_rn, an)
             if rtp_result:
                 atype, charge = rtp_result
-            elif topology is not None and i < len(topology.atom_types):
-                at = topology.atom_types[i]
-                atype = at.name
-                charge = at.charge
             else:
                 raise TopologyError(f"No {self.force_field} RTP atom type for {template_rn}:{an}")
 
@@ -591,6 +635,7 @@ class TopologyWriter:
         all_angles: list[tuple[int, int, int]] = []
         all_dihedrals: list[tuple[int, int, int, int]] = []
         all_impropers: list[tuple] = []
+        all_cmaps: list[tuple[int, ...]] = []
 
         residue_order = list(residue_atoms)
         residue_name_maps = {
@@ -675,6 +720,11 @@ class TopologyWriter:
                 if all(v is not None for v in (i1, i2, i3, i4)):
                     all_impropers.append((i1, i2, i3, i4, *improper[4:]))
 
+            for cmap in rtp_res.get("cmap", []):
+                resolved = tuple(resolve_atom(token, residue_position) for token in cmap)
+                if all(index is not None for index in resolved):
+                    all_cmaps.append(resolved)
+
         # StructureProcessor records dedicated cross-residue chemistry (for
         # example SG-SG disulfides) in the authoritative topology.  Include
         # those bonds after RTP expansion; graph-derived angles, dihedrals and
@@ -737,6 +787,11 @@ class TopologyWriter:
                         parameters = " ".join(improper[4:])
                         suffix = f" {parameters}" if parameters else ""
                         fh.write(f"{i1:6d} {i2:6d} {i3:6d} {i4:6d}    {improper_funct}{suffix}\n")
+
+            if all_cmaps:
+                fh.write("\n[ cmap ]\n; five-atom backbone correction from the native RTP\n")
+                for cmap in sorted(set(all_cmaps)):
+                    fh.write(" ".join(f"{index:6d}" for index in cmap) + "    1\n")
 
             if all_pairs:
                 fh.write("\n[ pairs ]\n")
@@ -831,7 +886,11 @@ class TopologyWriter:
             coordinate_order = tuple(
                 structure.atom_names[index].strip() for index in molecule_indices
             )
-            selected_lipid_ff = str(self.ff_config.get("lipid_ff", "gaff2")).lower()
+            from gmxbuilder.modules.forcefield.lipid_policy import lipid_backend_for
+
+            selected_lipid_ff = lipid_backend_for(
+                lipid_name, self.ff_config.get("lipid_ff", "gaff2")
+            )
             if selected_lipid_ff == "lipid21":
                 from gmxbuilder.modules.forcefield.lipid21_backend import (
                     lipid21_itp_path,
@@ -954,6 +1013,16 @@ class TopologyWriter:
                     )
                 )
 
+        def write_bonded(fh, indices, function, parameters=()):
+            from gmxbuilder.modules.forcefield.charmm_lipid_local import (
+                local_bonded_parameters,
+            )
+
+            names = tuple(lipid_atom_list[index - 1][0] for index in indices)
+            rows = local_bonded_parameters(rtp_residue, names, function, self.force_field)
+            for row in rows or ((str(function), *parameters),):
+                fh.write(" ".join(map(str, (*indices, *row))) + "\n")
+
         with open(path, "w") as fh:
             fh.write(f"; {lipid_name} topology — GMXBUILDER\n\n")
             fh.write(f"[ moleculetype ]\n{lipid_name}    3\n\n")
@@ -962,7 +1031,8 @@ class TopologyWriter:
 
             for i, (an, atype, charge) in enumerate(lipid_atom_list):
                 fh.write(
-                    f"{i + 1:6d} {atype:>6s} {1:6d} {lipid_name:>6s} {an:>6s} {i + 1:6d}  {charge:10.6f}\n"
+                    f"{i + 1:6d} {atype:>6s} {1:6d} {lipid_name:>6s} "
+                    f"{an:>6s} {i + 1:6d}  {charge:10.6f}\n"
                 )
 
             if bonds:
@@ -973,24 +1043,20 @@ class TopologyWriter:
                     # supported CHARMM lipid must resolve every bond against
                     # the selected force field's exact [ bondtypes ] table;
                     # grompp then fails explicitly if a parameter is absent.
-                    fh.write(f"{bi + 1:6d} {bj + 1:6d}    1\n")
+                    write_bonded(fh, (bi + 1, bj + 1), 1)
 
             if angles:
                 fh.write("\n[ angles ]\n")
                 for atom1, atom2, atom3 in angles:
-                    fh.write(f"{atom1:6d} {atom2:6d} {atom3:6d}    {angle_funct}\n")
+                    write_bonded(fh, (atom1, atom2, atom3), angle_funct)
 
             if dihedrals or impropers:
                 fh.write("\n[ dihedrals ]\n")
                 for atom1, atom2, atom3, atom4 in dihedrals:
-                    fh.write(f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    {proper_funct}\n")
+                    write_bonded(fh, (atom1, atom2, atom3, atom4), proper_funct)
                 for improper in impropers:
                     atom1, atom2, atom3, atom4 = improper[:4]
-                    parameters = " ".join(improper[4:])
-                    suffix = f" {parameters}" if parameters else ""
-                    fh.write(
-                        f"{atom1:6d} {atom2:6d} {atom3:6d} {atom4:6d}    {improper_funct}{suffix}\n"
-                    )
+                    write_bonded(fh, (atom1, atom2, atom3, atom4), improper_funct, improper[4:])
 
             if pairs:
                 fh.write("\n[ pairs ]\n")
@@ -1032,16 +1098,24 @@ class TopologyWriter:
     # ------------------------------------------------------------------
 
     def _copy_force_field(self, output_dir: Path) -> None:
-        """Copy the bundled force field files to toppar/ (toppar convention).
+        """Copy the bundled force-field database into ``forcefield/``.
 
-        Also rewrites ``#include`` directives inside ``forcefield.itp`` so
-        that GROMACS can resolve them from the working directory (the
-        includes are written as ``toppar/ffnonbonded.itp`` etc.).
+        The database is two dozen files nobody edits, and it used to sit in
+        the same directory as the handful that describe *this* system. It gets
+        its own directory now.
+
+        Nothing inside it is rewritten. Its files include each other by bare
+        name, and ``grompp`` resolves an include against the directory of the
+        file containing it, so moving the whole set together keeps every one
+        of those includes valid. Only the ``.top`` that reaches *into* the
+        directory needs the prefix.
         """
-        if (output_dir / "forcefield.itp").exists():
+        forcefield_dir = output_dir / FORCEFIELD_DIR
+        if (forcefield_dir / "forcefield.itp").exists():
             return  # already copied
 
         src = self._ff_path
+        output_dir = forcefield_dir
         if not src.is_dir():
             import warnings
 

@@ -11,16 +11,17 @@ Supports:
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 class MDPWriter:
     """Write GROMACS .mdp parameter files with production-quality parameters."""
 
     def __init__(self):
-        pass
+        self.last_velocity_seed: int | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -62,8 +63,15 @@ class MDPWriter:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         paths: list[Path] = []
+        rendered: list[tuple[Path, str, str, bool]] = []
+        self.last_velocity_seed = None
 
         self.validate_protocol(params, eq_stages, prod_iters, minimization)
+        params = copy.deepcopy(params)
+        velocity_seed = params.get("gen_seed", -1)
+        if int(velocity_seed) == -1:
+            velocity_seed = derive_velocity_seed(42)
+        params["gen_seed"] = int(velocity_seed)
         schedule_source = _default_schedule(params) if eq_stages is None else eq_stages
         hydrated_schedule: list[dict] = []
         for source_index, stage in enumerate(schedule_source):
@@ -77,6 +85,8 @@ class MDPWriter:
         # 0.5 fs or 0.5 ps and the latter is unsafe for atomistic MD.
         for rst in schedule:
             _convert_timestep_to_ps(rst)
+            if int(rst.get("gen_seed", -1)) == -1:
+                rst["gen_seed"] = int(velocity_seed)
 
         # ---- Stage 0: Minimization ----
         minim_config = _default_minimization(params)
@@ -95,7 +105,7 @@ class MDPWriter:
             minim_config.update(copy.deepcopy(minimization))
         minim = _build_minim(params, minim_config)
         minim = _apply_mdp_overrides(minim, minim_config.get("mdp_overrides", {}))
-        paths.append(self._write(output_dir / "mini.mdp", minim))
+        rendered.append((output_dir / "mini.mdp", minim, "minimization", False))
 
         # ---- Stages 1-N: Equilibration ----
         enabled_schedule = [
@@ -117,7 +127,14 @@ class MDPWriter:
                 content = _build_npt(params, rst, dt, nsteps, stage_num, is_first)
             content = _apply_mdp_overrides(content, params.get("mdp_overrides", {}))
             content = _apply_mdp_overrides(content, rst.get("mdp_overrides", {}))
-            paths.append(self._write(output_dir / f"equili_{stage_num}.mdp", content))
+            rendered.append(
+                (
+                    output_dir / f"equili_{stage_num}.mdp",
+                    content,
+                    f"equilibration stage {stage_num}",
+                    True,
+                )
+            )
 
         # ---- Production ----
         production_source = _default_production(params) if prod_iters is None else prod_iters
@@ -132,6 +149,8 @@ class MDPWriter:
         for pr in production:
             pr.pop("repeat", None)
             _convert_timestep_to_ps(pr)
+            if int(pr.get("gen_seed", -1)) == -1:
+                pr["gen_seed"] = int(velocity_seed)
         for active_index, pr in enumerate(production):
             prod_params = dict(params)
             prod_params.update(pr)
@@ -139,7 +158,30 @@ class MDPWriter:
             content = _build_prod(prod_params)
             content = _apply_mdp_overrides(content, params.get("mdp_overrides", {}))
             content = _apply_mdp_overrides(content, pr.get("mdp_overrides", {}))
-            paths.append(self._write(output_dir / f"production{suffix}.mdp", content))
+            rendered.append(
+                (
+                    output_dir / f"production{suffix}.mdp",
+                    content,
+                    f"production stage {active_index + 1}",
+                    True,
+                )
+            )
+
+        # Advanced overrides are intentionally applied before this final
+        # validation pass.  This makes the rendered file -- not the browser
+        # shape that produced it -- the authoritative scientific contract.
+        # Validate every stage before writing any file so a rejected protocol
+        # cannot leave a partially refreshed MDP suite behind.
+        for _path, content, label, dynamics in rendered:
+            _validate_rendered_mdp(content, params, label, dynamics=dynamics)
+            assignments = _rendered_assignments(content)
+            if (
+                self.last_velocity_seed is None
+                and assignments.get("gen-vel", "no").strip().lower() == "yes"
+            ):
+                self.last_velocity_seed = int(float(assignments["gen-seed"]))
+        for path, content, _label, _dynamics in rendered:
+            paths.append(self._write(path, content))
 
         return paths
 
@@ -466,6 +508,8 @@ _GLOBAL_KEYS = (_STAGE_KEYS - {"enabled", "repeat"}) | frozenset(
         "lipid_dihedral_restraints",
         "compressibility",
         "gen_seed",
+        "periodic_box_heights_nm",
+        "solute_face_distances_nm",
     }
 )
 _CONTEXT_KEYS = frozenset(
@@ -477,6 +521,8 @@ _CONTEXT_KEYS = frozenset(
         "protein_position_restraints",
         "lipid_position_restraints",
         "lipid_dihedral_restraints",
+        "periodic_box_heights_nm",
+        "solute_face_distances_nm",
     }
 )
 _LEGACY_STAGE_KEYS = _STAGE_KEYS - {
@@ -516,6 +562,21 @@ def _finite_number(value: object, label: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{label} must be a finite number")
     return number
+
+
+def derive_velocity_seed(build_seed: object) -> int:
+    """Derive a reproducible positive GROMACS velocity seed.
+
+    GROMACS interprets ``gen-seed = -1`` as an unrecorded runtime-generated
+    seed.  Domain-separating the build seed gives the velocity generator its
+    own reproducible stream while keeping the actual integer in the MDP and
+    package provenance.
+    """
+    seed = _finite_number(build_seed, "build seed")
+    if isinstance(build_seed, bool) or not seed.is_integer() or not 0 <= seed <= 2_147_483_647:
+        raise ValueError("build seed must be an integer from 0 to 2147483647")
+    digest = hashlib.sha256(f"GMXBUILDER.velocity.v1:{int(seed)}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") % 2_147_483_647 + 1
 
 
 def _declared_timestep_unit(stage: dict, label: str) -> str:
@@ -637,8 +698,11 @@ def _validate_stage(stage: dict, label: str) -> None:
         timestep = _finite_number(stage["dt"], f"{label} timestep")
         unit = _declared_timestep_unit(stage, label)
         timestep_fs = timestep if unit == "fs" else timestep * 1000.0
-        if not 0 < timestep_fs <= 5.0:
-            raise ValueError(f"{label} timestep must be in (0, 5] fs")
+        _validate_atomistic_timestep(
+            timestep_fs,
+            str(stage.get("constraints", "h-bonds")),
+            label,
+        )
     elif "dt_unit" in stage or "dt_fs" in stage:
         raise ValueError(f"{label} declares a timestep unit without dt")
     if stage.get("comm_mode", "linear") not in {"linear", "angular", "none"}:
@@ -708,6 +772,24 @@ def _validate_stage(stage: dict, label: str) -> None:
     _validate_overrides(stage.get("mdp_overrides", {}), f"{label} MDP overrides")
 
 
+def _validate_atomistic_timestep(timestep_fs: float, constraints: str, label: str) -> None:
+    """Enforce the implemented atomistic integration boundary.
+
+    GMXBUILDER does not currently generate hydrogen-mass repartitioned or
+    virtual-site atomistic topologies.  Unconstrained bonds therefore use the
+    conservative 1 fs ceiling; supported constrained protocols use 2 fs.
+    """
+    constraint_mode = constraints.strip().lower()
+    maximum_fs = 1.0 if constraint_mode == "none" else 2.0
+    if not 0 < timestep_fs <= maximum_fs:
+        detail = (
+            "unconstrained atomistic bonds require dt <= 1 fs"
+            if constraint_mode == "none"
+            else "atomistic dt > 2 fs requires HMR or virtual sites, which are not implemented"
+        )
+        raise ValueError(f"{label} timestep is outside the supported boundary: {detail}")
+
+
 def _validate_minimization(minimization: dict | None, params: dict) -> None:
     if minimization is None:
         return
@@ -772,6 +854,119 @@ def _apply_mdp_overrides(content: str, overrides: dict | None) -> str:
         if key not in seen:
             output.append(f"{key:<24s}= {value}")
     return "\n".join(output).rstrip() + "\n"
+
+
+def _rendered_assignments(content: str) -> dict[str, str]:
+    """Parse the effective key/value assignments from a generated MDP."""
+    assignments: dict[str, str] = {}
+    pattern = re.compile(r"^\s*([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(.*?)\s*$")
+    for line in content.splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        key = match.group(1).lower().replace("_", "-")
+        value = match.group(2).split(";", 1)[0].strip()
+        assignments[key] = value
+    return assignments
+
+
+def _context_distances(params: dict, key: str) -> list[float]:
+    raw = params.get(key)
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise ValueError(f"global settings {key} must be a non-empty distance list")
+    values = [_finite_number(value, f"global settings {key}") for value in raw]
+    if any(value <= 0 for value in values):
+        raise ValueError(f"global settings {key} distances must be positive")
+    return values
+
+
+def _validate_rendered_mdp(
+    content: str,
+    params: dict,
+    label: str,
+    *,
+    dynamics: bool,
+) -> None:
+    """Validate effective scientific values after all advanced overrides."""
+    values = _rendered_assignments(content)
+    integrator = values.get("integrator", "").strip().lower()
+    if dynamics and integrator != "md":
+        raise ValueError(f"{label} integrator must remain md")
+    if not dynamics and integrator not in {"steep", "cg"}:
+        raise ValueError(f"{label} integrator must remain steep or cg")
+
+    if "nsteps" in values:
+        nsteps = _finite_number(values["nsteps"], f"{label} nsteps")
+        if not nsteps.is_integer() or nsteps < 1:
+            raise ValueError(f"{label} nsteps must be a positive integer")
+
+    constraints = values.get("constraints", "none").strip().lower()
+    if constraints not in {"none", "h-bonds", "all-bonds", "h-angles", "all-angles"}:
+        raise ValueError(f"{label} constraints value is not supported")
+    if dynamics:
+        if "dt" not in values:
+            raise ValueError(f"{label} must define dt")
+        timestep_ps = _finite_number(values["dt"], f"{label} dt")
+        _validate_atomistic_timestep(timestep_ps * 1000.0, constraints, label)
+
+    if values.get("gen-vel", "no").strip().lower() == "yes":
+        if "gen-seed" not in values:
+            raise ValueError(f"{label} must persist a positive gen-seed when generating velocities")
+        seed = _finite_number(values["gen-seed"], f"{label} gen-seed")
+        if not seed.is_integer() or not 1 <= seed <= 2_147_483_647:
+            raise ValueError(f"{label} gen-seed must be a persisted positive 32-bit integer")
+
+    cutoffs: dict[str, float] = {}
+    for key in ("rlist", "rvdw", "rcoulomb"):
+        if key not in values:
+            raise ValueError(f"{label} must define {key}")
+        cutoff = _finite_number(values[key], f"{label} {key}")
+        if cutoff <= 0:
+            raise ValueError(f"{label} {key} must be positive")
+        cutoffs[key] = cutoff
+    maximum_cutoff = max(cutoffs.values())
+    if cutoffs["rlist"] + 1e-12 < max(cutoffs["rvdw"], cutoffs["rcoulomb"]):
+        raise ValueError(f"{label} rlist must be at least max(rvdw, rcoulomb)")
+    if "rvdw-switch" in values and values["rvdw-switch"]:
+        switch = _finite_number(values["rvdw-switch"], f"{label} rvdw-switch")
+        if switch < 0 or switch >= cutoffs["rvdw"]:
+            raise ValueError(f"{label} rvdw-switch must be non-negative and below rvdw")
+
+    dispcorr = values.get("dispcorr", "no").strip().lower()
+    if dispcorr not in {"no", "none", "ener", "enerpres"}:
+        raise ValueError(f"{label} DispCorr value is not supported")
+    if _force_field_family(params) == "charmm":
+        if dispcorr not in {"no", "none"}:
+            raise ValueError(f"{label}: CHARMM36/CHARMM36m requires DispCorr=no with force-switch")
+        modifier = values.get("vdw-modifier", "").strip().lower()
+        if modifier != "force-switch":
+            raise ValueError(f"{label}: CHARMM36/CHARMM36m requires vdw-modifier=Force-switch")
+        expected = {"rvdw-switch": 1.0, "rvdw": 1.2, "rcoulomb": 1.2, "rlist": 1.2}
+        for key, target in expected.items():
+            if key not in values or not math.isclose(
+                _finite_number(values[key], f"{label} {key}"),
+                target,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ValueError(
+                    f"{label}: bundled CHARMM36/CHARMM36m is validated with {key}={target:g}"
+                )
+
+    box_heights = _context_distances(params, "periodic_box_heights_nm")
+    if box_heights and min(box_heights) <= 2.0 * maximum_cutoff + 1e-9:
+        raise ValueError(
+            f"{label}: shortest periodic box height must exceed twice the maximum cutoff "
+            f"({min(box_heights):.3f} nm <= {2.0 * maximum_cutoff:.3f} nm)"
+        )
+    face_distances = _context_distances(params, "solute_face_distances_nm")
+    if face_distances and min(face_distances) + 1e-9 < maximum_cutoff:
+        raise ValueError(
+            f"{label}: solute-to-periodic-face clearance must be at least the maximum "
+            f"cutoff ({min(face_distances):.3f} nm < {maximum_cutoff:.3f} nm)"
+        )
 
 
 # =============================================================================
@@ -1079,12 +1274,13 @@ def _pressure_coupling(params: dict, stage: dict | None = None) -> str:
         "anisotropic": "Anisotropic",
         "surface-tension": "Surface-Tension",
     }.get(str(pcoupl_type).lower(), str(pcoupl_type))
+    rendered_ref_p = f"{ref_p}  {ref_p}" if pcoupl_type == "semisotropic" else str(ref_p)
     return f""";
 pcoupl                  = {stage.get("pcoupl", params.get("pcoupl", "C-rescale"))}
 pcoupltype              = {rendered_type}
 tau-p                   = {stage.get("tau_p", params.get("tau_p", 5.0))}
 compressibility         = {comp_str}
-ref-p                   = {str(ref_p) + "  " + str(ref_p) if pcoupl_type == "semisotropic" else str(ref_p)}
+ref-p                   = {rendered_ref_p}
 refcoord-scaling        = com"""
 
 
@@ -1115,7 +1311,8 @@ def _define_macros(rst: dict, params: dict) -> str:
 
 def _output_control(params: dict, stage: dict | None = None) -> str:
     stage = stage or {}
-    return f"""nstxout-compressed      = {stage.get("nstxout_compressed", params.get("nstxout_compressed", 5000))}
+    compressed = stage.get("nstxout_compressed", params.get("nstxout_compressed", 5000))
+    return f"""nstxout-compressed      = {compressed}
 nstxout                 = {stage.get("nstxout", params.get("nstxout", 0))}
 nstvout                 = {stage.get("nstvout", params.get("nstvout", 0))}
 nstfout                 = {stage.get("nstfout", params.get("nstfout", 0))}
@@ -1141,12 +1338,13 @@ comm-grps               = {grps}"""
 
 
 def _build_minim(params: dict, minimization: dict) -> str:
+    default_steps = 50000 if params.get("has_membrane", True) else 5000
     return f"""; Energy Minimization — generated by GMXBUILDER
 {_define_macros(minimization, params)}
 integrator              = {minimization.get("integrator", "steep")}
 emtol                   = {minimization.get("emtol", 1000.0)}
 emstep                  = {minimization.get("emstep", 0.01)}
-nsteps                  = {minimization.get("nsteps", 50000 if params.get("has_membrane", True) else 5000)}
+nsteps                  = {minimization.get("nsteps", default_steps)}
 {_nonbond_params(params, nstlist=int(minimization.get("nstlist", 10)), stage=minimization)}
 ;
 constraints             = {minimization.get("constraints", "none")}

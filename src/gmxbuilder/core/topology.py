@@ -142,6 +142,42 @@ class Topology:
             block.atom_indices = [idx + offset for idx in block.atom_indices]
         return self
 
+    def remap(self, new_index_of: list[int] | dict[int, int]) -> Topology:
+        """Renumber every atom reference. `new_index_of[old] = new`.
+
+        Reordering atoms without this leaves bonds, exclusions and per-atom
+        types pointing at whatever now occupies the old index, which is a
+        silently wrong topology rather than an error. It covers exactly the
+        fields `reindex` shifts, plus `atom_types`, which is per-atom and is
+        permuted rather than renumbered.
+        """
+        lookup = new_index_of.__getitem__
+
+        if self.atom_types:
+            reordered = list(self.atom_types)
+            for old_index, atom_type in enumerate(self.atom_types):
+                reordered[lookup(old_index)] = atom_type
+            self.atom_types = reordered
+        for bond in self.bonds:
+            bond.i, bond.j = lookup(bond.i), lookup(bond.j)
+        for angle in self.angles:
+            angle.i, angle.j, angle.k = lookup(angle.i), lookup(angle.j), lookup(angle.k)
+        for dih in self.dihedrals:
+            dih.i, dih.j = lookup(dih.i), lookup(dih.j)
+            dih.k, dih.l = lookup(dih.k), lookup(dih.l)
+        for imp in self.impropers:
+            imp.i, imp.j = lookup(imp.i), lookup(imp.j)
+            imp.k, imp.l = lookup(imp.k), lookup(imp.l)
+        for pair in self.pairs:
+            pair.i, pair.j = lookup(pair.i), lookup(pair.j)
+        for exclusion in self.exclusions:
+            remapped = {lookup(index) for index in exclusion}
+            exclusion.clear()
+            exclusion.update(remapped)
+        for block in self.molecule_blocks:
+            block.atom_indices = [lookup(index) for index in block.atom_indices]
+        return self
+
     def merge(self, other: Topology) -> Topology:
         """Combine two topologies. Returns self with *other* appended."""
         offset = self.num_atoms()

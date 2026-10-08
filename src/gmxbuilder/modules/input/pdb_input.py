@@ -11,24 +11,21 @@ from pathlib import Path
 
 import numpy as np
 
-from gmxbuilder.core.system import System
-from gmxbuilder.core.structure import Structure
-from gmxbuilder.core.component import Component
 from gmxbuilder.core.chemistry import PROTEIN_RESNAMES, is_hydrogen
+from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.pipeline.base import BaseModule, ModuleResult
-from gmxbuilder.io.pdb import PDBParser
+from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
 from gmxbuilder.modules import register_module
-from gmxbuilder.modules.input.protein_repair import (
-    assess_repairable_missing_atoms,
-    repair_report,
-    repair_standard_protein_heavy_atoms,
-)
 from gmxbuilder.modules.input.modification_detection import (
     normalize_detected_modifications,
 )
-
+from gmxbuilder.modules.input.protein_repair import (
+    repair_report,
+    repair_standard_protein_heavy_atoms,
+)
+from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 # ---------------------------------------------------------------------------
 # Per-atom helper — lives at module level so it can be reused by server.py
@@ -132,10 +129,6 @@ _RESIDUE_RENAME_MAP = {
     "MSE": "MET",
 }
 
-# Backbone atom names expected in each standard protein residue.
-# Ordered for informative warning messages.
-_BACKBONE_ATOMS = ("N", "CA", "C", "O")
-
 
 @register_module
 class PDBInputModule(BaseModule):
@@ -170,7 +163,13 @@ class PDBInputModule(BaseModule):
     # ── config validation ────────────────────────────────────────────────
 
     def validate_config(self, config: dict) -> bool:
-        self.validate_config_keys(config, {"pdb", "task_id", "seed"})
+        from gmxbuilder.modules.input.reconstruction import OPTIONS, validate_options
+
+        self.validate_config_keys(config, {"pdb", "task_id", "seed"} | OPTIONS)
+        try:
+            validate_options(config)
+        except ValueError as exc:
+            raise ModuleConfigError(str(exc)) from exc
         pdb_path = config.get("pdb")
         if not pdb_path:
             raise ModuleConfigError("'pdb' path is required for input module")
@@ -181,21 +180,25 @@ class PDBInputModule(BaseModule):
     # ── main entry point ─────────────────────────────────────────────────
 
     def run(self, system: System, config: dict) -> ModuleResult:
+        from gmxbuilder.pipeline.progress import report_progress
+
         pdb_path = config["pdb"]
         log: list[str] = []
 
         # ---- 1. Parse (PDB or CIF) ----
-        is_cif = self._is_cif_format(pdb_path)
-        if is_cif:
-            from gmxbuilder.io.cif import CIFParser
+        report_progress(0.05, "Parsing the uploaded structure")
+        from gmxbuilder.io.input_document import read_input
 
-            structure = CIFParser().parse(pdb_path)
-        else:
-            structure = PDBParser().parse(pdb_path)
+        structure = read_input(pdb_path)
+        from gmxbuilder.modules.input.reconstruction import reconstruct_input
+
+        reconstruction = reconstruct_input(structure, config)
+        is_cif = structure.source_info.get("format") == "mmcif"
         n_raw = structure.num_atoms
         log.append(f"Read {n_raw} atoms from {pdb_path}{' (CIF→PDB)' if is_cif else ''}")
 
         # ---- 2. Detect and reversibly normalize modified residues ----
+        report_progress(0.2, "Detecting modified residues")
         # This must happen before generic residue-name standardisation and
         # heavy-atom repair, while the deposited PTM residue names still carry
         # their chemical meaning.
@@ -234,6 +237,7 @@ class PDBInputModule(BaseModule):
             )
 
         # ---- 3. Structure cleaning ----
+        report_progress(0.35, "Cleaning the structure")
         structure, clean_stats = self._clean_structure(structure)
         if clean_stats["n_water"]:
             log.append(f"Removed {clean_stats['n_water']} water atoms")
@@ -275,15 +279,47 @@ class PDBInputModule(BaseModule):
             )
 
         # ---- 3b. Conservative protein heavy-atom repair ----
+        report_progress(0.45, "Repairing incomplete protein side chains")
+        from gmxbuilder.modules.input.protein_repair import normalize_repair_atom_names
+
+        aliases = normalize_repair_atom_names(structure)
+        if aliases:
+            log.append(f"Normalized {aliases} ILE CD atom names to PDB CD1 before repair")
+        from gmxbuilder.modules.input.validation import (
+            assess_input_structure,
+            read_polymer_metadata,
+            validation_message,
+        )
+
+        source_metadata = system.metadata.get("input_source_metadata")
+        if source_metadata is None:
+            source_metadata = structure.source_info.get("polymer_metadata")
+        if source_metadata is None:
+            source_metadata = read_polymer_metadata(pdb_path)
+        input_validation = assess_input_structure(structure, source_metadata)
+        if not input_validation["can_proceed"]:
+            rejected = System(
+                structure=structure,
+                metadata={
+                    **system.metadata,
+                    "input_source_metadata": source_metadata,
+                    "input_validation": input_validation,
+                },
+            )
+            return ModuleResult(
+                success=False, system=rejected, log=[validation_message(input_validation)]
+            )
         # Only complete standard-residue backbones with an unbroken partial
         # side chain are eligible.  Missing loops/backbone atoms and
         # disconnected fragments remain explicit errors.
-        _repair_candidates, repair_blockers = assess_repairable_missing_atoms(structure)
-        structure, repair_records = repair_standard_protein_heavy_atoms(
-            structure, allow_partial_damage=True
-        )
+        structure, repair_records = repair_standard_protein_heavy_atoms(structure)
+        input_validation = assess_input_structure(structure, source_metadata)
+        if input_validation["repairable_residues"]:
+            raise ModuleConfigError("Protein repair left missing atoms; upload a complete model.")
+        if not input_validation["can_proceed"]:
+            raise ModuleConfigError(validation_message(input_validation))
         repair_metadata = repair_report(repair_records)
-        repair_metadata["unrepairable_warnings"] = list(repair_blockers)
+        repair_metadata["unrepairable_warnings"] = []
         if repair_records:
             log.append(
                 "Automatic protein heavy-atom repair: "
@@ -297,16 +333,6 @@ class PDBInputModule(BaseModule):
                     f"added {','.join(record.added_atoms)}"
                 )
             log.append("Repair validation passed: " + repair_metadata["validation"])
-        if repair_blockers:
-            log.append(
-                f"Protein repair warnings ({len(repair_blockers)}): ambiguous damage "
-                "was preserved for user review; simulation topology remains blocked "
-                "until these residues are repaired."
-            )
-            for warning in repair_blockers[:10]:
-                log.append(f"  • {warning}")
-            if len(repair_blockers) > 10:
-                log.append(f"  • and {len(repair_blockers) - 10} more")
 
         # ---- 3c. Center solute at origin ----
         # Downstream steps (orient, membrane, solvation) all assume the
@@ -321,11 +347,14 @@ class PDBInputModule(BaseModule):
             )
 
         # ---- 4. Box validation ----
+        report_progress(0.75, "Validating the periodic box")
         # Prefer CRYST1 when it is physically reasonable; fall back to
         # solute-only extent estimation otherwise.
-        dims = np.diag(structure.box_vectors)
-        if np.all(dims >= 1.0) and np.all(dims <= 1000.0):
-            box_source = f"CRYST1 ({dims[0]:.1f}×{dims[1]:.1f}×{dims[2]:.1f} nm)"
+        dims = structure.dimensions()
+        from gmxbuilder.io.cell import classify_cell
+
+        if classify_cell(structure.box_vectors) == "deposited":
+            box_source = structure.source_info.get("box_source", "provided")
         else:
             box = self._compute_solute_box(structure)
             structure.box_vectors = box
@@ -336,6 +365,7 @@ class PDBInputModule(BaseModule):
         log.append(f"Box: {dims[0]:.1f}×{dims[1]:.1f}×{dims[2]:.1f} nm ({box_source})")
 
         # ---- 5. Build System and detect components ----
+        report_progress(0.85, "Detecting chains, ligands and other components")
         # The loader replaces the empty seed System with the parsed structure,
         # but build-level metadata (notably seed and simparams) originates
         # before this first stage and must remain available downstream.
@@ -346,16 +376,20 @@ class PDBInputModule(BaseModule):
         system.metadata["num_atoms"] = structure.num_atoms
         system.metadata["input_repair"] = repair_metadata
         system.metadata["input_modifications"] = modification_report
+        system.metadata["input_source_metadata"] = source_metadata
+        system.metadata["input_validation"] = input_validation
+        system.metadata["input_reconstruction"] = reconstruction
+        system.metadata["input_provenance"] = {
+            key: value
+            for key, value in structure.source_info.items()
+            if key not in {"atoms", "connections", "polymer_metadata"}
+        }
+        system.metadata["input_coordinate_transform"] = {"translation_nm": shift.tolist()}
 
-        # ---- 6. Structure validation (warnings only) ----
-        protein_comps = system.component_by_kind(ComponentKind.PROTEIN)
-        if protein_comps:
-            all_prot_idx = np.concatenate([c.atom_indices for c in protein_comps])
-            warnings = self._validate_structure(structure, all_prot_idx)
-            if warnings:
-                log.append(f"Structure warnings ({len(warnings)}):")
-                for w in warnings:
-                    log.append(f"  • {w}")
+        # ---- 6. Disclose non-blocking construct decisions after hard checks ----
+        report_progress(0.95, "Validating the structure")
+        for issue in input_validation["warnings"]:
+            log.append(issue["message"])
 
         # ---- 7. Component summary ----
         log.append(self._component_summary(system))
@@ -403,28 +437,7 @@ class PDBInputModule(BaseModule):
         if n_kept == n:
             return structure, {"n_water": 0, "n_hydrogen": 0, "n_alt_conf": 0}
 
-        cleaned = Structure(
-            coordinates=structure.coordinates[keep].copy(),
-            box_vectors=structure.box_vectors.copy(),
-            atom_names=[structure.atom_names[i] for i in range(n) if keep[i]],
-            resnames=[structure.resnames[i] for i in range(n) if keep[i]],
-            resids=[structure.resids[i] for i in range(n) if keep[i]],
-            chain_ids=[structure.chain_ids[i] for i in range(n) if keep[i]],
-            segids=[structure.segids[i] for i in range(n) if keep[i]],
-            elements=(
-                [structure.elements[i] for i in range(n) if keep[i]] if structure.elements else []
-            ),
-            occupancies=(
-                [structure.occupancies[i] for i in range(n) if keep[i]]
-                if structure.occupancies
-                else []
-            ),
-            tempfactors=(
-                [structure.tempfactors[i] for i in range(n) if keep[i]]
-                if structure.tempfactors
-                else []
-            ),
-        )
+        cleaned = structure.take(np.flatnonzero(keep))
         return cleaned, {"n_water": n_water, "n_hydrogen": n_h, "n_alt_conf": n_alt}
 
     @staticmethod
@@ -453,14 +466,8 @@ class PDBInputModule(BaseModule):
             )
 
             if key in seen:
-                prev_idx, prev_occ = seen[key]
-                if occ > prev_occ:
-                    to_remove.add(prev_idx)
-                    seen[key] = (i, occ)
-                else:
-                    to_remove.add(i)
-            else:
-                seen[key] = (i, occ)
+                raise ModuleConfigError(f"Duplicate atom identity after normalization: {key}")
+            seen[key] = (i, occ)
 
         return to_remove
 
@@ -560,7 +567,9 @@ class PDBInputModule(BaseModule):
                     kind=ComponentKind.PROTEIN,
                     atom_indices=protein_indices_arr,
                     metadata={
-                        "n_residues": len(set(structure.resids[i] for i in protein_indices)),
+                        "n_residues": len(
+                            {(structure.chain_ids[i], structure.resids[i]) for i in protein_indices}
+                        ),
                     },
                 )
             )
@@ -670,83 +679,6 @@ class PDBInputModule(BaseModule):
                 )
             )
 
-    # ── structure validation (warnings only) ─────────────────────────────
-
-    def _validate_structure(self, structure: Structure, protein_indices: np.ndarray) -> list[str]:
-        """Run sanity checks on the protein structure.
-
-        Returns a list of warning strings (empty if all checks pass).
-        These are *warnings*, not errors — they don't block the pipeline.
-        """
-        warnings: list[str] = []
-
-        # Build a quick lookup: residue → set of atom names
-        # Group protein atoms by (chain, resid)
-        prot_atom_names: dict[tuple[str, int], set[str]] = {}
-        prot_resnames: dict[tuple[str, int], str] = {}
-        for idx in protein_indices:
-            key = (
-                (structure.chain_ids[idx] or "").strip(),
-                structure.resids[idx],
-            )
-            aname = (structure.atom_names[idx] or "").strip()
-            prot_atom_names.setdefault(key, set()).add(aname)
-            prot_resnames[key] = structure.resnames[idx]
-
-        # -- Backbone atom check --
-        missing_backbone: list[str] = []
-        for key in sorted(prot_atom_names, key=lambda k: (k[0], k[1])):
-            atoms = prot_atom_names[key]
-            resname = prot_resnames.get(key, "???")
-            # Only check standard residues; skip caps and non-standard
-            if resname not in _PROTEIN_RESNAMES:
-                continue
-            # Skip terminal caps (ACE, NME, NMA)
-            if resname in ("ACE", "NME", "NMA", "FOR"):
-                continue
-            missing = [a for a in _BACKBONE_ATOMS if a not in atoms]
-            if missing:
-                missing_backbone.append(
-                    f"Chain {key[0]} {resname}{key[1]}: missing {', '.join(missing)}"
-                )
-
-        if missing_backbone:
-            if len(missing_backbone) <= 5:
-                warnings.append(
-                    f"{len(missing_backbone)} residue(s) missing backbone atoms: "
-                    + "; ".join(missing_backbone)
-                )
-            else:
-                warnings.append(
-                    f"{len(missing_backbone)} residues missing backbone atoms "
-                    f"(first 5): " + "; ".join(missing_backbone[:5])
-                )
-
-        # -- Chain continuity check --
-        # Group residue ids by chain, then check for large gaps
-        chain_resids: dict[str, list[int]] = {}
-        for key in prot_atom_names:
-            chain_resids.setdefault(key[0], []).append(key[1])
-        for ch, resids in sorted(chain_resids.items()):
-            sorted_ids = sorted(set(resids))
-            chain_gaps: list[str] = []
-            for i in range(len(sorted_ids) - 1):
-                gap = sorted_ids[i + 1] - sorted_ids[i]
-                if 3 <= gap <= 50:
-                    chain_gaps.append(
-                        f"{sorted_ids[i]}→{sorted_ids[i + 1]} ({gap - 1} residues missing)"
-                    )
-            if chain_gaps:
-                if len(chain_gaps) <= 3:
-                    warnings.append(f"Chain {ch}: gaps detected — " + "; ".join(chain_gaps))
-                else:
-                    warnings.append(
-                        f"Chain {ch}: {len(chain_gaps)} gaps detected "
-                        f"(first 3): " + "; ".join(chain_gaps[:3])
-                    )
-
-        return warnings
-
     # ── logging helpers ──────────────────────────────────────────────────
 
     @staticmethod
@@ -759,10 +691,8 @@ class PDBInputModule(BaseModule):
             if comp.kind == ComponentKind.PROTEIN:
                 # Count unique residues
                 structure = system.structure
-                n_res = len(set(structure.resids[i] for i in comp.atom_indices))
-                chains = sorted(
-                    set((structure.chain_ids[i] or "").strip() for i in comp.atom_indices)
-                )
+                n_res = len({structure.resids[i] for i in comp.atom_indices})
+                chains = sorted({(structure.chain_ids[i] or "").strip() for i in comp.atom_indices})
                 extra = f", {len(chains)} chain(s), {n_res} residues"
             elif comp.kind == ComponentKind.NUCLEIC_ACID:
                 polymer = str(comp.metadata.get("polymer_type", "nucleic acid"))

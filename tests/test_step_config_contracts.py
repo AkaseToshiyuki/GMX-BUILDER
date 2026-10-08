@@ -14,6 +14,7 @@ from gmxbuilder.modules.membrane.builder import (
 from gmxbuilder.modules.membrane.orient_module import OrientModule
 from gmxbuilder.modules.modifications.processor import StructureProcessor
 from gmxbuilder.modules.solvation.solvate import SolvationBuilder
+from tests.prerequisites import requires_gaff_runtime
 
 
 def _one_unknown_molecule():
@@ -196,7 +197,9 @@ def test_membrane_requires_forcefield_reconfirmation_when_family_changes(empty_s
         MembraneBuilder().run(empty_system, config)
 
 
-def test_membrane_rejects_changed_unvalidated_amber_gaff2_lipid(empty_system):
+def test_membrane_rejects_changed_unvalidated_amber_gaff2_lipid(
+    empty_system, unpopulated_default_lipid_library
+):
     empty_system.metadata.update(
         {
             "force_field": "amber14sb",
@@ -224,18 +227,19 @@ def test_membrane_revalidates_changed_supported_charmm_mixture(empty_system):
     assert empty_system.metadata["selected_lipid_names"] == ["CHOL", "POPC"]
 
 
+@requires_gaff_runtime
 def test_membrane_preserves_explicit_coherent_amber_gaff2_backend(empty_system):
     empty_system.metadata.update(
         {
             "force_field": "amber14sb",
             "lipid_ff": "gaff2",
-            "selected_lipid_names": ["POPC"],
-            "gaff_lipids": ["POPC"],
+            "selected_lipid_names": ["DPPC"],
+            "gaff_lipids": ["DPPC"],
         }
     )
 
-    message = _reconcile_lipid_selection(empty_system, ["POPC"])
+    message = _reconcile_lipid_selection(empty_system, ["DPPC"])
 
     assert message is None
     assert empty_system.metadata["lipid_ff"] == "gaff2"
-    assert empty_system.metadata["gaff_lipids"] == ["POPC"]
+    assert empty_system.metadata["gaff_lipids"] == ["DPPC"]

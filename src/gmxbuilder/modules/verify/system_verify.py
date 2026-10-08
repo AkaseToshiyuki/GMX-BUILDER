@@ -1,13 +1,8 @@
-"""SystemVerificationModule — validate built system against 3D viewer preview.
+"""Retired viewer-comparison compatibility module, outside the active pipelines.
 
-Compares key geometric properties between the frontend 3D viewer's
-representation and the actual built GRO file:
-  - Box dimensions (X, Y, Z)
-  - Protein center of mass
-  - Membrane midplane Z position
-  - Protein extent (min/max)
-
-Also generates a preview PDB from the final system for visual comparison.
+Current workflows use checkpoint quality gates and revision-bound final review.
+The historical CA/whole-protein comparison below is diagnostic legacy behavior;
+it does not establish scientific or physical validity.
 """
 
 from __future__ import annotations
@@ -17,11 +12,11 @@ from pathlib import Path
 
 import numpy as np
 
-from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
-from gmxbuilder.pipeline.base import BaseModule, ModuleResult
+from gmxbuilder.core.system import System
 from gmxbuilder.modules import register_module
-
+from gmxbuilder.modules.export.layout import STRUCTURE_DIR
+from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 # ---------------------------------------------------------------------------
 # Tolerance thresholds
@@ -37,7 +32,8 @@ PROTEIN_EXTENT_TOLERANCE_NM = 0.6  # nm — per-axis protein CA extent
 class SystemVerificationModule(BaseModule):
     """Compare the built system with the frontend 3D viewer preview.
 
-    Runs **after** the Export module.  Reads the generated GRO file,
+    Legacy callers ran this after Export; current pipelines omit it.
+    Reads the generated GRO file,
     extracts the protein + membrane geometry, and optionally compares
     with a frontend-supplied preview specification.
 
@@ -99,7 +95,7 @@ class SystemVerificationModule(BaseModule):
             log.append("No frontend preview config — skipping comparison (CLI mode)")
 
         # ---- 4. Cross-check: read GRO and compare with system structure ----
-        gro_path = output_dir / "input.gro"
+        gro_path = output_dir / STRUCTURE_DIR / "input.gro"
         if gro_path.exists():
             try:
                 gro_metrics = self._compute_metrics_from_gro(gro_path, system)
@@ -314,7 +310,8 @@ class SystemVerificationModule(BaseModule):
                 errors.append(
                     f"Protein COM Z (relative to membrane): built={built_rel_z:.3f} nm, "
                     f"preview={preview_rel_z:.3f} nm "
-                    f"(diff={abs(built_rel_z - preview_rel_z):.3f} nm > tolerance {MEMBRANE_Z_TOLERANCE_NM} nm)"
+                    f"(diff={abs(built_rel_z - preview_rel_z):.3f} nm > "
+                    f"tolerance {MEMBRANE_Z_TOLERANCE_NM} nm)"
                 )
 
         # ---- Protein extent (absolute — invariant under translation) ----
@@ -341,12 +338,14 @@ class SystemVerificationModule(BaseModule):
                 max_expected = preview_dhh * 3.0
                 if built_thick < min_expected:
                     errors.append(
-                        f"Membrane too thin: built={built_thick:.3f} nm, expected >{min_expected:.3f} nm "
+                        f"Membrane too thin: built={built_thick:.3f} nm, "
+                        f"expected >{min_expected:.3f} nm "
                         f"(DHH={preview_dhh:.1f} nm)"
                     )
                 elif built_thick > max_expected:
                     errors.append(
-                        f"Membrane too thick: built={built_thick:.3f} nm, expected <{max_expected:.3f} nm "
+                        f"Membrane too thick: built={built_thick:.3f} nm, "
+                        f"expected <{max_expected:.3f} nm "
                         f"(DHH={preview_dhh:.1f} nm)"
                     )
 

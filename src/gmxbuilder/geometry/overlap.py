@@ -101,9 +101,10 @@ def find_overlapping_atoms(
     max_mobile_vdw = np.max(vdw_radii_mobile)
     max_fixed_vdw = np.max(vdw_radii_fixed)
     global_cutoff = scale * (max_mobile_vdw + max_fixed_vdw)
-    mat = tree_fixed.sparse_distance_matrix(tree_mobile, global_cutoff)
+    mat = tree_fixed.sparse_distance_matrix(tree_mobile, global_cutoff, output_type="coo_matrix")
 
-    if mat.count_nonzero() == 0:
+    # Explicit zero-distance entries are the strongest overlaps, not empty data.
+    if mat.nnz == 0:
         return np.zeros(len(mobile), dtype=bool)
 
     # Convert to COO for fast row/col/data access

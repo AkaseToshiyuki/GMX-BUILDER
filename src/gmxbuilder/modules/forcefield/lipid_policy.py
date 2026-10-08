@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import copy
-from dataclasses import dataclass
+import json
 import re
-
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 
 # GMXBUILDER uses user-facing lipid names that do not always match the
 # residue names used by the CHARMM distribution.  Keep this mapping in one
@@ -23,10 +26,10 @@ _CHARMM_RTP_IDENTITIES = {
     "CER24": "CER240",  # ceramide d18:1/24:0
     "CHOL": "CHL1",
     "DPEPE": "DYPE",  # dipalmitoleoyl PE
-    "POP2": "POPI25",  # POPI(4,5)P2, protonated on P5, net -4
+    "POP2": "POPI24",  # Declared PI(4,5)P2 has its remaining proton on P4, net -4.
     "POP3": "POPI35",  # POPI(3,4,5)P3, protonated on P5, net -6
     "PUPC": "PDOPC",  # 1-palmitoyl-2-docosahexaenoyl PC
-    "SAPI": "SAPI25",  # SAPI(4,5)P2, protonated on P5, net -4
+    "SAPI": "SAPI24",  # Same declared PI(4,5)P2/P4 protonation, net -4.
     "TMCL": "TMCL2",  # tetramyristoyl cardiolipin, net -2
     "TOCL": "TOCL2",  # tetraoleoyl cardiolipin, net -2
 }
@@ -46,11 +49,11 @@ _CHARMM_RTP_TAIL_COMBINATIONS = {
     "PAPC": ("POPC", None, "SAPC"),
     "PAPE": ("POPE", None, "SAPE"),
     "PAPG": ("POPG", None, "SAPG"),
-    "PAPI": ("POPI25", None, "SAPI25"),
+    "PAPI": ("POPI24", None, "SAPI24"),
     "PIPI": ("POPI", None, "SAPI"),
     "PMPC": ("DPPC", None, "DMPC"),
     "SMPC": ("DSPC", None, "DMPC"),
-    "SOP2": ("POPI2D", "SOPC", None),
+    "SOP2": ("POPI2C", "SOPC", None),  # PI(3,4)P2, protonated on P3.
     "SOP3": ("POPI35", "SOPC", None),
     "SOPI": ("POPI", "SOPC", None),
 }
@@ -80,9 +83,9 @@ _CHARMM_CURRENT_LIPIDS_FOR_CLASSIC = {
 GAFF_PROTEIN_FORCE_FIELD = "amber14sb"
 
 # These built-in identities were exercised through full GAFF2/AM1-BCC and
-# explicit-solvent NPT library builds.  They must not be advertised merely
-# because the GAFF executable is installed: the corrected large polyanions do
-# not currently parameterize, while the generic-GAFF sterols/other entries
+# explicit-solvent NPT library builds. They must not be advertised merely
+# because the GAFF executable is installed: the corrected large lipids still
+# await V4 physical validation, while the generic-GAFF sterols/other entries
 # failed strict orientation, overlap, or hydrophobic-core gates after repeated
 # production runs.  CHARMM alternatives remain available where an exact RTP
 # exists.
@@ -91,10 +94,10 @@ _GAFF_UNAVAILABLE: dict[str, str] = {
         "three independent 1000 ps explicit-solvent NPT builds retained only "
         "about 63% of the experimental C24:0 sphingomyelin DHH"
     ),
-    "GM1": "the corrected ganglioside identity does not complete GAFF2 parameterization",
-    "PAPI": "the corrected phosphoinositide identity does not complete GAFF2 parameterization",
-    "POP3": "the corrected phosphoinositide identity does not complete GAFF2 parameterization",
-    "SOP3": "the corrected phosphoinositide identity does not complete GAFF2 parameterization",
+    "GM1": "the corrected ganglioside GAFF2 model awaits V4 physical validation",
+    "PAPI": "the corrected phosphoinositide GAFF2 model awaits V4 physical validation",
+    "POP3": "the corrected phosphoinositide GAFF2 model awaits V4 physical validation",
+    "SOP3": "the corrected phosphoinositide GAFF2 model awaits V4 physical validation",
     "20AHC": "repeated GAFF2 NPT builds fail the sterol orientation gate",
     "25OHC": "repeated GAFF2 NPT builds fail the sterol orientation gate",
     "27OHC": "repeated GAFF2 NPT builds fail the sterol orientation gate",
@@ -108,17 +111,6 @@ _GAFF_UNAVAILABLE: dict[str, str] = {
     "SOP2": "the corrected GAFF2 bilayer does not pass the hydrophobic-core seal gate",
 }
 
-# Exact topology availability is necessary but not sufficient for a supported
-# starting bilayer.  These Lipid21 entries repeatedly failed the independent
-# explicit-solvent NPT conformer gates and therefore remain unavailable in the
-# Amber workflow until a validated library exists.
-_LIPID21_LIBRARY_UNAVAILABLE: dict[str, str] = {
-    "DOPA": "no Lipid21 conformer set completed all production quality gates",
-    "DOPC": "no Lipid21 conformer set completed all production quality gates",
-    "DPPE": "the Lipid21 conformer set fails the minimum inward-orientation gate",
-    "SOPC": "the Lipid21 conformer set fails the minimum inward-orientation gate",
-    "SOPE": "the Lipid21 conformer set fails the minimum inward-orientation gate",
-}
 
 _CHARMM_LIBRARY_UNAVAILABLE: dict[tuple[str, str], str] = {
     (
@@ -128,14 +120,179 @@ _CHARMM_LIBRARY_UNAVAILABLE: dict[tuple[str, str], str] = {
 }
 
 
+#: Cache for the superseded-entry check, keyed by (lipid, force field, lipid ff)
+#: *and by the identity of the metadata file the answer was read from*.
+#:
+#: The check reads a metadata file and re-canonicalises two structures, which is
+#: milliseconds -- but it is asked once per lipid per compatibility report, so
+#: it is worth caching. Keying on the lipid alone was wrong twice over. The
+#: docstring below promises the report "clears itself the moment a rebuilt entry
+#: is installed", and with no entry in the key it never did: a long-running web
+#: service would go on refusing a lipid after its replacement had landed, until
+#: someone restarted it -- which is precisely what happens when V4 lands. And a
+#: task-scoped custom library resolves the same lipid name to a different
+#: directory, so without the path in the key the two would share an answer.
+#:
+#: The identity is the resolved path with its size and modification time, so
+#: publishing a new entry invalidates the answer by construction.
+_SUPERSEDED_CACHE: dict[tuple[str, str, str, str, int, int], str] = {}
+
+
+#: Set while the library builder is producing a replacement entry.
+#:
+#: The superseded report exists to stop a stale entry being served. The process
+#: that *rebuilds* that entry must not be stopped by it, or the report blocks
+#: its own remedy: the V4 queue asks for an Amber/GAFF2 backend for exactly the
+#: lipids whose GAFF2 entries are superseded, and would be told they are
+#: unavailable for that reason. Nothing stale is served inside this scope --
+#: the builder is writing a new entry from the corrected structure.
+_REBUILDING: ContextVar[bool] = ContextVar("gmxbuilder_rebuilding_lipid_entry", default=False)
+_RETRY_FAILED: ContextVar[bool] = ContextVar("gmxbuilder_retry_failed_lipid_entry", default=False)
+
+
+@contextmanager
+def rebuilding_library_entry(*, retry_failed_validation: bool = False) -> Iterator[None]:
+    """Permit replacement preparation without advertising a failed entry as usable.
+
+    V4 can explicitly retry historical preparation/MD failures with corrected
+    identities and reviewed conditions. This changes admission to an experiment,
+    never its identity, parameter, geometry or production acceptance gates.
+    Ordinary builders retain the historical quarantine.
+    """
+    token = _REBUILDING.set(True)
+    retry_token = _RETRY_FAILED.set(_RETRY_FAILED.get() or retry_failed_validation)
+    try:
+        yield
+    finally:
+        _RETRY_FAILED.reset(retry_token)
+        _REBUILDING.reset(token)
+
+
+def _explicit_atoms(name: str) -> int:
+    """Atom count of a registry lipid with explicit hydrogens, cached."""
+    from gmxbuilder.modules.membrane.equilibrated_library import _explicit_atom_count
+    from gmxbuilder.modules.membrane.lipids import LipidRegistry
+
+    try:
+        return _explicit_atom_count(LipidRegistry.get(name).smiles)
+    except (KeyError, ValueError, TypeError):
+        return -1
+
+
+def library_entry_superseded(lipid_name: str, force_field: str, lipid_ff: str | None = None) -> str:
+    """Why a pre-equilibrated entry exists but may not be served, or ''.
+
+    An entry records the structure it was built from. When that structure is
+    later corrected, the entry describes a molecule the project no longer
+    believes in, and the library refuses it -- correctly, but silently, so the
+    lipid would either stop working with no stated reason or, worse, quietly
+    fall back to a generated conformer in place of an equilibrated one.
+
+    Reported dynamically rather than listed, so it clears itself the moment a
+    rebuilt entry is installed. There is no list to remember to unwind.
+
+    Deliberately cheap. It compares the one field that a structure correction
+    changes rather than re-running the library's full validation, and it uses
+    the shared library rather than constructing one: `coverage()` asks this for
+    every lipid against every force field, and building a library per question
+    re-enters `ensure_prebuilt_assets()` each time.
+    """
+    from gmxbuilder.modules.membrane.equilibrated_library import (
+        get_equilibrated_lipid_library,
+    )
+    from gmxbuilder.modules.membrane.lipids import LipidRegistry, canonical_lipid_identity
+
+    if _REBUILDING.get():
+        return ""
+    name = str(lipid_name).strip().upper()
+    prefix = (name, str(force_field).strip().lower(), str(lipid_ff or "").strip().lower())
+    key = None
+
+    reason = ""
+    try:
+        current = _registry_identity(name, LipidRegistry, canonical_lipid_identity)
+        if current:
+            library = get_equilibrated_lipid_library()
+            for directory in library._candidate_dirs(name, force_field, lipid_ff):
+                metadata_path = directory / "metadata.json"
+                if not metadata_path.is_file():
+                    continue
+                try:
+                    stat = metadata_path.stat()
+                except OSError:
+                    break
+                key = (*prefix, str(metadata_path), stat.st_size, stat.st_mtime_ns)
+                cached = _SUPERSEDED_CACHE.get(key)
+                if cached is not None:
+                    return cached
+                try:
+                    metadata = json.loads(metadata_path.read_text())
+                except (OSError, ValueError):
+                    break
+                if str(metadata.get("status")) != "ready":
+                    break
+                stored = str(metadata.get("canonical_smiles", ""))
+                # Same test the library itself applies: a stale recorded SMILES
+                # only matters if the entry really holds a different molecule.
+                # CHARMM and Lipid21 entries were built from their own force
+                # field's definition and merely copied the note in, so their
+                # atoms still match; a GAFF2 entry was built from the SMILES and
+                # its atoms do not.
+                superseded_here = bool(stored) and (
+                    canonical_lipid_identity(stored)["canonical_smiles"] != current
+                    and len(metadata.get("atom_names", [])) != _explicit_atoms(name)
+                )
+                if superseded_here:
+                    reason = (
+                        "its pre-equilibrated entry was built from a lipid structure that has "
+                        "since been corrected against the force field's own residue, so the "
+                        "entry no longer describes this molecule; a rebuilt entry is in "
+                        "preparation and the lipid becomes available again as soon as it lands"
+                    )
+                break
+    except (RuntimeError, OSError, ValueError, KeyError):
+        return ""
+    if key is not None:
+        _SUPERSEDED_CACHE[key] = reason
+    return reason
+
+
+#: Canonical identity per registry lipid, computed once. Canonicalising a
+#: lipid SMILES costs a couple of milliseconds and the answer never changes
+#: within a process.
+_REGISTRY_IDENTITY: dict[str, str] = {}
+
+
+def _registry_identity(name: str, registry, canonicalise) -> str:
+    cached = _REGISTRY_IDENTITY.get(name)
+    if cached is not None:
+        return cached
+    try:
+        smiles = registry.get(name).smiles
+        identity = canonicalise(smiles)["canonical_smiles"] if smiles else ""
+    except (KeyError, ValueError, TypeError):
+        identity = ""
+    _REGISTRY_IDENTITY[name] = identity
+    return identity
+
+
 def charmm_lipid_capability(lipid_name: str, force_field: str) -> tuple[bool, str]:
     """Return release-specific CHARMM lipid support including NPT quality."""
     name = str(lipid_name).strip().upper()
     selected = str(force_field).strip().lower()
     if not lipid_has_rtp(name, selected):
         return False, f"{name} has no exact {selected} lipid topology"
-    reason = _CHARMM_LIBRARY_UNAVAILABLE.get((selected, name))
+    reason = None if _RETRY_FAILED.get() else _CHARMM_LIBRARY_UNAVAILABLE.get((selected, name))
+    if reason:
+        from gmxbuilder.modules.membrane.equilibrated_library import get_equilibrated_lipid_library
+        from gmxbuilder.modules.membrane.v4_availability import accepted_entry
+
+        if accepted_entry(get_equilibrated_lipid_library(), name, selected, selected):
+            reason = None
     if not reason:
+        superseded = library_entry_superseded(name, selected, selected)
+        if superseded:
+            return False, f"{name} is temporarily unavailable: {superseded}"
         return True, ""
     alternatives = [
         label
@@ -155,8 +312,32 @@ def charmm_lipid_capability(lipid_name: str, force_field: str) -> tuple[bool, st
 def gaff_lipid_capability(lipid_name: str) -> tuple[bool, str]:
     """Return whether a built-in lipid has validated GAFF2 production support."""
     name = str(lipid_name).strip().upper()
-    reason = _GAFF_UNAVAILABLE.get(name, "")
+    reason = _GAFF_UNAVAILABLE.get(name, "") if not _RETRY_FAILED.get() else ""
+    if _RETRY_FAILED.get() and name in {"GM1", "PAPI", "POP3", "SOP3"}:
+        from gmxbuilder.modules.forcefield.gaff_backend import (
+            cached_gaff_template,
+            gaff_charge_method,
+        )
+        from gmxbuilder.modules.membrane.lipids import LipidRegistry
+
+        lipid = LipidRegistry.get(name)
+        if (
+            gaff_charge_method() != "bcc"
+            or cached_gaff_template(name, lipid.smiles, lipid.charge, charge_method="bcc") is None
+        ):
+            reason = (
+                "a current identity-valid AM1-BCC parameter cache is required before V4 sampling"
+            )
+    if reason and not _RETRY_FAILED.get():
+        from gmxbuilder.modules.membrane.equilibrated_library import get_equilibrated_lipid_library
+        from gmxbuilder.modules.membrane.v4_availability import accepted_entry
+
+        if accepted_entry(get_equilibrated_lipid_library(), name, "amber14sb", "gaff2"):
+            reason = ""
     if not reason:
+        superseded = library_entry_superseded(name, "amber14sb", "gaff2")
+        if superseded:
+            return False, f"{name} is temporarily unavailable: {superseded}"
         return True, ""
     alternatives = [
         label
@@ -171,87 +352,110 @@ def gaff_lipid_capability(lipid_name: str) -> tuple[bool, str]:
     return False, f"Amber/GAFF2 unavailable: {reason}{suffix}"
 
 
+def lipid_backend_for(lipid_name: str, selected_backend: str | None) -> str:
+    """Resolve a canonical mixed Amber selection for one molecular species."""
+    selected = str(selected_backend or "").strip().lower()
+    if selected != "amber-mixed":
+        return selected
+    from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
+
+    if lipid21_capability(lipid_name)[0]:
+        return "lipid21"
+    # Routing is parameter identity, not a production-availability decision.
+    # Callers enforce capability; provenance must be evaluable outside rebuild scope.
+    return "gaff2"
+
+
+def amber_mixed_validation_reason(lipid_names) -> str:
+    """User builds require current mixed-host initialization evidence.
+
+    The offline builder may generate that evidence. Parameter completeness or a
+    successful grompp alone cannot make a new mixed model production-ready.
+    """
+    if _REBUILDING.get():
+        return ""
+    from gmxbuilder.modules.membrane.equilibrated_library import get_equilibrated_lipid_library
+
+    missing = []
+    library = get_equilibrated_lipid_library()
+    for name in sorted(set(lipid_names)):
+        if lipid_backend_for(name, "amber-mixed") != "gaff2":
+            continue
+        entry = library.inspect(name, "amber14sb", "gaff2")
+        if (
+            entry is None
+            or entry.metadata.get("lipid_ff") != "amber-mixed"
+            or (
+                entry.metadata.get("equilibration_host")
+                != {
+                    "lipid_name": "POPC",
+                    "ratio_percent": 90,
+                    "target_ratio_percent": 10,
+                }
+            )
+        ):
+            missing.append(name)
+    if missing:
+        return (
+            "Mixed Lipid21/GAFF2 initialization is unavailable pending physical validation "
+            f"with the corrected parameters: {', '.join(missing)}. "
+            "The administrator's V4 workflow must qualify these entries first."
+        )
+    return ""
+
+
 def amber_lipid_backend_candidates(
     lipid_names: list[str] | tuple[str, ...],
 ) -> tuple[str, ...]:
-    """Return every scientifically eligible Amber backend in preference order."""
+    """Canonical per-species assignment first; full GAFF2 only by explicit choice."""
     from gmxbuilder.modules.forcefield.gaff_backend import gaff_available
     from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
 
     names = sorted({str(value).strip().upper() for value in lipid_names if str(value).strip()})
     if not names:
         return ("none",)
+    native = {name for name in names if lipid21_capability(name)[0]}
+    missing = set(names) - native
     candidates = []
-    if all(
-        lipid21_capability(name)[0] and name not in _LIPID21_LIBRARY_UNAVAILABLE for name in names
-    ):
+    if not missing:
         candidates.append("lipid21")
+    elif native and gaff_available() and all(gaff_lipid_capability(n)[0] for n in missing):
+        candidates.append("amber-mixed")
     if gaff_available() and all(gaff_lipid_capability(name)[0] for name in names):
         candidates.append("gaff2")
     return tuple(candidates)
 
 
 def amber_lipid_backend(lipid_names: list[str] | tuple[str, ...]) -> tuple[str | None, str]:
-    """Resolve one coherent Amber lipid backend for the complete membrane.
+    """Prefer Lipid21 for each supported species and GAFF2 for missing species.
 
-    Priority is exact Lipid21, then a future validated Amber-specialized
-    backend, then validated GAFF2.  Backends are deliberately selected for the
-    whole membrane rather than molecule-by-molecule so cross interactions and
-    charge calibration remain scientifically coherent.
+    Library availability does not change molecular parameters. In particular,
+    historical failures under superseded coefficients cannot authorize a silent
+    switch of the entire membrane to a different force field.
     """
-    from gmxbuilder.modules.forcefield.gaff_backend import gaff_available
+    candidates = amber_lipid_backend_candidates(lipid_names)
+    if candidates:
+        backend = candidates[0]
+        reasons = {
+            "none": "no membrane lipids selected",
+            "lipid21": "all selected lipids use exact Amber Lipid21 v1.0 parameters",
+            "amber-mixed": (
+                "Lipid21 is retained for supported species; GAFF2 supplies only missing "
+                "species, with independent molecular 1-4 parameters"
+            ),
+            "gaff2": "selected lipids lack Lipid21 coverage and use GAFF2 parameters",
+        }
+        return backend, reasons[backend]
     from gmxbuilder.modules.forcefield.lipid21_backend import lipid21_capability
 
-    names = sorted({str(value).strip().upper() for value in lipid_names if str(value).strip()})
-    if not names:
-        return "none", "no membrane lipids selected"
-    lipid21_missing = [name for name in names if not lipid21_capability(name)[0]]
-    failed_libraries = [
-        (name, _LIPID21_LIBRARY_UNAVAILABLE[name])
-        for name in names
-        if name in _LIPID21_LIBRARY_UNAVAILABLE
-    ]
-    if not lipid21_missing and not failed_libraries:
-        return "lipid21", "all selected lipids use exact Amber Lipid21 v1.0 parameters"
-
-    # Reserved policy tier: no additional Amber-specialized lipid family has
-    # yet passed GMXBUILDER's identity and real-GROMACS validation contract.
-    blocked = [
-        (name, gaff_lipid_capability(name)[1])
-        for name in names
-        if not gaff_lipid_capability(name)[0]
-    ]
-    if gaff_available() and not blocked:
-        fallback_causes = []
-        if lipid21_missing:
-            fallback_causes.append(
-                "exact Lipid21 coverage is absent for: " + ", ".join(lipid21_missing)
-            )
-        if failed_libraries:
-            fallback_causes.append(
-                "the Lipid21 NPT library is unavailable for: "
-                + "; ".join(f"{name} ({reason})" for name, reason in failed_libraries)
-            )
-        return "gaff2", (
-            "GAFF2 fallback is required for the entire membrane because "
-            + "; ".join(fallback_causes)
-        )
-    reasons = [reason for _name, reason in blocked]
-    if failed_libraries:
-        reasons.insert(
-            0,
-            "Exact Lipid21 topology exists but its validated NPT library is "
-            "unavailable: " + "; ".join(f"{name} ({reason})" for name, reason in failed_libraries),
-        )
-    if lipid21_missing:
-        reasons.insert(
-            0,
-            "Exact Lipid21 topology is absent for: " + ", ".join(lipid21_missing),
-        )
-    if not gaff_available():
-        reasons.append("AmberTools/ACPYPE is unavailable")
-    return None, (
-        "No coherent Amber lipid backend covers the complete membrane. " + "; ".join(reasons)
+    reasons = []
+    for name in sorted(set(lipid_names)):
+        if not lipid21_capability(name)[0]:
+            supported, reason = gaff_lipid_capability(name)
+            if not supported:
+                reasons.append(f"{name}: {reason}")
+    return None, "No validated Amber parameter assignment covers the membrane. " + "; ".join(
+        reasons
     )
 
 
@@ -462,19 +666,26 @@ def _make_charmm_plasmalogen(parser, headgroup: str) -> dict | None:
             term for term in result[section] if not any(atom in removed for atom in term[:size])
         ]
 
+    # West 2020 original PLA18, not the later reparameterized ether stream:
+    # https://terpconnect.umd.edu/~jbklauda/download/toppar_all36_lipid_ether_AL.str
+    # SHA256 67d3f8090ff58c29b4c6c58bd265b10fddf68ac4e8ed3216d58be6995750cb0f.
     # SOLE/PLA18 is P-18:0/18:1.  Its C31-C318 vinyl-ether branch uses the
     # same local charges as the requested P-16:0 branch; POPE already supplies
     # the exact C31-C316 carbon count and the unchanged 18:1 ester branch.
     west_atoms = {
+        "C3": ("CTL2", 0.08),
         "HX": ("HAL2", 0.08),
         "HY": ("HAL2", 0.08),
         "O31": ("OG301", -0.36),
         "C31": ("CEL1", 0.00),
         "C32": ("CEL1", -0.20),
         "H2X": ("HEL1", 0.08),
-        "C33": ("CTL2", 0.00),
-        "H3X": ("HAL2", 0.08),
-        "H3Y": ("HAL2", 0.08),
+        "C23": ("CTL2", 0.00),
+        "H3R": ("HAL2", 0.08),
+        "H3S": ("HAL2", 0.08),
+        "C33": ("CTL2", -0.18),
+        "H3X": ("HAL2", 0.09),
+        "H3Y": ("HAL2", 0.09),
     }
     converted = []
     vinyl_group: int | None = None
@@ -499,6 +710,15 @@ def _make_charmm_plasmalogen(parser, headgroup: str) -> dict | None:
         if pc is None:
             return None
         result = _replace_charmm_subtree(result, pc, "O12", "P")
+    # The supplementary type names also occur in ordinary unsaturated tails.
+    # Apply their parameters only at this molecule's actual vinyl-ether motif.
+    result["local_bonded_scope"] = ("O31", "C31", "C32")
+    result["source_provenance"] = {
+        "model": "West2020-PLA18-local-motif",
+        "doi": "10.1021/acs.jpcb.9b08850",
+        "sha256": "67d3f8090ff58c29b4c6c58bd265b10fddf68ac4e8ed3216d58be6995750cb0f",
+        "adaptation": "P-18:0 to P-16:0 terminal chain shortening; PC head from native POPC",
+    }
     return result
 
 
@@ -812,7 +1032,6 @@ def lipid_rtp_template(lipid_name: str, force_field: str) -> tuple[str, dict | N
         if pe is None:
             return template_name, None
         generated = _replace_charmm_subtree(generated, pe, "O12", "P")
-    parser.set_residue(template_name, generated)
     return template_name, generated
 
 
@@ -838,7 +1057,7 @@ def lipid_rtp_identity_issues(lipid_name: str, force_field: str) -> tuple[str, .
     try:
         lipid = LipidRegistry.get(name)
     except KeyError:
-        return ()
+        return (f"Lipid {name} has no registered chemical identity",)
 
     issues: list[str] = []
     if lipid.formula:
@@ -853,6 +1072,19 @@ def lipid_rtp_identity_issues(lipid_name: str, force_field: str) -> tuple[str, .
     template_charge = sum(atom[2] for atom in template["atoms"])
     if abs(template_charge - lipid.charge) > 0.05:
         issues.append(f"net charge {template_charge:+.3f} != registry {lipid.charge:+d}")
+    if not issues:
+        from gmxbuilder.geometry.molecular_identity import reference_mappings
+        from gmxbuilder.modules.membrane.lipid_orientation import atom_element
+
+        names = [atom[0] for atom in template["atoms"]]
+        indices = {atom: index for index, atom in enumerate(names)}
+        try:
+            if len(indices) != len(names):
+                raise ValueError("duplicate topology atom names")
+            bonds = tuple((indices[a], indices[b]) for a, b in template["bonds"])
+            reference_mappings(lipid.smiles, tuple(atom_element(n) for n in names), bonds)
+        except (ValueError, KeyError) as exc:
+            issues.append(f"bond graph differs from registered identity: {exc}")
     return tuple(issues)
 
 

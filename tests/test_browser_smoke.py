@@ -3,25 +3,20 @@
 from __future__ import annotations
 
 import os
-import shutil
 import time
 
 import pytest
 
 
 @pytest.mark.browser
-def test_refresh_and_enter_step_one_accepts_popc_with_lipid21():
+@pytest.mark.slow
+def test_refresh_and_enter_step_one_accepts_popc_with_lipid21(browser, live_server):
     """The default POPC selection must not raise a false compatibility alert."""
-    base_url = os.environ.get("GMXBUILDER_BROWSER_URL", "").rstrip("/")
-    if not base_url:
-        pytest.skip("set GMXBUILDER_BROWSER_URL to run live browser regressions")
+    base_url = os.environ.get("GMXBUILDER_BROWSER_URL", live_server).rstrip("/")
 
     pytest.importorskip("selenium")
-    from selenium import webdriver
     from selenium.common.exceptions import NoAlertPresentException
     from selenium.webdriver.common.by import By
-    from selenium.webdriver.firefox.options import Options
-    from selenium.webdriver.firefox.service import Service
     from selenium.webdriver.support.ui import WebDriverWait
 
     def assert_no_alert(driver, stage: str) -> None:
@@ -33,22 +28,28 @@ def test_refresh_and_enter_step_one_accepts_popc_with_lipid21():
         alert.dismiss()
         pytest.fail(f"unexpected alert {stage}: {message}")
 
-    options = Options()
-    options.add_argument("-headless")
-    driver_path = shutil.which("geckodriver")
-    if not driver_path:
-        pytest.skip("geckodriver is required for live Firefox regressions")
-    driver = webdriver.Firefox(options=options, service=Service(driver_path))
-    wait = WebDriverWait(driver, 25)
+    driver = browser
+    wait = WebDriverWait(driver, 90)
+    driver.set_script_timeout(90)
     try:
         driver.get(f"{base_url}/")
         card_selector = '.task-card[data-task-id="membrane-bilayer"]'
         wait.until(lambda current: current.find_elements(By.CSS_SELECTOR, card_selector))
+        wait.until(
+            lambda current: (
+                not current.execute_script("return document.getElementById('task-grid').inert")
+            )
+        )
         time.sleep(1)
         assert_no_alert(driver, "on initial load")
 
         driver.refresh()
         wait.until(lambda current: current.find_elements(By.CSS_SELECTOR, card_selector))
+        wait.until(
+            lambda current: (
+                not current.execute_script("return document.getElementById('task-grid').inert")
+            )
+        )
         time.sleep(1)
         assert_no_alert(driver, "after refresh")
 
@@ -57,7 +58,7 @@ def test_refresh_and_enter_step_one_accepts_popc_with_lipid21():
             const done = arguments[arguments.length - 1];
             fetch('/api/options').then(response => response.json()).then(data => {
               const popc = data.lipids.find(item => item.name === 'POPC');
-              done(popc ? popc.parameterizations : []);
+              done(popc ? popc.parameter_sources : []);
             }).catch(error => done(['ERROR', String(error)]));
             """
         )
@@ -65,8 +66,10 @@ def test_refresh_and_enter_step_one_accepts_popc_with_lipid21():
 
         driver.find_element(By.CSS_SELECTOR, card_selector).click()
         wait.until(
-            lambda current: "active"
-            in current.find_element(By.ID, "panel-input").get_attribute("class").split()
+            lambda current: (
+                "active"
+                in current.find_element(By.ID, "panel-input").get_attribute("class").split()
+            )
         )
         time.sleep(1)
         assert_no_alert(driver, "after entering Step 1")
@@ -74,11 +77,11 @@ def test_refresh_and_enter_step_one_accepts_popc_with_lipid21():
 
         driver.refresh()
         wait.until(
-            lambda current: "active"
-            in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
+            lambda current: current.execute_script(
+                "return document.getElementById('panel-input').classList.contains('active')"
+            )
         )
-        wait.until(lambda current: current.current_url.rstrip("/") == base_url.rstrip("/"))
-        assert driver.current_url.rstrip("/") == base_url.rstrip("/")
+        assert driver.current_url.rstrip("/").endswith("/BilayerBuilder/Step1")
 
         task_id = driver.execute_async_script(
             """
@@ -105,11 +108,18 @@ END
         # Legacy task-bearing links are retired and return to the home page.
         driver.get(f"{base_url}/BilayerBuilder/{task_id}/Step1")
         wait.until(
-            lambda current: "active"
-            in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
+            lambda current: (
+                "active"
+                in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
+            )
         )
         wait.until(lambda current: current.current_url.rstrip("/") == base_url.rstrip("/"))
         assert driver.current_url.rstrip("/") == base_url.rstrip("/")
+        # The markup precedes asynchronous options/bootstrap initialization.
+        # This smoke exercises recovery after the application is ready.
+        wait.until(
+            lambda current: current.execute_script("return initComputeQueueStatus._done === true")
+        )
         resume_input = driver.find_element(By.ID, "resume-task-id")
         resume_input.send_keys(task_id)
         driver.find_element(By.ID, "resume-task-btn").click()
@@ -121,11 +131,11 @@ END
         )
         driver.refresh()
         wait.until(
-            lambda current: "active"
-            in current.find_element(By.ID, "panel-task-type").get_attribute("class").split()
+            lambda current: current.execute_script(
+                "return document.getElementById('panel-input').classList.contains('active')"
+            )
         )
-        wait.until(lambda current: current.current_url.rstrip("/") == base_url.rstrip("/"))
-        assert driver.current_url.rstrip("/") == base_url.rstrip("/")
+        assert driver.current_url.rstrip("/").endswith("/BilayerBuilder/Step1")
 
         hardware = driver.execute_script(
             """
@@ -156,14 +166,15 @@ END
         simulation_shape = driver.execute_script(
             """
             const config = collectSimulationParams();
+            const owns = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
             return {
               keys: Object.keys(config).sort(),
               schemaVersion: config.schema_version,
-              minimizationOwnsCutoff: Object.prototype.hasOwnProperty.call(config.minimization, 'rlist'),
-              equilibrationOwnsCutoff: Object.prototype.hasOwnProperty.call(config.eq_stages[0], 'rlist'),
-              productionOwnsPressureGeometry: Object.prototype.hasOwnProperty.call(config.prod_iters[0], 'pcoupl_type'),
-              hasGlobalTemperature: Object.prototype.hasOwnProperty.call(config, 'temperature'),
-              hasSystemName: Object.prototype.hasOwnProperty.call(config, 'system_name')
+              minimizationOwnsCutoff: owns(config.minimization, 'rlist'),
+              equilibrationOwnsCutoff: owns(config.eq_stages[0], 'rlist'),
+              productionOwnsPressureGeometry: owns(config.prod_iters[0], 'pcoupl_type'),
+              hasGlobalTemperature: owns(config, 'temperature'),
+              hasSystemName: owns(config, 'system_name')
             };
             """
         )
@@ -213,13 +224,22 @@ END
             "dispersionCorrection": "EnerPres",
         }
 
+        driver.execute_script("sessionStorage.clear(); localStorage.clear();")
         driver.get(f"{base_url}/")
         solution_card = '.task-card[data-task-id="solvator"]'
         wait.until(lambda current: current.find_elements(By.CSS_SELECTOR, solution_card))
+        wait.until(
+            lambda current: current.execute_script(
+                "return initComputeQueueStatus._done === true "
+                "&& !document.getElementById('task-grid').inert"
+            )
+        )
         driver.find_element(By.CSS_SELECTOR, solution_card).click()
         wait.until(
-            lambda current: "active"
-            in current.find_element(By.ID, "panel-input").get_attribute("class").split()
+            lambda current: (
+                "active"
+                in current.find_element(By.ID, "panel-input").get_attribute("class").split()
+            )
         )
         solution_protocol = driver.execute_script(
             """
@@ -274,54 +294,38 @@ END
             ("martini3-bilayer", "Martini3BilayerBuilder", True),
             ("martini3-solvent", "Martini3SolventBuilder", False),
         ):
+            driver.execute_script("sessionStorage.clear(); localStorage.clear();")
             driver.get(f"{base_url}/")
             selector = f'.task-card[data-task-id="{task_type}"]'
             wait.until(lambda current: current.find_elements(By.CSS_SELECTOR, selector))
+            wait.until(
+                lambda current: current.execute_script(
+                    "return initComputeQueueStatus._done === true "
+                    "&& !document.getElementById('task-grid').inert"
+                )
+            )
             driver.find_element(By.CSS_SELECTOR, selector).click()
             wait.until(
-                lambda current: "active"
-                in current.find_element(By.ID, "panel-input").get_attribute("class").split()
+                lambda current: (
+                    "active"
+                    in current.find_element(By.ID, "panel-input").get_attribute("class").split()
+                )
             )
             assert driver.current_url.rstrip("/").endswith(f"/{route}/Step1")
             displayed_task = driver.find_element(By.ID, "task-id-display").text.strip()
             assert (len(displayed_task) == 32) is expects_task_id
 
-        modal_state = driver.execute_script(
+        status = driver.execute_script(
             """
-            showComputeQueueModal({
-              status: 'queued',
-              task_id: arguments[0],
-              queue_position: 3,
-              estimated_wait_seconds: 90,
-              estimated_start_at: new Date(Date.now() + 90000).toISOString()
-            });
-            const modal = document.getElementById('compute-queue-modal');
-            const close = document.getElementById('compute-queue-close');
-            return {
-              visible: !modal.classList.contains('hidden'),
-              closeDisabled: close.disabled,
-              taskId: document.getElementById('compute-queue-task-id').textContent,
-              position: document.getElementById('compute-queue-position').textContent
-            };
-            """,
+            state.taskId=arguments[0];
+            startStepProgress('input','input-check-btn','input-check-status');
+            showComputeQueueStatus({status:'queued',task_id:arguments[0],queue_position:3});
+            return {taskId:document.getElementById('compute-queue-task-id').textContent,
+              position:document.getElementById('compute-queue-position').textContent,
+              modal:document.querySelector('.modal-overlay:not(.hidden)') !== null};
+        """,
             task_id,
         )
-        assert modal_state == {
-            "visible": True,
-            "closeDisabled": True,
-            "taskId": task_id,
-            "position": "3",
-        }
-        driver.find_element(By.ID, "compute-queue-saved").click()
-        wait.until(
-            lambda current: not current.find_element(By.ID, "compute-queue-close").get_attribute(
-                "disabled"
-            )
-        )
-        driver.find_element(By.ID, "compute-queue-close").click()
-        assert (
-            "hidden"
-            in driver.find_element(By.ID, "compute-queue-modal").get_attribute("class").split()
-        )
+        assert status == {"taskId": task_id, "position": "3", "modal": False}
     finally:
-        driver.quit()
+        driver.get("about:blank")

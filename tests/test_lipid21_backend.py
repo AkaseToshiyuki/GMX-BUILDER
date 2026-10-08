@@ -18,6 +18,7 @@ from gmxbuilder.modules.forcefield.lipid_policy import (
 )
 from gmxbuilder.modules.membrane.equilibrated_library import lipid_parameter_family
 from gmxbuilder.modules.membrane.lipid_orientation import infer_lipid_orientation
+from tests.prerequisites import requires_gaff_runtime
 
 
 def test_exact_lipid21_inventory_and_nonester_exclusion():
@@ -27,18 +28,19 @@ def test_exact_lipid21_inventory_and_nonester_exclusion():
     assert not lipid21_capability("PPCPL")[0]
 
 
+@requires_gaff_runtime
 def test_amber_backend_priority_and_coherent_fallback():
-    assert amber_lipid_backend(["POPC"])[0] == "lipid21"
-    assert amber_lipid_backend(["POPC", "CHOL"])[0] == "lipid21"
-    backend, reason = amber_lipid_backend(["POPC", "DPPE"])
-    assert backend == "gaff2"
-    assert "Lipid21 NPT library is unavailable" in reason
-    assert amber_lipid_backend(["POPC", "POPI"])[0] == "gaff2"
-    assert amber_lipid_backend(["POPC", "GM1"])[0] is None
+    assert amber_lipid_backend(["DPPC"])[0] == "lipid21"
+    assert amber_lipid_backend(["DPPC", "CHOL"])[0] == "lipid21"
+    backend, reason = amber_lipid_backend(["DPPC", "DPPE"])
+    assert backend == "lipid21"
+    assert "exact Amber Lipid21" in reason
+    assert amber_lipid_backend(["DPPC", "CER16"])[0] == "amber-mixed"
+    assert amber_lipid_backend(["DPPC", "GM1"])[0] is None
 
 
 def test_amber_candidates_include_exact_and_gaff_backends():
-    assert amber_lipid_backend_candidates(["POPC", "CHOL"]) == ("lipid21",)
+    assert amber_lipid_backend_candidates(["DPPC", "CHOL"]) == ("lipid21",)
 
 
 def test_exact_lipid21_membrane_can_explicitly_switch_to_gaff2(monkeypatch):
@@ -53,7 +55,7 @@ def test_exact_lipid21_membrane_can_explicitly_switch_to_gaff2(monkeypatch):
     report = compatibility.compatibility_report(
         system,
         "amber14sb",
-        ["POPC"],
+        ["DPPC"],
     )
     enabled = {option["value"] for option in report["lipid_options"] if option["enabled"]}
 
@@ -62,6 +64,7 @@ def test_exact_lipid21_membrane_can_explicitly_switch_to_gaff2(monkeypatch):
 
 def test_lipid21_geometry_is_unique_and_amphiphilic():
     for name in lipid21_lipids():
+        assert lipid21_capability(name)[0]
         coordinates, atom_names = load_lipid21_geometry(name)
         assert coordinates.shape == (len(atom_names), 3)
         assert len(atom_names) == len(set(atom_names))

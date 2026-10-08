@@ -46,6 +46,7 @@ def test_membrane_quality_rejects_protein_outside_bilayer_envelope():
             20.0,
             True,
             [],
+            slab_half_thickness=1.9,
         )
 
 
@@ -70,4 +71,5 @@ def test_membrane_quality_accepts_intersecting_protein_envelope():
         20.0,
         True,
         [],
+        slab_half_thickness=1.9,
     )

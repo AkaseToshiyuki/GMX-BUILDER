@@ -9,6 +9,7 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.io.gro import GROWriter
+from gmxbuilder.modules.export.layout import STRUCTURE_DIR
 from gmxbuilder.modules.verify.system_verify import SystemVerificationModule
 
 
@@ -46,8 +47,8 @@ def test_verifier_creates_output_directory(tmp_path):
 def test_old_gro_with_different_atom_count_is_reported_not_crashed(tmp_path):
     checked = _system(2)
     output = tmp_path / "verify"
-    output.mkdir()
-    GROWriter.write(_system(1).structure, output / "input.gro")
+    (output / STRUCTURE_DIR).mkdir(parents=True)
+    GROWriter.write(_system(1).structure, output / STRUCTURE_DIR / "input.gro")
 
     result = SystemVerificationModule().run(checked, {"output_dir": output})
 

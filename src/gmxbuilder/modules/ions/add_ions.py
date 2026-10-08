@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gmxbuilder.core.component import Component
 from gmxbuilder.core.chemistry import WATER_VOLUME_NM3
+from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
@@ -25,6 +25,7 @@ from gmxbuilder.modules.ions.neutralize import compute_net_charge
 from gmxbuilder.modules.solvation.water_models import WaterRegistry
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
+# Avogadro's constant times 1e-24 L/nm^3: convert mol/L * nm^3 to ion count.
 _AVOGADRO_NM3 = 0.602214076
 _METHODS = {"replace", "random", "mc"}
 
@@ -125,7 +126,7 @@ class IonBuilder(BaseModule):
             }
         else:
             value = self._finite_float(raw_conc, "concentration")
-            concentrations = {name: value for name in cations + anions}
+            concentrations = dict.fromkeys(cations + anions, value)
         return (
             cations,
             anions,
@@ -136,6 +137,11 @@ class IonBuilder(BaseModule):
         )
 
     def run(self, system: System, config: dict) -> ModuleResult:
+        from gmxbuilder.modules.solvation.membrane_exclusion import assert_membrane_water_free
+
+        assert_membrane_water_free(system)
+        from gmxbuilder.pipeline.progress import report_progress
+
         self.validate_config(config)
         cations, anions, concentrations, neutralize, neut_cat, neut_ani = self._parse(config)
         system, pre_topology_log = self._release_validated_crosslink_topology(system)
@@ -160,6 +166,7 @@ class IonBuilder(BaseModule):
                 f"Ion(s) {', '.join(missing)} are not defined by {force_field} "
                 f"with {water_model_name.upper()} water"
             )
+        report_progress(0.1, "Locating replaceable water molecules")
         sites, water_model = self._water_sites(system, water_model_name)
         if not sites:
             raise ModuleConfigError(
@@ -198,18 +205,20 @@ class IonBuilder(BaseModule):
                 solute_charge,
                 0,
                 0,
-                config,
+                {**config, "_solvent_volume_nm3": water_volume},
             )
             return ModuleResult(
                 True,
                 result,
-                pre_topology_log + ["No ions requested; system left unchanged"],
+                pre_topology_log
+                + ["Requested concentrations round to zero ions; system left unchanged"],
             )
         if total_ions > n_water:
             raise ModuleConfigError(
                 f"Requested {total_ions} ions but only {n_water} waters are available"
             )
 
+        report_progress(0.35, "Screening sites against the exclusion radius")
         exclusion = float(config.get("exclusion_radius", 0.35))
         z_regions = self._water_regions(system, sites)
         eligible = self._eligible_sites(system, sites, z_regions, exclusion)
@@ -220,6 +229,7 @@ class IonBuilder(BaseModule):
             )
         rng = np.random.default_rng(system.metadata.get("seed", config.get("seed", 42)))
         method = str(config.get("ion_method", "random")).lower()
+        report_progress(0.55, "Choosing ion positions")
         chosen = self._select_sites(system, eligible, counts, method, rng, exclusion)
         # _select_sites returns all cation sites followed by all anion sites.
         # Preserve the same order when assigning chemical identities, including
@@ -230,6 +240,7 @@ class IonBuilder(BaseModule):
         if len(chosen) != len(ion_names):
             raise ModuleConfigError("Ion placement did not produce every requested ion site")
 
+        report_progress(0.85, "Replacing waters with ions")
         remove_indices = sorted({idx for site in chosen for idx in site.atom_indices})
         stripped = self._remove_atoms(system, remove_indices, len(chosen))
         ion_structure = Structure(
@@ -250,7 +261,7 @@ class IonBuilder(BaseModule):
             solute_charge,
             len(chosen),
             len(remove_indices),
-            config,
+            {**config, "_solvent_volume_nm3": water_volume},
         )
         merged.add_component(
             Component(
@@ -268,7 +279,11 @@ class IonBuilder(BaseModule):
             f"Solute formal charge: {solute_charge:+.0f} e",
             f"Salt ion counts: {salt_counts}",
             f"Neutralizing ion counts: {neutralizing_counts}",
-            f"Replaced {len(chosen)} complete {water_model.full_name} waters with {len(chosen)} ions",
+            (
+                f"Replaced {len(chosen)} complete {water_model.full_name} "
+                f"waters with {len(chosen)} "
+                f"ions"
+            ),
             f"Final formal charge: {solute_charge + ion_charge_total:+.0f} e",
         ]
         return ModuleResult(True, merged, log)
@@ -325,7 +340,9 @@ class IonBuilder(BaseModule):
                 matches = [
                     index
                     for index, (atom_chain, atom_resid, atom_name) in enumerate(
-                        zip(structure.chain_ids, structure.resids, structure.atom_names)
+                        zip(
+                            structure.chain_ids, structure.resids, structure.atom_names, strict=True
+                        )
                     )
                     if str(atom_chain) == chain
                     and int(atom_resid) == resid
@@ -437,21 +454,25 @@ class IonBuilder(BaseModule):
             if solute_indices
             else None
         )
-        eligible: list[_WaterSite] = []
-        for site in sites:
-            if regions and not any(lo <= site.coordinate[2] <= hi for lo, hi in regions):
-                continue
-            if (
-                tree is not None
-                and tree.query(
-                    wrap_periodic_coordinates(site.coordinate, box),
-                    k=1,
-                )[0]
-                < exclusion
-            ):
-                continue
-            eligible.append(site)
-        return eligible
+        if not sites:
+            return []
+        from gmxbuilder.runtime.hardware import query_workers
+
+        coordinates = np.asarray([site.coordinate for site in sites])
+        keep = np.ones(len(sites), dtype=bool)
+        if regions:
+            keep[:] = False
+            for lo, hi in regions:
+                keep |= (coordinates[:, 2] >= lo) & (coordinates[:, 2] <= hi)
+        indices = np.flatnonzero(keep)
+        if tree is not None and len(indices):
+            distances = tree.query(
+                wrap_periodic_coordinates(coordinates[indices], box),
+                k=1,
+                workers=query_workers(len(indices)),
+            )[0]
+            indices = indices[distances >= exclusion]
+        return [sites[index] for index in indices]
 
     def _select_sites(
         self,
@@ -696,21 +717,7 @@ class IonBuilder(BaseModule):
         old_to_new[keep] = np.arange(int(keep.sum()))
         source = system.structure
 
-        def subset(values):
-            return np.asarray(values)[keep].tolist()
-
-        structure = Structure(
-            coordinates=source.coordinates[keep].copy(),
-            box_vectors=source.box_vectors.copy(),
-            atom_names=subset(source.atom_names),
-            resnames=subset(source.resnames),
-            resids=subset(source.resids),
-            chain_ids=subset(source.chain_ids),
-            segids=subset(source.segids),
-            elements=subset(source.elements),
-            occupancies=subset(source.occupancies),
-            tempfactors=subset(source.tempfactors),
-        )
+        structure = source.take(np.flatnonzero(keep))
         components: list[Component] = []
         remaining = waters_removed
         removed_set = set(remove_indices)
@@ -759,6 +766,17 @@ class IonBuilder(BaseModule):
             "neutralizing_counts": dict(neutralizing_counts),
             "total_counts": dict(total_counts),
             "concentrations_m": dict(concentrations),
+            "achieved_concentrations_m": {
+                name: count / (_AVOGADRO_NM3 * config["_solvent_volume_nm3"])
+                for name, count in total_counts.items()
+            }
+            if config.get("_solvent_volume_nm3", 0) > 0
+            else {},
+            "solvent_volume_nm3": config.get("_solvent_volume_nm3"),
+            "concentration_basis": (
+                "initial replaceable water count times 0.0299 nm^3; includes neutralization ions"
+            ),
+            "water_volume_per_molecule_nm3": WATER_VOLUME_NM3,
             "solute_charge_e": float(solute_charge),
             "ion_charge_e": float(ion_charge_total),
             "final_charge_e": float(solute_charge + ion_charge_total),
@@ -775,7 +793,6 @@ class IonBuilder(BaseModule):
                 if str(config.get("ion_method", "random")).lower() == "random"
                 else "experimental_heuristic_not_equilibrium_sampling"
             ),
-            "experimental_placement": str(config.get("ion_method", "random")).lower()
-            != "random",
+            "experimental_placement": str(config.get("ion_method", "random")).lower() != "random",
             "exclusion_radius_nm": float(config.get("exclusion_radius", 0.35)),
         }

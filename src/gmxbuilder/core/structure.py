@@ -2,9 +2,29 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 import numpy as np
+
+#: Every field that carries one value per atom.
+#:
+#: Authoritative, because it is used both to validate a Structure and to subset
+#: one. A caller that subsets coordinates in place and then updates a
+#: hand-written list of fields silently leaves the rest at the old length --
+#: which is how ``source_ids`` came to be one release out of step and broke
+#: every membrane build that merges two systems.
+PER_ATOM_FIELDS = (
+    "source_ids",
+    "atom_names",
+    "resnames",
+    "resids",
+    "chain_ids",
+    "segids",
+    "elements",
+    "occupancies",
+    "tempfactors",
+)
 
 
 @dataclass
@@ -26,6 +46,10 @@ class Structure:
     elements: list[str] = field(default_factory=list)
     occupancies: list[float] = field(default_factory=list)
     tempfactors: list[float] = field(default_factory=list)
+
+    # Immutable deposition evidence; source_ids link surviving atoms to records.
+    source_ids: list[str] = field(default_factory=list)
+    source_info: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.coordinates = np.asarray(self.coordinates, dtype=np.float64)
@@ -51,16 +75,16 @@ class Structure:
             self.occupancies = [1.0] * n_atoms
         if not self.tempfactors:
             self.tempfactors = [0.0] * n_atoms
-        fields = {
-            "atom_names": self.atom_names,
-            "resnames": self.resnames,
-            "resids": self.resids,
-            "chain_ids": self.chain_ids,
-            "segids": self.segids,
-            "elements": self.elements,
-            "occupancies": self.occupancies,
-            "tempfactors": self.tempfactors,
-        }
+        if not self.source_ids:
+            self.source_ids = [""] * n_atoms
+        self.validate_atom_fields()
+
+    def validate_atom_fields(self) -> None:
+        """Check mutated structures without padding away evidence of lost atoms."""
+        n_atoms = self.num_atoms
+        if self.coordinates.shape != (n_atoms, 3):
+            raise ValueError("coordinates must have shape (N, 3)")
+        fields = {name: getattr(self, name) for name in PER_ATOM_FIELDS}
         mismatched = [name for name, values in fields.items() if len(values) != n_atoms]
         if mismatched:
             raise ValueError(
@@ -117,49 +141,59 @@ class Structure:
     def append(self, other: Structure) -> Structure:
         """Return new Structure by appending *other*.
 
-        Uses numpy for vectorised concatenation — avoids O(N) Python list copies
-        that become a bottleneck for large systems (>100k atoms).
+        Every registered per-atom field follows the same concatenation.
         """
-        new_coords = np.vstack([self.coordinates, other.coordinates])
-
-        # Convert to numpy arrays for fast C-level concatenation, then back to lists
-        def _cat(arr_a, arr_b, dtype=str):
-            return np.concatenate(
-                [
-                    np.asarray(arr_a, dtype=dtype),
-                    np.asarray(arr_b, dtype=dtype),
-                ]
-            ).tolist()
-
-        if self.resids and other.resids:
-            shift = max(self.resids) + 1 - min(other.resids)
-        else:
-            shift = 0
-        shifted_resids = np.asarray(other.resids, dtype=int) + shift
-
+        self.validate_atom_fields()
+        other.validate_atom_fields()
+        fields = {
+            name: list(getattr(self, name)) + list(getattr(other, name)) for name in PER_ATOM_FIELDS
+        }
+        shift = max(self.resids) + 1 - min(other.resids) if self.resids and other.resids else 0
+        fields["resids"] = list(self.resids) + [number + shift for number in other.resids]
         return Structure(
-            coordinates=new_coords,
+            coordinates=np.vstack([self.coordinates, other.coordinates]),
             box_vectors=self.box_vectors.copy(),
-            atom_names=_cat(self.atom_names, other.atom_names),
-            resnames=_cat(self.resnames, other.resnames),
-            resids=self.resids + shifted_resids.tolist(),
-            chain_ids=_cat(self.chain_ids, other.chain_ids),
-            segids=_cat(self.segids, other.segids),
-            elements=_cat(self.elements, other.elements),
-            occupancies=_cat(self.occupancies, other.occupancies, dtype=float),
-            tempfactors=_cat(self.tempfactors, other.tempfactors, dtype=float),
+            **fields,
+            source_info=_merge_sources(self.source_info, other.source_info),
         )
 
     def copy(self) -> Structure:
+        self.validate_atom_fields()
         return Structure(
             coordinates=self.coordinates.copy(),
             box_vectors=self.box_vectors.copy(),
-            atom_names=list(self.atom_names),
-            resnames=list(self.resnames),
-            resids=list(self.resids),
-            chain_ids=list(self.chain_ids),
-            segids=list(self.segids),
-            elements=list(self.elements),
-            occupancies=list(self.occupancies),
-            tempfactors=list(self.tempfactors),
+            **{name: list(getattr(self, name)) for name in PER_ATOM_FIELDS},
+            source_info=copy.deepcopy(self.source_info),
         )
+
+    def take(self, indices) -> Structure:
+        """Select atoms without converting or dropping deposition evidence."""
+        self.validate_atom_fields()
+        indices = np.asarray(indices, dtype=int)
+        if indices.ndim != 1:
+            raise ValueError("Atom selection must be one-dimensional")
+        fields = {name: [getattr(self, name)[i] for i in indices] for name in PER_ATOM_FIELDS}
+        return Structure(
+            self.coordinates[indices].copy(),
+            self.box_vectors.copy(),
+            **fields,
+            source_info=copy.deepcopy(self.source_info),
+        )
+
+    def select_atoms(self, indices) -> None:
+        """Select in place only after all arrays have been validated and prepared."""
+        selected = self.take(indices)
+        self.coordinates = selected.coordinates
+        for name in PER_ATOM_FIELDS:
+            setattr(self, name, getattr(selected, name))
+
+
+def _merge_sources(left, right):
+    """Flatten source documents instead of recursively growing append trees."""
+    documents = {}
+    for source in (left, right):
+        for item in source.get("documents", [source]) if source else []:
+            documents[item["sha256"] if "sha256" in item else repr(item)] = item
+    if len(documents) == 1:
+        return copy.deepcopy(next(iter(documents.values())))
+    return {"documents": copy.deepcopy(list(documents.values()))} if documents else {}

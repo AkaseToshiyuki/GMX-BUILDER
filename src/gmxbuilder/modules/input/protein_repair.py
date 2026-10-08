@@ -9,20 +9,18 @@ user review.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import numpy as np
 
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 
-
 _BACKBONE = {"N", "CA", "C", "O"}
 
-# Parent trees are used only to decide whether an incomplete side chain is
-# unambiguous enough to repair.  Ring closure bonds are intentionally omitted:
-# every observed atom must still have at least one intact path to CA.
+# Parent trees describe side-chain paths back to CA. Eligibility requires an
+# intact observed path; placement and validation add ring closures separately.
 _SIDECHAIN_PARENTS: dict[str, dict[str, str]] = {
     "ALA": {"CB": "CA"},
     "ARG": {"CB": "CA", "CG": "CB", "CD": "CG", "NE": "CD", "CZ": "NE", "NH1": "CZ", "NH2": "CZ"},
@@ -115,6 +113,26 @@ def _protein_residue_groups(
         )
         groups.setdefault(key, []).append(index)
     return groups
+
+
+def normalize_repair_atom_names(structure: Structure) -> int:
+    """Use PDB heavy-atom names before testing whether atoms are missing.
+
+    CHARMM's ILE CD is the same atom as PDB's CD1. Force-field assignment
+    subsequently converts the PDB name to its selected RTP dialect.
+    """
+    renamed = 0
+    for (chain, resid, residue), indices in _protein_residue_groups(structure).items():
+        if residue != "ILE":
+            continue
+        names = {structure.atom_names[index].strip() for index in indices}
+        if "CD" in names and "CD1" in names:
+            raise ModuleConfigError(f"ILE {chain or '?'}:{resid} contains both CD and CD1")
+        for index in indices:
+            if structure.atom_names[index].strip() == "CD":
+                structure.atom_names[index] = "CD1"
+                renamed += 1
+    return renamed
 
 
 def assess_repairable_missing_atoms(
@@ -245,7 +263,17 @@ def _structure_from_fixer(fixer, original: Structure) -> Structure:
         occupancies.append(occupancy)
         tempfactors.append(tempfactor)
 
+    original_ids = {
+        _atom_key(original, i): original.source_ids[i] for i in range(original.num_atoms)
+    }
     return Structure(
+        source_info=original.source_info.copy(),
+        source_ids=[
+            original_ids.get((chain, resid, resname, name), "")
+            for chain, resid, resname, name in zip(
+                chain_ids, resids, resnames, atom_names, strict=True
+            )
+        ],
         coordinates=coordinates,
         box_vectors=original.box_vectors.copy(),
         atom_names=atom_names,
@@ -298,25 +326,22 @@ def _validate_repair(
             details.append("unexpected=" + ",".join(key[-1] for key in extra[:10]))
         raise ModuleConfigError("Automatic repair atom-set mismatch (" + "; ".join(details) + ")")
 
-    # Reject gross external overlaps.  Same-residue atoms are excluded because
-    # their covalent geometry is checked separately below.
-    for key in sorted(actual_added):
-        new_index = repaired_by_key[key]
-        for old_key, old_index in original_by_key.items():
-            if key[:3] == old_key[:3]:
-                continue
-            distance = float(
-                np.linalg.norm(
-                    repaired.coordinates[new_index] - repaired.coordinates[repaired_by_key[old_key]]
-                )
-            )
-            if distance < 0.075:
-                raise ModuleConfigError(
-                    f"Automatic repair created a severe clash: {key[0] or '?'}:{key[1]} "
-                    f"{key[2]} {key[3]} is {distance:.3f} nm from "
-                    f"{old_key[0] or '?'}:{old_key[1]} {old_key[2]} {old_key[3]}"
-                )
+    from gmxbuilder.modules.input.geometry_validation import (
+        coincident_atom_issues,
+        protein_geometry_issues,
+    )
 
+    geometry = protein_geometry_issues(repaired) + coincident_atom_issues(repaired)
+    if geometry:
+        raise ModuleConfigError(
+            "Automatic repair failed geometry validation: " + geometry[0]["message"]
+        )
+
+    from gmxbuilder.modules.input.geometry_validation import added_atom_clashes
+
+    clashes = added_atom_clashes(repaired, [repaired_by_key[key] for key in actual_added])
+    if clashes:
+        raise ModuleConfigError("Automatic repair failed clash validation: " + clashes[0])
     records: list[RepairRecord] = []
     for residue_key, atoms in sorted(candidates.items()):
         chain, resid, resname = residue_key
@@ -364,6 +389,48 @@ def repair_standard_protein_heavy_atoms(
     if not candidates:
         return structure, []
 
+    # Three reproducible placement proposals bound cost without relaxing validation.
+    # Only new atoms vary; every accepted proposal must preserve deposited coordinates.
+    for seed in (1, 2, 3):
+        repaired = _place_missing_atoms(structure, candidates, seed)
+        from gmxbuilder.modules.input.sidechain_placement import (
+            relieve_added_sidechain_clashes,
+            restore_added_sidechain_templates,
+        )
+
+        relieve_added_sidechain_clashes(structure, repaired, candidates)
+        try:
+            records = _validate_repair(structure, repaired, candidates)
+        except ModuleConfigError as exc:
+            if not _placement_validation_failed(exc):
+                raise
+            # Backend relaxation can distort new-atom angles. Torsion rotation
+            # alone cannot repair them, so try an undeformed template subtree.
+            restore_added_sidechain_templates(structure, repaired, candidates)
+            relieve_added_sidechain_clashes(structure, repaired, candidates)
+            try:
+                records = _validate_repair(structure, repaired, candidates)
+            except ModuleConfigError as fallback_exc:
+                if seed == 3 or not _placement_validation_failed(fallback_exc):
+                    raise
+                continue
+        repaired.source_info["sidechain_repair_seed"] = seed
+        return repaired, records
+    raise AssertionError("Repair attempts exhausted without a result")
+
+
+def _placement_validation_failed(error):
+    """Only geometric proposal failures are retryable; identity errors are not."""
+    return str(error).startswith(
+        (
+            "Automatic repair failed geometry validation:",
+            "Automatic repair failed clash validation:",
+        )
+    )
+
+
+def _place_missing_atoms(structure, candidates, seed):
+    """Place one candidate from the original structure, never a previous failed repair."""
     try:
         from pdbfixer import PDBFixer
     except ImportError as exc:
@@ -374,11 +441,12 @@ def repair_standard_protein_heavy_atoms(
         ) from exc
 
     from tempfile import TemporaryDirectory
-    from gmxbuilder.io.pdb import PDBWriter
+
+    from gmxbuilder.io.input_document import write_mmcif
 
     with TemporaryDirectory(prefix="gmxbuilder-repair-") as tmpdir:
-        input_path = f"{tmpdir}/input.pdb"
-        PDBWriter.write(structure, input_path, title="GMXBUILDER repair input")
+        input_path = f"{tmpdir}/input.cif"
+        write_mmcif(structure, input_path)
         try:
             fixer = PDBFixer(filename=input_path)
             fixer.findMissingResidues()
@@ -422,15 +490,14 @@ def repair_standard_protein_heavy_atoms(
         fixer.missingAtoms = selected
         fixer.missingTerminals = {}
         try:
-            fixer.addMissingAtoms()
+            fixer.addMissingAtoms(seed=seed)
         except Exception as exc:
             raise ModuleConfigError(
                 f"PDBFixer could not place the missing protein heavy atoms: {exc}"
             ) from exc
         repaired = _structure_from_fixer(fixer, structure)
 
-    records = _validate_repair(structure, repaired, candidates)
-    return repaired, records
+    return repaired
 
 
 def repair_report(records: Iterable[RepairRecord]) -> dict:

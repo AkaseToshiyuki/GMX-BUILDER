@@ -8,6 +8,31 @@ import pytest
 from gmxbuilder.runtime import hardware
 
 
+def test_cli_defers_numerical_import_until_resource_configuration():
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import gmxbuilder.app; assert 'numpy' not in sys.modules; "
+            "from gmxbuilder.runtime.hardware import configure_native_threads; "
+            "configure_native_threads(2); import numpy; import os; "
+            "assert os.environ['OPENBLAS_NUM_THREADS'] == '2'",
+        ],
+        check=True,
+    )
+
+
+def test_spatial_queries_use_only_amortized_task_threads():
+    with hardware.task_thread_scope(4):
+        assert hardware.query_workers(64) == 1
+        assert hardware.query_workers(50000) == 4
+    with hardware.task_thread_scope(1):
+        assert hardware.query_workers(50000) == 1
+
+
 _ENV_KEYS = (
     "GMX_BIN",
     "GMXBUILDER_CPU_CORES",

@@ -8,18 +8,37 @@ only the requested CUDA devices to all child processes.
 from __future__ import annotations
 
 import ctypes
-from dataclasses import asdict, dataclass
-from functools import lru_cache
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
-
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass
+from functools import lru_cache
+from pathlib import Path
 
 _gpu_probe_cache: dict[tuple[str, tuple[str, ...], int], tuple[bool, str | None]] = {}
 _COMMAND_TOKEN = re.compile(r"^[A-Za-z0-9_./+-]+$")
+
+
+def query_workers(points: int, budget: int | None = None) -> int:
+    """Amortize native query startup without exceeding this task's budget."""
+    ceiling = current_task_threads() if budget is None else max(1, int(budget))
+    return max(1, min(ceiling, int(points) // 2048))
+
+
+def configure_native_threads(threads: int) -> None:
+    """Set native-library startup limits before importing numerical libraries."""
+    for variable in (
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        os.environ[variable] = str(max(1, int(threads)))
 
 
 @dataclass(frozen=True)
@@ -440,13 +459,7 @@ def configure_runtime_resources(
     # OMP_NUM_THREADS or OMP_THREAD_LIMIT on the parent process: GROMACS calls
     # use an explicit -ntomp value and reject a conflicting inherited OpenMP
     # environment. Tools that require OpenMP receive a scoped child env.
-    for variable in (
-        "OPENBLAS_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-        "VECLIB_MAXIMUM_THREADS",
-    ):
-        os.environ[variable] = str(selected_task_threads)
+    configure_native_threads(selected_task_threads)
 
     if not executable:
         warnings.append("GROMACS executable was not found")
@@ -492,6 +505,70 @@ def configured_task_threads() -> int:
     return int(os.environ.get("GMXBUILDER_TASK_THREADS", "1"))
 
 
+# A task's CPU budget is decided when it starts and never changes: GROMACS
+# fixes its thread count when mdrun launches, so there is nothing to give back
+# to a task that arrives later. Deciding at start also means the first task on
+# an idle machine gets the whole allocation instead of a fixed fraction of it.
+_task_threads: ContextVar[int | None] = ContextVar("gmxbuilder_task_threads", default=None)
+
+
+def task_thread_allocation(
+    running_tasks: int,
+    *,
+    cpu_cores: int | None = None,
+    max_parallel: int | None = None,
+) -> int:
+    """Cores for a task starting now, given how many are already running.
+
+    *running_tasks* counts the task being started. One task gets the whole
+    allocation; n tasks get an equal share; once the machine is at its
+    concurrency ceiling each task is capped at two cores, because splitting
+    further buys less than the scheduling cost of the split. Every task keeps
+    at least one core.
+    """
+    cores = max(1, int(cpu_cores if cpu_cores is not None else configured_cpu_cores()))
+    ceiling = max(1, int(max_parallel if max_parallel is not None else configured_task_slots()))
+    running = max(1, int(running_tasks))
+    if ceiling == 1:
+        return max(1, cores // running)
+    if running >= ceiling:
+        return min(2, cores)
+    return max(1, cores // running)
+
+
+@contextmanager
+def task_thread_scope(threads: int) -> Iterator[None]:
+    """Give the work running in this thread a specific CPU budget."""
+    token = _task_threads.set(max(1, int(threads)))
+    try:
+        yield
+    finally:
+        _task_threads.reset(token)
+
+
+def scoped_task_threads() -> int | None:
+    """This task's own budget, or None when the caller is not inside a task.
+
+    `current_task_threads` falls back to the deployment ceiling, which is 1
+    where nothing configures it -- correct as a default for admission, wrong as
+    a cap on a tool that is not running under a task budget at all.
+    """
+    scoped = _task_threads.get()
+    return None if scoped is None else max(1, int(scoped))
+
+
+def current_task_threads() -> int:
+    """Return this task's own budget, or the deployment maximum outside one.
+
+    Distinct from `configured_task_threads`, which stays the deployment-wide
+    ceiling that admission and validation are expressed in.
+    """
+    scoped = _task_threads.get()
+    if scoped is not None:
+        return max(1, int(scoped))
+    return configured_task_threads()
+
+
 def configured_task_slots() -> int:
     """Return how many full per-task CPU budgets fit in the allocation."""
     configured = os.environ.get("GMXBUILDER_TASK_SLOTS", "").strip()
@@ -521,13 +598,12 @@ def configured_gpu_devices() -> tuple[str, ...]:
 
 
 def lipid_worker_threads(concurrency: int = 1) -> int:
+    """Threads for lipid equilibration, bounded by this task's own budget."""
+    budget = current_task_threads()
     configured = os.environ.get("GMXBUILDER_LIPID_THREADS", "").strip()
     if configured:
-        return min(configured_task_threads(), max(1, int(configured)))
-    return min(
-        configured_task_threads(),
-        max(1, configured_cpu_cores() // max(1, int(concurrency))),
-    )
+        return min(budget, max(1, int(configured)))
+    return min(budget, max(1, configured_cpu_cores() // max(1, int(concurrency))))
 
 
 def normalize_simulation_hardware(config: object | None) -> dict[str, object]:

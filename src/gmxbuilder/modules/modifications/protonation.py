@@ -10,9 +10,10 @@ Supports residue renaming for CHARMM/AMBER force-field conventions.
 from __future__ import annotations
 
 import dataclasses
+import math
+import sys
 import tempfile
 from pathlib import Path
-
 
 # ---------------------------------------------------------------------------
 # Standard model-pKa values (solvent-exposed residues in unfolded state)
@@ -36,6 +37,56 @@ _MODEL_PKA: dict[str, dict[str, float]] = {
 
 
 # ---------------------------------------------------------------------------
+# Free-terminus modelling boundary
+# ---------------------------------------------------------------------------
+# GMXBUILDER instantiates free termini only as the canonical charged templates
+# (NH3+ and COO-); no neutral terminal microstate exists.  How defensible that
+# assignment is depends on how populated the canonical form actually is at the
+# requested pH, so both boundaries below are derived from the model pKa values
+# above rather than written down as pH constants.  Changing a pKa moves the
+# boundaries with it.
+#
+# MD requires one discrete state per titratable group and the convention is to
+# assign the dominant one.  Below the pKa the charged assignment is therefore an
+# approximation; above it the charged form is the *minority* species, which
+# makes the assignment wrong rather than merely approximate.  That is why the
+# hard boundary is the pKa itself and not a chosen number.
+CANONICAL_TERMINUS_DOMINANT_FRACTION = 0.90
+CANONICAL_TERMINUS_MAJORITY_FRACTION = 0.50
+
+
+def canonical_terminus_fraction(terminus: str, pH: float) -> float:
+    """Return the populated fraction of the canonical charged state.
+
+    ``NTER`` is canonical as NH3+, which dominates *below* its pKa; ``CTER`` is
+    canonical as COO-, which dominates *above* its pKa.
+    """
+    key = terminus.strip().upper()
+    try:
+        pka = _MODEL_PKA[key]["neutral"]
+    except KeyError as exc:
+        raise KeyError(f"No model pKa for terminus {terminus!r}") from exc
+    exponent = (pH - pka) if key == "NTER" else (pka - pH)
+    return 1.0 / (1.0 + 10.0**exponent)
+
+
+def free_terminus_ph_window(fraction: float) -> tuple[float, float]:
+    """Return the pH interval where both canonical termini reach *fraction*.
+
+    Inverting the Henderson-Hasselbalch relation: the C-terminus sets the lower
+    bound and the N-terminus the upper one.  At ``0.50`` this collapses to the
+    two pKa values themselves.
+    """
+    if not 0.0 < fraction < 1.0:
+        raise ValueError("fraction must lie strictly between 0 and 1")
+    offset = math.log10(fraction / (1.0 - fraction))
+    return (
+        _MODEL_PKA["CTER"]["neutral"] + offset,
+        _MODEL_PKA["NTER"]["neutral"] - offset,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Protonation states and residue names (CHARMM / AMBER conventions)
 # ---------------------------------------------------------------------------
 
@@ -44,38 +95,109 @@ _MODEL_PKA: dict[str, dict[str, float]] = {
 class ProtonationState:
     """A possible protonation state of a residue at a given pH."""
 
-    residue_name: str  # new residue name, e.g. "HSD"
+    state_id: str  # naming-independent identity, e.g. "HIS_ND"
+    residue_name: str  # resolved for one force field, e.g. "HSD" or "HID"
     charge: int  # net sidechain charge
     description: str  # human-readable
 
 
-_TITRATABLE_STATES: dict[str, list[ProtonationState]] = {
+# Amber and CHARMM disagree on the residue name of almost every non-default
+# protonation state, and their .rtp files are the authority:
+#
+#   amber14sb  ASH  GLH  LYN  CYM  HID  HIE  HIP
+#   charmm36m  ASPP GLUP LSN  CYM  HSD  HSE  HSP
+#
+# A single hard-coded table cannot serve both. The one that used to be here
+# mixed them -- CHARMM histidines with Amber acids -- so a CHARMM build failed
+# on ASH and an Amber build would have failed on HSD.
+_STATE_DEFINITIONS: dict[str, list[tuple[str, dict[str, str], int, str]]] = {
     "HIS": [
-        ProtonationState("HSD", 0, "Neutral (proton on Nδ)"),
-        ProtonationState("HSE", 0, "Neutral (proton on Nε)"),
-        ProtonationState("HSP", 1, "Doubly protonated (+1)"),
+        ("HIS_ND", {"amber": "HID", "charmm": "HSD", "opls": "HISD"}, 0, "Neutral (proton on Nδ)"),
+        ("HIS_NE", {"amber": "HIE", "charmm": "HSE", "opls": "HISE"}, 0, "Neutral (proton on Nε)"),
+        ("HIS_P", {"amber": "HIP", "charmm": "HSP", "opls": "HISH"}, 1, "Doubly protonated (+1)"),
     ],
     "ASP": [
-        ProtonationState("ASP", -1, "Deprotonated (-1) — aspartate"),
-        ProtonationState("ASH", 0, "Neutral (0) — aspartic acid"),
+        ("ASP", {"amber": "ASP", "charmm": "ASP"}, -1, "Deprotonated (-1) — aspartate"),
+        ("ASP_H", {"amber": "ASH", "charmm": "ASPP"}, 0, "Neutral (0) — aspartic acid"),
     ],
     "GLU": [
-        ProtonationState("GLU", -1, "Deprotonated (-1) — glutamate"),
-        ProtonationState("GLH", 0, "Neutral (0) — glutamic acid"),
+        ("GLU", {"amber": "GLU", "charmm": "GLU"}, -1, "Deprotonated (-1) — glutamate"),
+        ("GLU_H", {"amber": "GLH", "charmm": "GLUP"}, 0, "Neutral (0) — glutamic acid"),
     ],
     "LYS": [
-        ProtonationState("LYS", 1, "Protonated (+1) — lysine"),
-        ProtonationState("LYN", 0, "Neutral (0) — deprotonated"),
+        ("LYS_P", {"amber": "LYS", "charmm": "LYS"}, 1, "Protonated (+1) — lysine"),
+        ("LYS_N", {"amber": "LYN", "charmm": "LSN"}, 0, "Neutral (0) — deprotonated"),
     ],
     "CYS": [
-        ProtonationState("CYS", 0, "Protonated (0) — free cysteine"),
-        ProtonationState("CYM", -1, "Deprotonated (-1) — thiolate"),
+        ("CYS", {"amber": "CYS", "charmm": "CYS"}, 0, "Protonated (0) — free cysteine"),
+        ("CYS_M", {"amber": "CYM", "charmm": "CYM"}, -1, "Deprotonated (-1) — thiolate"),
     ],
     "TYR": [
-        ProtonationState("TYR", 0, "Protonated (0) — tyrosine"),
-        ProtonationState("TYM", -1, "Deprotonated (-1) — tyrosinate"),
+        ("TYR", {"amber": "TYR", "charmm": "TYR"}, 0, "Protonated (0) — tyrosine"),
+        # TYM is provided by neither shipped force field, so this state is
+        # filtered out below rather than offered and then rejected at grompp.
+        ("TYR_M", {"amber": "TYM", "charmm": "TYM"}, -1, "Deprotonated (-1) — tyrosinate"),
     ],
 }
+
+# Used when no force field is known. Amber is the project default.
+_DEFAULT_FAMILY = "amber"
+
+
+def _family_for(force_field: str | None) -> str:
+    if not force_field:
+        return _DEFAULT_FAMILY
+    try:
+        from gmxbuilder.modules.forcefield.catalog import force_field_family
+
+        family = str(force_field_family(force_field)).strip().lower()
+    except Exception:  # noqa: BLE001 - fall back to the name itself
+        family = str(force_field).strip().lower()
+    if family.startswith("opls"):
+        return "opls"
+    return "charmm" if family.startswith("charmm") else _DEFAULT_FAMILY
+
+
+def _force_field_provides(force_field: str | None) -> set[str] | None:
+    """Residue names this force field actually defines, or None if unknown."""
+    if not force_field:
+        return None
+    try:
+        from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
+
+        rtp = load_force_field_rtp(force_field)
+    except Exception:  # noqa: BLE001 - absent parameters must not block the UI
+        return None
+    residues = getattr(rtp, "_residues", None)
+    if not isinstance(residues, dict) or not residues:
+        return None
+    return {str(name).strip().upper() for name in residues}
+
+
+def resolve_titratable_states(force_field: str | None = None) -> dict[str, list[ProtonationState]]:
+    """Return the protonation states *this* force field can actually build.
+
+    Names are resolved for the force field's family, then filtered against its
+    residue templates. Offering a state the force field has no template for is
+    what produced "residue ASH has no charmm36m template" several steps later,
+    with a message that blamed the input structure.
+    """
+    family = _family_for(force_field)
+    available = _force_field_provides(force_field)
+    resolved: dict[str, list[ProtonationState]] = {}
+    for parent, definitions in _STATE_DEFINITIONS.items():
+        states = []
+        for state_id, names, charge, description in definitions:
+            name = names.get(family, names[_DEFAULT_FAMILY])
+            if available is not None and name.upper() not in available:
+                continue
+            states.append(ProtonationState(state_id, name, charge, description))
+        if states:
+            resolved[parent] = states
+    return resolved
+
+
+_TITRATABLE_STATES: dict[str, list[ProtonationState]] = resolve_titratable_states()
 
 
 # ---------------------------------------------------------------------------
@@ -83,15 +205,22 @@ _TITRATABLE_STATES: dict[str, list[ProtonationState]] = {
 # ---------------------------------------------------------------------------
 
 
-def get_titratable_residues() -> dict[str, list[ProtonationState]]:
-    """Return a copy of the titratable residues dictionary."""
-    return dict(_TITRATABLE_STATES)
+def get_titratable_residues(force_field: str | None = None) -> dict[str, list[ProtonationState]]:
+    """Return the titratable residues, named for *force_field*.
+
+    Passing the force field is what makes the names correct; omitting it falls
+    back to Amber naming and is only appropriate where no force field has been
+    chosen yet.
+    """
+    return resolve_titratable_states(force_field)
 
 
 def assign_protonation(
     residue_name: str,
     pH: float,
     his_tautomer: str = "HSE",
+    force_field: str | None = None,
+    pka_override: float | None = None,
 ) -> dict:
     """Determine the protonation state of a single residue at a given pH.
 
@@ -102,7 +231,16 @@ def assign_protonation(
     pH : float
         Target pH.
     his_tautomer : str
-        Preferred HIS tautomer when neutral: "HSD" (Nδ) or "HSE" (Nε).
+        Preferred HIS tautomer when neutral: "HSD" (Nδ) or "HSE" (Nε). These
+        are selector tokens, not output names -- under Amber the same choice
+        yields HID or HIE.
+    force_field : str or None
+        Decides the residue names, which differ between Amber and CHARMM.
+    pka_override : float or None
+        Use this pKa instead of the model value -- an environment-sensitive
+        prediction from PROPKA. The selection itself is deliberately shared
+        with the model-pKa path: a second copy of it drifted, and hard-coded
+        Amber names in that copy are what broke CHARMM builds.
 
     Returns
     -------
@@ -110,7 +248,8 @@ def assign_protonation(
         original, assigned_name, charge, state_label, pKa, is_titratable
     """
     rn = residue_name.strip().upper()
-    if rn not in _TITRATABLE_STATES:
+    titratable = resolve_titratable_states(force_field)
+    if rn not in titratable:
         return {
             "original": rn,
             "assigned_name": rn,
@@ -122,49 +261,50 @@ def assign_protonation(
 
     pka = list(_MODEL_PKA.get(rn, {}).values())
     pka_val = pka[0] if pka else 7.0
-    states = _TITRATABLE_STATES[rn]
+    if pka_override is not None:
+        pka_val = float(pka_override)
+    states = titratable[rn]
 
-    # Assign based on pH vs pKa
+    # Assign based on pH vs pKa. The desired state is chosen first and
+    # resolved second, because a force field need not provide every state --
+    # neither shipped one has a deprotonated tyrosine.
     if rn in ("ASP", "GLU"):
-        # Acidic: protonated (neutral) below pKa, deprotonated (-1) above
-        if pH < pka_val:
-            state = next(s for s in states if s.charge == 0)  # ASH/GLH
-        else:
-            state = next(s for s in states if s.charge == -1)  # ASP/GLU
-
-    elif rn in ("LYS", "TYR"):
-        # Basic: protonated above pKa? No — actually:
-        # LYS: +1 below pKa, neutral above
-        # TYR: neutral below pKa, -1 above
-        if rn == "LYS":
-            if pH < pka_val:
-                state = next(s for s in states if s.charge == 1)  # LYS
-            else:
-                state = next(s for s in states if s.charge == 0)  # LYN
-        else:  # TYR
-            if pH < pka_val:
-                state = next(s for s in states if s.charge == 0)  # TYR
-            else:
-                state = next(s for s in states if s.charge == -1)  # TYM
-
+        # Acidic: neutral below pKa, deprotonated (-1) above.
+        wanted_charge = 0 if pH < pka_val else -1
+        wanted_id = None
+    elif rn == "LYS":
+        # +1 below pKa, neutral above.
+        wanted_charge = 1 if pH < pka_val else 0
+        wanted_id = None
+    elif rn == "TYR":
+        # Neutral below pKa, tyrosinate above.
+        wanted_charge = 0 if pH < pka_val else -1
+        wanted_id = None
     elif rn == "CYS":
-        # Neutral below pKa, thiolate above
-        if pH < pka_val:
-            state = next(s for s in states if s.charge == 0)  # CYS
-        else:
-            state = next(s for s in states if s.charge == -1)  # CYM
-
+        # Neutral below pKa, thiolate above.
+        wanted_charge = 0 if pH < pka_val else -1
+        wanted_id = None
     elif rn == "HIS":
-        # +1 below pKa, neutral above
         if pH < pka_val:
-            state = next(s for s in states if s.charge == 1)  # HSP
+            wanted_charge, wanted_id = 1, None
         else:
-            # Pick preferred tautomer
-            if his_tautomer == "HSD":
-                state = next(s for s in states if s.residue_name == "HSD")
-            else:
-                state = next(s for s in states if s.residue_name == "HSE")
+            wanted_charge = 0
+            wanted_id = (
+                "HIS_ND" if str(his_tautomer).upper() in {"HSD", "HID", "HISD"} else "HIS_NE"
+            )
     else:
+        wanted_charge, wanted_id = states[0].charge, states[0].state_id
+
+    state = None
+    if wanted_id is not None:
+        state = next((s for s in states if s.state_id == wanted_id), None)
+    if state is None:
+        state = next((s for s in states if s.charge == wanted_charge), None)
+    unavailable = state is None
+    if unavailable:
+        # The chemistry calls for a state this force field cannot build. Say
+        # so and use what it does have, rather than emitting a residue name
+        # that fails at grompp with a message about the input structure.
         state = states[0]
 
     return {
@@ -174,6 +314,7 @@ def assign_protonation(
         "state_label": state.description,
         "pKa": round(pka_val, 1),
         "is_titratable": True,
+        "force_field_lacks_state": unavailable,
         "ambiguous_at_pka": abs(float(pH) - pka_val) < 1e-9,
         "alternatives": [
             {"name": s.residue_name, "charge": s.charge, "label": s.description} for s in states
@@ -185,6 +326,7 @@ def assign_all_protonations(
     residue_list: list[str],
     pH: float = 7.0,
     his_tautomer: str = "HSE",
+    force_field: str | None = None,
 ) -> list[dict]:
     """Assign protonation states to a list of residues.
 
@@ -202,7 +344,7 @@ def assign_all_protonations(
     """
     results = []
     for i, rn in enumerate(residue_list):
-        result = assign_protonation(rn, pH=pH, his_tautomer=his_tautomer)
+        result = assign_protonation(rn, pH=pH, his_tautomer=his_tautomer, force_field=force_field)
         result["index"] = i
         results.append(result)
     return results
@@ -284,7 +426,20 @@ def predict_pka_from_pdb(pdb_path: str | Path) -> list[dict]:
         # .pka file as if it were complete.
         failures: list[str] = []
         executable_found = False
-        for cmd in ["propka3", "propka"]:
+        # PROPKA is a project dependency, so it lives in the environment running
+        # this code -- but that environment's bin directory is not necessarily
+        # on PATH. The systemd unit inherits a plain system PATH, so a bare
+        # "propka3" was never found there and every structure silently fell
+        # back to model pKa values while reporting that PROPKA could not
+        # produce them. Look beside this interpreter first.
+        interpreter_bin = Path(sys.executable).parent
+        candidates: list[str] = []
+        for name in ("propka3", "propka"):
+            beside = interpreter_bin / name
+            if beside.exists():
+                candidates.append(str(beside))
+            candidates.append(name)
+        for cmd in candidates:
             try:
                 result = subprocess.run(
                     [cmd, "-q", str(tmp_pdb)],
@@ -392,6 +547,7 @@ def assign_protonation_with_propka(
     pka_predictions: list[dict],
     pH: float = 7.0,
     his_tautomer: str = "HSE",
+    force_field: str | None = None,
 ) -> list[dict]:
     """Combine PROPKA pKa predictions with protonation assignment.
 
@@ -422,60 +578,24 @@ def assign_protonation_with_propka(
         pka_data = pka_lookup.get(key)
 
         # Get the baseline assignment
-        base = assign_protonation(rn, pH=pH, his_tautomer=his_tautomer)
+        base = assign_protonation(rn, pH=pH, his_tautomer=his_tautomer, force_field=force_field)
 
         if pka_data and base["is_titratable"]:
             # Use PROPKA-predicted pKa instead of model pKa
             predicted_pka = pka_data["predicted_pKa"]
             pka_shift = pka_data["shift"]
 
-            # Re-determine protonation using predicted pKa
-            if rn in ("ASP", "GLU"):
-                if pH < predicted_pka:
-                    base["assigned_name"] = "ASH" if rn == "ASP" else "GLH"
-                    base["charge"] = 0
-                    base["state_label"] = f"Neutral (pKa_pred={predicted_pka:.1f})"
-                else:
-                    base["assigned_name"] = rn
-                    base["charge"] = -1
-                    base["state_label"] = f"Deprotonated (pKa_pred={predicted_pka:.1f})"
-            elif rn == "HIS":
-                if pH < predicted_pka:
-                    base["assigned_name"] = "HSP"
-                    base["charge"] = 1
-                    base["state_label"] = f"Protonated +1 (pKa_pred={predicted_pka:.1f})"
-                else:
-                    base["assigned_name"] = his_tautomer
-                    base["charge"] = 0
-                    base["state_label"] = f"Neutral {his_tautomer} (pKa_pred={predicted_pka:.1f})"
-            elif rn == "LYS":
-                if pH < predicted_pka:
-                    base["assigned_name"] = "LYS"
-                    base["charge"] = 1
-                    base["state_label"] = f"Protonated +1 (pKa_pred={predicted_pka:.1f})"
-                else:
-                    base["assigned_name"] = "LYN"
-                    base["charge"] = 0
-                    base["state_label"] = f"Neutral (pKa_pred={predicted_pka:.1f})"
-            elif rn == "CYS":
-                if pH < predicted_pka:
-                    base["assigned_name"] = "CYS"
-                    base["charge"] = 0
-                    base["state_label"] = f"Protonated (pKa_pred={predicted_pka:.1f})"
-                else:
-                    base["assigned_name"] = "CYM"
-                    base["charge"] = -1
-                    base["state_label"] = f"Thiolate (pKa_pred={predicted_pka:.1f})"
-            elif rn == "TYR":
-                if pH < predicted_pka:
-                    base["assigned_name"] = "TYR"
-                    base["charge"] = 0
-                    base["state_label"] = f"Protonated (pKa_pred={predicted_pka:.1f})"
-                else:
-                    base["assigned_name"] = "TYM"
-                    base["charge"] = -1
-                    base["state_label"] = f"Tyrosinate (pKa_pred={predicted_pka:.1f})"
-
+            # Re-run the one selection with the predicted pKa. This used to be
+            # a second copy of the same logic carrying hard-coded Amber names,
+            # which is how a CHARMM build ended up asking for ASH.
+            base = assign_protonation(
+                rn,
+                pH=pH,
+                his_tautomer=his_tautomer,
+                force_field=force_field,
+                pka_override=predicted_pka,
+            )
+            base["state_label"] = f"{base['state_label']} (pKa_pred={predicted_pka:.1f})"
             base["predicted_pKa"] = round(predicted_pka, 2)
             base["pKa_shift"] = round(pka_shift, 2)
 

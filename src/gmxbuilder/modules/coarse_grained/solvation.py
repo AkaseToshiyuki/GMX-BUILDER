@@ -8,10 +8,11 @@ from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.modules.coarse_grained.assets import load_manifest
 from gmxbuilder.modules.coarse_grained.backend import build_with_coby, normalize_solvation
 from gmxbuilder.modules.coarse_grained.common import system_from_gro
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGSolvationModule(BaseModule):
+class CGSolvationModule(CGWorkflowAdmission, BaseModule):
     name = "cg_solvation"
     description = "Add regular Martini water without target bulk salt"
 
@@ -30,6 +31,7 @@ class CGSolvationModule(BaseModule):
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         output = system.copy()
         normalized = normalize_solvation(config, output.metadata)
         output.metadata["cg_solvation_config"] = normalized
@@ -43,7 +45,11 @@ class CGSolvationModule(BaseModule):
             interface_thickness = self._bilayer_interface_thickness(output)
             environment["box_z"] = max(
                 interface_thickness + 2.0 * padding,
-                float(protein_extent[2]) + 2.0 * abs(float(environment.get("z_offset", 0.0))) + 1.0,
+                float(environment.get("box_z", 0.0)),
+                # 3.0 nm leaves ~1.5 nm on each side, above the Martini 3
+                # non-bonded cutoff, so the protein does not interact with
+                # its own periodic image along z.
+                float(protein_extent[2]) + 2.0 * abs(float(environment.get("z_offset", 0.0))) + 3.0,
             )
             environment["headgroup_interface_thickness_nm"] = interface_thickness
         else:
@@ -83,7 +89,7 @@ class CGSolvationModule(BaseModule):
         manifest = load_manifest()["lipids"]
         z_values: list[float] = []
         for index, (resname, atom_name) in enumerate(
-            zip(system.structure.resnames, system.structure.atom_names)
+            zip(system.structure.resnames, system.structure.atom_names, strict=True)
         ):
             lipid = manifest.get(str(resname).upper())
             if lipid and str(atom_name).upper() in set(lipid["head_beads"]):

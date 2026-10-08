@@ -58,6 +58,7 @@ _TASK_TYPES: list[TaskType] = [
             "cg_environment",
             "cg_solvation",
             "cg_system",
+            "final_review",
             "simparams",
         ],
         default_config={
@@ -104,6 +105,7 @@ _TASK_TYPES: list[TaskType] = [
             "cg_environment",
             "cg_solvation",
             "cg_system",
+            "final_review",
             "simparams",
         ],
         default_config={
@@ -123,7 +125,10 @@ _TASK_TYPES: list[TaskType] = [
         id="membrane-bilayer",
         category="Membrane",
         title="Bilayer Builder",
-        description="Generate a protein/bilayer complex or bilayer-only system for molecular dynamics simulations",
+        description=(
+            "Generate a protein/bilayer complex or bilayer-only system for molecular dynamics "
+            "simulations"
+        ),
         icon="🫧",
         enabled=True,
         route_slug="BilayerBuilder",
@@ -144,6 +149,7 @@ _TASK_TYPES: list[TaskType] = [
             "membrane",
             "solvation",
             "ions",
+            "final_review",
             "simparams",
         ],
         default_config={
@@ -158,14 +164,21 @@ _TASK_TYPES: list[TaskType] = [
         id="pure-membrane",
         category="Membrane",
         title="Pure Bilayer System",
-        description="Build a relaxed lipid-only bilayer, optionally with water and ions",
+        description="Assemble a lipid-only bilayer, optionally with water and ions",
         icon="🟦",
         enabled=True,
         pipeline="pure_membrane",
         requires_input=False,
         route_slug="PureBilayerSystem",
         required_modules=["forcefield", "membrane"],
-        visible_modules=["forcefield", "membrane", "solvation", "ions", "simparams"],
+        visible_modules=[
+            "forcefield",
+            "membrane",
+            "solvation",
+            "ions",
+            "final_review",
+            "simparams",
+        ],
         default_config={
             "membrane": {"lipid_type": "POPC", "n_lipids_per_leaflet": 150},
             "solvation": {"enabled": True, "box_padding": 2.0},
@@ -178,7 +191,10 @@ _TASK_TYPES: list[TaskType] = [
         id="membrane-monolayer",
         category="Membrane",
         title="Monolayer Builder",
-        description="Generate a protein/monolayer complex or monolayer-only system for molecular dynamics simulations",
+        description=(
+            "Generate a protein/monolayer complex or monolayer-only system for molecular dynamics "
+            "simulations"
+        ),
         icon="🪞",
         enabled=False,
         required_modules=[
@@ -197,6 +213,7 @@ _TASK_TYPES: list[TaskType] = [
             "membrane",
             "solvation",
             "ions",
+            "final_review",
             "simparams",
         ],
     ),
@@ -204,7 +221,10 @@ _TASK_TYPES: list[TaskType] = [
         id="nanodisc-builder",
         category="Membrane",
         title="Nanodisc Builder",
-        description="Generate a lipid-only or protein-embedded nanodisc system for molecular dynamics simulations",
+        description=(
+            "Generate a lipid-only or protein-embedded nanodisc system for molecular dynamics "
+            "simulations"
+        ),
         icon="🪙",
         enabled=False,
         required_modules=[
@@ -223,6 +243,7 @@ _TASK_TYPES: list[TaskType] = [
             "membrane",
             "solvation",
             "ions",
+            "final_review",
             "simparams",
         ],
     ),
@@ -230,7 +251,10 @@ _TASK_TYPES: list[TaskType] = [
         id="hmmm-builder",
         category="Membrane",
         title="HMMM Builder",
-        description="Generate a bilayer simulation system with the Highly Mobile Membrane-Mimetic (HMMM) model",
+        description=(
+            "Generate a bilayer simulation system with the Highly Mobile Membrane-Mimetic (HMMM) "
+            "model"
+        ),
         icon="🔬",
         enabled=False,
         required_modules=[
@@ -249,6 +273,7 @@ _TASK_TYPES: list[TaskType] = [
             "membrane",
             "solvation",
             "ions",
+            "final_review",
             "simparams",
         ],
     ),
@@ -256,7 +281,10 @@ _TASK_TYPES: list[TaskType] = [
         id="bicelle-builder",
         category="Membrane",
         title="Bicelle Builder",
-        description="Generate a protein/bicelle complex or bicelle-only system for molecular dynamics simulations",
+        description=(
+            "Generate a protein/bicelle complex or bicelle-only system for molecular dynamics "
+            "simulations"
+        ),
         icon="🫓",
         enabled=False,
         required_modules=[
@@ -275,6 +303,7 @@ _TASK_TYPES: list[TaskType] = [
             "membrane",
             "solvation",
             "ions",
+            "final_review",
             "simparams",
         ],
     ),
@@ -288,7 +317,15 @@ _TASK_TYPES: list[TaskType] = [
         pipeline="solvator",
         route_slug="Solvator",
         required_modules=["input", "forcefield", "structure", "solvation", "ions"],
-        visible_modules=["input", "forcefield", "structure", "solvation", "ions", "simparams"],
+        visible_modules=[
+            "input",
+            "forcefield",
+            "structure",
+            "solvation",
+            "ions",
+            "final_review",
+            "simparams",
+        ],
         default_config={
             "solvation": {"box_padding": 1.5},
             "ions": {"concentration": 0.15, "neutralize": True, "cation": "NA", "anion": "CL"},
@@ -348,9 +385,7 @@ def get_all_task_types() -> list[dict]:
         )
     # Keep the public landing page organized by workflow scale while
     # preserving the registry order within each category.
-    result.sort(
-        key=lambda item: _CATEGORY_ORDER.get(item["category"], len(_CATEGORY_ORDER))
-    )
+    result.sort(key=lambda item: _CATEGORY_ORDER.get(item["category"], len(_CATEGORY_ORDER)))
     return result
 
 

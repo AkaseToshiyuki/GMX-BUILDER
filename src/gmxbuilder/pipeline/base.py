@@ -7,8 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from gmxbuilder.core.system import System
 from gmxbuilder.core.exceptions import ModuleConfigError
+from gmxbuilder.core.system import System
 
 
 @dataclass

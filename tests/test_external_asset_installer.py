@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import tarfile
 from io import BytesIO
 from pathlib import Path
-import tarfile
 
 import pytest
-
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "install_external_assets.py"
 SPEC = importlib.util.spec_from_file_location("gmxbuilder_external_assets", SCRIPT)

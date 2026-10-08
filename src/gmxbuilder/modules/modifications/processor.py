@@ -5,24 +5,29 @@ Must run AFTER PDB input and BEFORE orientation.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from gmxbuilder.core.chemistry import is_hydrogen
-
-from gmxbuilder.core.topology import Bond, Topology
-from gmxbuilder.core.system import System
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.pipeline.base import BaseModule, ModuleResult
+from gmxbuilder.core.structure import PER_ATOM_FIELDS
+from gmxbuilder.core.system import System
+from gmxbuilder.core.topology import Bond, Topology
 from gmxbuilder.modules import register_module
 from gmxbuilder.modules.modifications.geometry import (
     GeometryQuality,
     ModificationGeometryError,
     build_modified_heavy_atom_geometry,
 )
-
-from pathlib import Path
-
+from gmxbuilder.modules.modifications.protonation import (
+    CANONICAL_TERMINUS_DOMINANT_FRACTION,
+    CANONICAL_TERMINUS_MAJORITY_FRACTION,
+    canonical_terminus_fraction,
+    free_terminus_ph_window,
+)
+from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 _SUPPORTED_ATOM_TRANSFORMS: dict[str, tuple[str, str, str]] = {
     "DEA_ASN": ("ND2", "OD2", "O"),
@@ -39,6 +44,36 @@ _PRODUCT_HEAVY_ATOM_ALIASES: dict[str, dict[str, str]] = {
 }
 
 _BACKBONE_OXYGEN_ALIASES = {"O", "OXT", "O1", "O2", "OT1", "OT2", "OC1", "OC2"}
+
+# Free N/C termini are instantiated only as the canonical NH3+/COO- templates,
+# so both boundaries below are derived from the protonation model's own pKa
+# values rather than written down as pH constants -- see
+# gmxbuilder.modules.modifications.protonation for the derivation.
+#
+#   supported : both canonical states >= 90% populated, no comment needed
+#   warned    : canonical state still the majority, allowed but quantified
+#   rejected  : beyond the pKa, where the charged template would be the
+#               minority species and an explicit cap is the better model
+_STANDARD_FREE_TERMINI_PH_RANGE = free_terminus_ph_window(CANONICAL_TERMINUS_DOMINANT_FRACTION)
+_MAJORITY_FREE_TERMINI_PH_RANGE = free_terminus_ph_window(CANONICAL_TERMINUS_MAJORITY_FRACTION)
+
+
+def _terminal_populations(pH: float) -> dict[str, float]:
+    """Return the populated fraction of each canonical terminal state."""
+    return {
+        "NH3+": canonical_terminus_fraction("NTER", pH),
+        "COO-": canonical_terminus_fraction("CTER", pH),
+    }
+
+
+def _terminal_population_summary(pH: float) -> str:
+    populations = _terminal_populations(pH)
+    return (
+        f"N-terminal NH3+ approximately {populations['NH3+'] * 100:.0f}% and "
+        f"C-terminal COO- approximately {populations['COO-'] * 100:.0f}% populated "
+        f"at pH {pH:g}"
+    )
+
 
 _HISTIDINE_ALIASES: dict[str, dict[str, str]] = {
     "amber": {"HSD": "HID", "HSE": "HIE", "HSP": "HIP"},
@@ -170,8 +205,11 @@ def _validate_protein_heavy_atoms(system: System, force_field: str) -> None:
         if template is None:
             raise ModuleConfigError(
                 f"Protein residue {resname} at {chain}:{resid} has no {force_field} "
-                "template; remove the non-protein molecule in Step 1 or choose "
-                "a force field that explicitly supports this residue"
+                f"template. If {resname} is a protonation state, this is a "
+                f"naming mismatch and should be reported; Amber and CHARMM "
+                f"spell these differently (ASH/ASPP, HID/HSD). Otherwise it is "
+                f"a residue this force field does not define: remove it in "
+                f"Step 1 or choose a force field that supports it"
             )
         expected = {
             str(atom[0]).strip()
@@ -204,19 +242,7 @@ def _remap_system_atoms(system: System, keep: list[int]) -> None:
     """Keep selected atoms and remap every component/topology index."""
     old_to_new = {old: new for new, old in enumerate(keep)}
     structure = system.structure
-    structure.coordinates = structure.coordinates[keep]
-    for attribute in (
-        "atom_names",
-        "resnames",
-        "resids",
-        "chain_ids",
-        "segids",
-        "elements",
-        "occupancies",
-        "tempfactors",
-    ):
-        values = getattr(structure, attribute)
-        setattr(structure, attribute, [values[index] for index in keep])
+    structure.select_atoms(keep)
 
     for component in system.components:
         component.atom_indices = np.asarray(
@@ -247,7 +273,7 @@ def _remap_system_atoms(system: System, keep: list[int]) -> None:
             old_indices = [getattr(term, field) for field in fields]
             if not all(index in old_to_new for index in old_indices):
                 continue
-            for field, old_index in zip(fields, old_indices):
+            for field, old_index in zip(fields, old_indices, strict=True):
                 setattr(term, field, old_to_new[old_index])
             retained.append(term)
         terms[:] = retained
@@ -340,7 +366,9 @@ def _append_cap_residue(
     structure = system.structure
     terminal_indices = [
         index
-        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
+        for index, (atom_chain, atom_resid) in enumerate(
+            zip(structure.chain_ids, structure.resids, strict=True)
+        )
         if str(atom_chain) == terminal_key[0] and int(atom_resid) == terminal_key[1]
     ]
     terminal_atoms = {str(structure.atom_names[index]).strip(): index for index in terminal_indices}
@@ -385,7 +413,7 @@ def _append_cap_residue(
         new_resid = (
             min(
                 int(resid)
-                for atom_chain, resid in zip(structure.chain_ids, structure.resids)
+                for atom_chain, resid in zip(structure.chain_ids, structure.resids, strict=True)
                 if str(atom_chain) == chain
             )
             - 1
@@ -402,7 +430,7 @@ def _append_cap_residue(
         new_resid = (
             max(
                 int(resid)
-                for atom_chain, resid in zip(structure.chain_ids, structure.resids)
+                for atom_chain, resid in zip(structure.chain_ids, structure.resids, strict=True)
                 if str(atom_chain) == chain
             )
             + 1
@@ -451,8 +479,9 @@ def _append_cap_residue(
             neighbours,
             len(hydrogens),
             atom_name=control,
+            method=3 if cap == "NH2" and len(hydrogens) == 2 else None,
         )
-        for hydrogen, position in zip(hydrogens, positions):
+        for hydrogen, position in zip(hydrogens, positions, strict=True):
             index = _append_atom(system, position, hydrogen, "H", prototype, parent_component)
             structure.resnames[index] = cap
             structure.resids[index] = new_resid
@@ -470,6 +499,7 @@ def _append_atom(
     component,
 ) -> int:
     structure = system.structure
+    structure.validate_atom_fields()
     new_index = structure.num_atoms
     structure.coordinates = np.vstack([structure.coordinates, coordinate])
     structure.atom_names.append(name)
@@ -480,6 +510,17 @@ def _append_atom(
     structure.elements.append(element)
     structure.occupancies.append(1.0)
     structure.tempfactors.append(0.0)
+    # Every per-atom field, not the ones this function was written knowing
+    # about: a hydrogen added here without a source_ids entry left the
+    # structure one short, and the mismatch only surfaced later, when a
+    # membrane build merged it and refused the result.
+    for field_name in PER_ATOM_FIELDS:
+        values = getattr(structure, field_name)
+        if len(values) < structure.num_atoms:
+            # A neutral value, not the prototype's: an atom this function
+            # invents did not come from the input file, so it must not inherit
+            # the identity of the one it was placed next to.
+            values.append(type(values[0])() if values else "")
     component.atom_indices = np.concatenate(
         [component.atom_indices, np.asarray([new_index], dtype=np.int64)]
     )
@@ -512,7 +553,9 @@ def _synchronise_modified_residue(
     structure = system.structure
     indices = [
         index
-        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
+        for index, (atom_chain, atom_resid) in enumerate(
+            zip(structure.chain_ids, structure.resids, strict=True)
+        )
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     if not indices:
@@ -557,7 +600,9 @@ def _synchronise_modified_residue(
 
     indices = [
         index
-        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
+        for index, (atom_chain, atom_resid) in enumerate(
+            zip(structure.chain_ids, structure.resids, strict=True)
+        )
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     for index in indices:
@@ -590,19 +635,67 @@ def _synchronise_modified_residue(
             <= 0.8
         )
         environment = candidates[nearby]
+    # Deposited PTM atoms are fixed anchors. Only genuinely missing atoms may move.
+    from gmxbuilder.modules.modifications.patches import get_patch
+
+    deposited = None
+    saved = {}
+    for record in system.metadata.get("input_modifications", {}).get("records", []):
+        detected_patch = get_patch(record.get("patch_id"))
+        if (
+            (record.get("chain"), record.get("resid")) == (chain, resid)
+            and detected_patch is not None
+            and detected_patch.product_name == product_name
+        ):
+            deposited = record
+            if "original_atoms" not in record:
+                raise ModuleConfigError(
+                    "Run Check Upload again to preserve the original modified-residue coordinates."
+                )
+            for atom in record["original_atoms"]:
+                name = atom_aliases.get(atom["name"], atom["name"])
+                if name in heavy_set and name not in retained_coordinates:
+                    saved[name] = np.asarray(atom["coordinates_nm"], dtype=float)
+            break
+    added_names = heavy_set - retained_coordinates.keys()
     try:
         built_coordinates, geometry_quality = build_modified_heavy_atom_geometry(
             force_field=str(system.metadata.get("force_field", "")),
             template=template,
-            retained_coordinates=retained_coordinates,
+            retained_coordinates={**retained_coordinates, **saved},
             environment_coordinates=environment,
             stereo_constraints=stereo_constraints,
         )
+        if saved:
+            from gmxbuilder.modules.modifications.geometry import validate_restored_heavy_atoms
+
+            geometry_quality = validate_restored_heavy_atoms(
+                force_field=str(system.metadata["force_field"]),
+                template=template,
+                coordinates=built_coordinates,
+                restored=added_names,
+                environment=environment,
+                stereo_constraints=stereo_constraints,
+            )
     except ModificationGeometryError as error:
+        context = " preserving deposited atoms" if saved else ""
         raise ModuleConfigError(
             f"Cannot construct force-field-consistent {product_name} geometry at "
-            f"{chain}:{resid}: {error}"
+            f"{chain}:{resid}{context}: {error}. Provide a repaired input structure."
         ) from error
+    if deposited is not None:
+        system.metadata.setdefault("input_modification_geometry", []).append(
+            {
+                "chain": chain,
+                "resid": resid,
+                "product": product_name,
+                "retained_deposited_atoms": sorted(saved),
+                "rebuilt_atoms": sorted(added_names - saved.keys()),
+                "reason": (
+                    "Only missing heavy atoms were constructed; deposited atoms remain fixed."
+                ),
+            }
+        )
 
     for name in heavy_order:
         if name in name_to_index:
@@ -661,7 +754,7 @@ def _synchronise_modified_residue(
             raise ModuleConfigError(
                 f"Cannot construct {product_name} hydrogen geometry at {chain}:{resid}"
             )
-        for hydrogen, position in zip(hydrogens, positions):
+        for hydrogen, position in zip(hydrogens, positions, strict=True):
             index = _append_atom(system, position, hydrogen, "H", prototype, component)
             structure.resnames[index] = product_name
             name_to_index[hydrogen] = index
@@ -686,7 +779,9 @@ def _prepare_terminal_residue(
     structure = system.structure
     indices = [
         index
-        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
+        for index, (atom_chain, atom_resid) in enumerate(
+            zip(structure.chain_ids, structure.resids, strict=True)
+        )
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     if not indices:
@@ -719,7 +814,9 @@ def _prepare_terminal_residue(
             index for index in indices if names[index].strip() in _BACKBONE_OXYGEN_ALIASES
         ]
         existing_oxygens.sort(key=lambda index: names[index].strip() != "O")
-        for index, target_name in zip(existing_oxygens, target_oxygens):
+        # strict=False on purpose: an input may carry more or fewer backbone
+        # oxygens than the template declares; rename as many as pair up.
+        for index, target_name in zip(existing_oxygens, target_oxygens, strict=False):
             names[index] = target_name
 
     extras = []
@@ -741,7 +838,9 @@ def _prepare_terminal_residue(
 
     indices = [
         index
-        for index, (atom_chain, atom_resid) in enumerate(zip(structure.chain_ids, structure.resids))
+        for index, (atom_chain, atom_resid) in enumerate(
+            zip(structure.chain_ids, structure.resids, strict=True)
+        )
         if str(atom_chain) == chain and int(atom_resid) == resid
     ]
     prototype = indices[0]
@@ -813,7 +912,7 @@ def _prepare_terminal_residue(
             raise ModuleConfigError(
                 f"Cannot construct terminal hydrogen geometry at {chain}:{resid}"
             )
-        for hydrogen, position in zip(hydrogen_names, positions):
+        for hydrogen, position in zip(hydrogen_names, positions, strict=True):
             new_index = _append_atom(system, position, hydrogen, "H", prototype, parent_component)
             name_to_index[hydrogen] = new_index
 
@@ -860,6 +959,7 @@ class StructureProcessor(BaseModule):
             {
                 "protonation",
                 "modifications",
+                "input_modification_decisions",
                 "termini",
                 "pH",
                 "skip_protonation",
@@ -868,6 +968,8 @@ class StructureProcessor(BaseModule):
                 "seed",
             },
         )
+        from gmxbuilder.modules.modifications.selection import validate_selection
+
         try:
             pH = float(config.get("pH", 7.0))
         except (TypeError, ValueError) as exc:
@@ -877,6 +979,7 @@ class StructureProcessor(BaseModule):
         for key, expected in (
             ("protonation", list),
             ("modifications", list),
+            ("input_modification_decisions", list),
             ("crosslinks", list),
             ("termini", dict),
         ):
@@ -885,22 +988,18 @@ class StructureProcessor(BaseModule):
         for entry in config.get("protonation", []):
             if not isinstance(entry, dict):
                 raise ModuleConfigError("Each protonation assignment must be an object")
-            index = entry.get("index")
             assigned = entry.get("assigned_name")
-            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
-                raise ModuleConfigError(f"Invalid protonation residue index: {index!r}")
+            validate_selection(entry)
             if not isinstance(assigned, str) or not assigned.strip():
                 raise ModuleConfigError("Protonation assigned_name must be non-empty")
         for entry in config.get("modifications", []):
             if not isinstance(entry, dict):
                 raise ModuleConfigError("Each modification assignment must be an object")
-            index = entry.get("index")
             patch_id = entry.get("patch_id")
-            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
-                raise ModuleConfigError(f"Invalid modification residue index: {index!r}")
+            validate_selection(entry)
             if not isinstance(patch_id, str) or not patch_id.strip():
                 raise ModuleConfigError("Modification patch_id must be non-empty")
-            unknown = set(entry) - {"index", "patch_id", "product_name"}
+            unknown = set(entry) - {"index", "patch_id", "product_name", "target"}
             if unknown:
                 raise ModuleConfigError(
                     "Unknown modification option(s): " + ", ".join(sorted(unknown))
@@ -910,17 +1009,21 @@ class StructureProcessor(BaseModule):
         for entry in config.get("crosslinks", []):
             if not isinstance(entry, dict):
                 raise ModuleConfigError("Each crosslink assignment must be an object")
-            unknown = set(entry) - {"type", "first_index", "second_index"}
+            unknown = set(entry) - {
+                "type",
+                "first_index",
+                "second_index",
+                "first_target",
+                "second_target",
+            }
             if unknown:
                 raise ModuleConfigError(
                     "Unknown crosslink option(s): " + ", ".join(sorted(unknown))
                 )
             if entry.get("type") != "disulfide":
                 raise ModuleConfigError(f"Unsupported crosslink type: {entry.get('type')!r}")
-            for key in ("first_index", "second_index"):
-                value = entry.get(key)
-                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                    raise ModuleConfigError(f"Invalid crosslink {key}: {value!r}")
+            for side in ("first", "second"):
+                validate_selection(entry, f"{side}_index", f"{side}_target")
         for chain, caps in config.get("termini", {}).items():
             if not isinstance(chain, str) or not chain:
                 raise ModuleConfigError("Each termini chain identifier must be non-empty")
@@ -941,17 +1044,98 @@ class StructureProcessor(BaseModule):
                 raise ModuleConfigError(f"{flag} must be a boolean")
         return True
 
+    @staticmethod
+    def _default_protonation(system: System, pH: float, config: dict) -> list[dict]:
+        """Assign every titratable protein residue from model pKa values.
+
+        This is the non-interactive equivalent of pressing Compute in the Web
+        interface. PROPKA is not attempted here: it needs a written PDB and a
+        subprocess, which belongs to the endpoint that already owns those, and
+        model pKa values are the documented fallback there too.
+        """
+        from gmxbuilder.modules.modifications.protonation import (
+            assign_all_protonations,
+            get_titratable_residues,
+        )
+
+        force_field = str(system.metadata.get("force_field", "") or "")
+        titratable = set(get_titratable_residues(force_field))
+        protein_atoms = {
+            int(index)
+            for component in system.components
+            if component.kind == ComponentKind.PROTEIN
+            for index in component.atom_indices
+        }
+        if not protein_atoms:
+            return []
+
+        structure = system.structure
+        seen: set[tuple[str, int]] = set()
+        ordered: list[tuple[int, str, str, int]] = []
+        for atom in range(structure.num_atoms):
+            if atom not in protein_atoms:
+                continue
+            key = (str(structure.chain_ids[atom]), int(structure.resids[atom]))
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append((len(ordered), str(structure.resnames[atom]), key[0], key[1]))
+
+        names = [entry[1] for entry in ordered]
+        his_tautomer = str(config.get("his_tautomer", "HSE")).upper()
+        if his_tautomer not in {"HSD", "HSE"}:
+            his_tautomer = "HSE"
+        assignments = assign_all_protonations(
+            names, pH=pH, his_tautomer=his_tautomer, force_field=force_field
+        )
+
+        resolved: list[dict] = []
+        for (index, resname, chain, resid), assignment in zip(ordered, assignments, strict=True):
+            if resname.upper() not in titratable:
+                continue
+            entry = dict(assignment)
+            entry["index"] = index
+            entry["chain"] = chain
+            entry["resid"] = resid
+            entry["target"] = {"chain": chain, "resid": resid, "resname": resname}
+            resolved.append(entry)
+        return resolved
+
     def run(self, system: System, config: dict) -> ModuleResult:
-        protonation = config.get("protonation", [])
+        from gmxbuilder.core.ordering import order_hydrogens_after_parents
+        from gmxbuilder.pipeline.progress import report_progress
+
+        # Absent and empty are different statements. Omitting the key means
+        # "decide for me", which is what a YAML or API caller does. Passing an
+        # empty list means "here is my list, and it is empty", which stays an
+        # error when titratable residues exist -- that is the browser flow
+        # failing to run Compute, and it must not be papered over.
+        protonation_supplied = config.get("protonation") is not None
+        protonation = config.get("protonation") or []
         modifications = config.get("modifications", [])
         crosslinks = config.get("crosslinks", [])
         termini = config.get("termini", {})
-        pH = config.get("pH", 7.0)
+        pH = float(config.get("pH", 7.0))
         skip = config.get("skip_protonation", False)
         prepare_standard_termini = config.get("prepare_standard_termini", True)
 
         log = []
         n_atoms = system.structure.num_atoms
+
+        # A configuration that enables protonation without listing assignments
+        # used to fail with "Run Compute again in Step 3" -- guidance for the
+        # browser, which a YAML or API caller has no way to follow. There was
+        # no command that produced the list either: it came only from the
+        # /api/protonate endpoint. Compute it here from the same functions that
+        # endpoint uses, so the YAML path is self-sufficient. An explicit list
+        # still wins, and skip_protonation still bypasses everything.
+        if not skip and not protonation_supplied and n_atoms:
+            protonation = self._default_protonation(system, pH, config)
+            if protonation:
+                log.append(
+                    f"Assigned protonation for {len(protonation)} titratable residues "
+                    f"at pH {pH:g} from model pKa values"
+                )
 
         if n_atoms == 0:
             return ModuleResult(success=True, system=system, log=["No atoms to process"])
@@ -959,6 +1143,67 @@ class StructureProcessor(BaseModule):
         # Work on a copy so any late chemistry/template error leaves the input
         # checkpoint untouched.
         system = system.copy()
+        from gmxbuilder.core.polymer import validate_peptide_connectivity
+
+        protein_indices = [
+            int(index)
+            for component in system.components
+            if component.kind == ComponentKind.PROTEIN
+            for index in component.atom_indices
+        ]
+        try:
+            validate_peptide_connectivity(system.structure, sorted(set(protein_indices)))
+        except ValueError as exc:
+            raise ModuleConfigError(str(exc)) from exc
+
+        protein_chains = sorted(
+            {
+                str(system.structure.chain_ids[int(index)])
+                for component in system.components
+                if component.kind == ComponentKind.PROTEIN
+                for index in component.atom_indices
+            }
+        )
+        # Only chains left with a free terminus are modelled by the canonical
+        # templates, so a fully capped system is unaffected by the pH boundary.
+        uncapped = []
+        for chain in protein_chains:
+            caps = termini.get(chain, {})
+            missing = [
+                end.upper() for end in ("nter", "cter") if not str(caps.get(end, "")).strip()
+            ]
+            if missing:
+                uncapped.append(f"{chain or '?'}:{'/'.join(missing)}")
+
+        supported_low, supported_high = _STANDARD_FREE_TERMINI_PH_RANGE
+        majority_low, majority_high = _MAJORITY_FREE_TERMINI_PH_RANGE
+        terminal_band = "supported"
+        if uncapped:
+            if not majority_low <= pH <= majority_high:
+                terminal_band = "rejected"
+            elif not supported_low <= pH <= supported_high:
+                terminal_band = "warned"
+
+        if terminal_band == "rejected":
+            raise ModuleConfigError(
+                "Free protein termini are modelled only as the canonical NH3+/COO- "
+                f"templates. At pH {pH:g} at least one of these terminal states is "
+                f"no longer the majority species ({_terminal_population_summary(pH)}). "
+                "The required free-terminal state is not implemented. Provide a "
+                "validated terminal model or review the target pH. Covalent caps "
+                "change molecular identity and are appropriate only when the "
+                "experimental molecule is capped. Uncapped termini: " + ", ".join(uncapped)
+            )
+        if terminal_band == "warned":
+            log.append(
+                f"WARNING: free termini are modelled as NH3+/COO-; "
+                f"{_terminal_population_summary(pH)}. This is the majority state "
+                f"but no longer above "
+                f"{CANONICAL_TERMINUS_DOMINANT_FRACTION * 100:.0f}%. If the "
+                "structure is a truncated construct, cap it explicitly in the "
+                "Termini tab; for a full-length protein the free charged termini "
+                "are normally correct. Uncapped termini: " + ", ".join(uncapped)
+            )
 
         resnames = list(system.structure.resnames)
         resids = system.structure.resids
@@ -972,7 +1217,7 @@ class StructureProcessor(BaseModule):
         previous_key: tuple[str, int] | None = None
         closed_keys: set[tuple[str, int]] = set()
         residue_names_by_key: dict[tuple[str, int], str] = {}
-        for i, (ch, rid) in enumerate(zip(chain_ids, resids)):
+        for i, (ch, rid) in enumerate(zip(chain_ids, resids, strict=True)):
             key = (str(ch), int(rid))
             residue_name = str(resnames[i]).strip().upper()
             if key != previous_key:
@@ -996,6 +1241,34 @@ class StructureProcessor(BaseModule):
                     "before assigning chemistry."
                 )
             _residue_atoms[key].append(i)
+
+        # Display ordinals must never address retained ligands or ions.
+        from gmxbuilder.modules.modifications.selection import resolve_selection
+
+        protein_keys = {(str(chain_ids[i]), int(resids[i])) for i in protein_indices}
+        mixed = any(key not in protein_keys for key in _residue_order)
+        _residue_order = [key for key in _residue_order if key in protein_keys]
+        modifications = [
+            resolve_selection(entry, _residue_order, residue_names_by_key, mixed=mixed)
+            for entry in modifications
+        ]
+        protonation = [
+            resolve_selection(entry, _residue_order, residue_names_by_key, mixed=mixed)
+            for entry in protonation
+        ]
+        resolved_crosslinks = []
+        for entry in crosslinks:
+            for side in ("first", "second"):
+                entry = resolve_selection(
+                    entry,
+                    _residue_order,
+                    residue_names_by_key,
+                    index_key=f"{side}_index",
+                    target_key=f"{side}_target",
+                    mixed=mixed,
+                )
+            resolved_crosslinks.append(entry)
+        crosslinks = resolved_crosslinks
 
         # Validate the complete chemistry request before mutating the system.
         # Renaming a residue without changing its atoms produces an invalid RTP
@@ -1036,6 +1309,17 @@ class StructureProcessor(BaseModule):
                     f"Patch {patch_id} requires {patch.target_residues}, got {original} "
                     f"at residue index {idx}"
                 )
+            from gmxbuilder.modules.modifications.patches import validate_patch_position
+
+            chain_keys = [item for item in _residue_order if item[0] == key[0]]
+            caps = termini.get(key[0], {})
+            free_ends = []
+            if prepare_standard_termini or any(termini.values()):
+                if key == chain_keys[0] and not caps.get("nter"):
+                    free_ends.append("N")
+                if key == chain_keys[-1] and not caps.get("cter"):
+                    free_ends.append("C")
+            validate_patch_position(patch_id, ff_name, free_ends)
             requested_product = str(mod.get("product_name", "")).strip().upper()
             if requested_product and requested_product != patch.product_name:
                 raise ModuleConfigError(
@@ -1058,6 +1342,17 @@ class StructureProcessor(BaseModule):
                     )
             modified_indices.add(idx)
             validated_modifications.append((key, patch_id, patch))
+
+        from gmxbuilder.modules.modifications.input_decisions import resolve_input_modifications
+
+        input_decisions = resolve_input_modifications(
+            system,
+            modifications,
+            _residue_order,
+            config.get("input_modification_decisions", []),
+        )
+        system.metadata["input_modification_decisions"] = input_decisions
+        system.metadata["input_modification_geometry"] = []
 
         validated_disulfides: list[tuple[tuple[str, int], tuple[str, int], float]] = []
         crosslinked_indices: set[int] = set()
@@ -1090,7 +1385,7 @@ class StructureProcessor(BaseModule):
                 )
             keys = (_residue_order[first_index], _residue_order[second_index])
             sulphurs = []
-            for index, key in zip((first_index, second_index), keys):
+            for index, key in zip((first_index, second_index), keys, strict=True):
                 atom_indices = _residue_atoms[key]
                 residue_name = str(resnames[atom_indices[0]]).strip().upper()
                 if residue_name != "CYS":
@@ -1122,6 +1417,10 @@ class StructureProcessor(BaseModule):
                 )
             crosslinked_indices.update((first_index, second_index))
             validated_disulfides.append((keys[0], keys[1], target_distance))
+
+        system.metadata["protonation_sources"] = sorted(
+            {str(entry.get("prediction_source", "Model pKa")) for entry in protonation}
+        )
 
         for entry in protonation:
             idx = entry["index"]
@@ -1158,7 +1457,12 @@ class StructureProcessor(BaseModule):
                 if component.kind == ComponentKind.PROTEIN
                 for index in component.atom_indices
             }
-            titratable_states = get_titratable_residues()
+            # Same force field as the assignment used. Validating against a
+            # different one is how a CHARMM system was told its own HSE was
+            # invalid because the check had defaulted to Amber names.
+            titratable_states = get_titratable_residues(
+                str(system.metadata.get("force_field", "") or "")
+            )
             titratable_names = set(titratable_states)
             expected: list[tuple[int, tuple[str, int], str]] = []
             for idx, key in enumerate(_residue_order):
@@ -1173,6 +1477,12 @@ class StructureProcessor(BaseModule):
             expected_by_index = {idx: resname for idx, _, resname in expected}
             for entry in protonation:
                 idx = entry["index"]
+                if entry.get("force_field_lacks_state") and not entry.get("state_override"):
+                    raise ModuleConfigError(
+                        f"The predicted protonation state at residue index {idx} is absent "
+                        "from the selected force field. Review the pH and chemical state; "
+                        "an available state requires an explicit, justified override."
+                    )
                 original = expected_by_index.get(idx)
                 if original is None:
                     raise ModuleConfigError(
@@ -1218,6 +1528,7 @@ class StructureProcessor(BaseModule):
                         raise ModuleConfigError(f"{cap} cap is unavailable for {ff_name}: {reason}")
 
         # ---- 1. Protonation renaming ----
+        report_progress(0.1, "Applying protonation states to titratable residues")
         renamed_residues: set[tuple[str, int]] = set()
         if not skip and protonation:
             renamed_atoms = 0
@@ -1241,6 +1552,7 @@ class StructureProcessor(BaseModule):
         system.structure.resnames = list(resnames)
 
         # ---- 2. Modifications (patch application) ----
+        report_progress(0.3, "Applying residue modifications")
         geometry_metadata: list[dict] = []
         if validated_modifications:
             applied = []
@@ -1249,7 +1561,7 @@ class StructureProcessor(BaseModule):
                 current_indices = [
                     index
                     for index, (chain, resid) in enumerate(
-                        zip(system.structure.chain_ids, system.structure.resids)
+                        zip(system.structure.chain_ids, system.structure.resids, strict=True)
                     )
                     if (str(chain), int(resid)) == key
                 ]
@@ -1261,6 +1573,21 @@ class StructureProcessor(BaseModule):
                         if str(system.structure.atom_names[atom_idx]).strip() == old_atom:
                             system.structure.atom_names[atom_idx] = new_atom
                             system.structure.elements[atom_idx] = new_element
+                    if not skip:
+                        from gmxbuilder.modules.modifications.protonation import assign_protonation
+
+                        state = assign_protonation(patch.product_name, pH=pH, force_field=ff_name)
+                        if state.get("force_field_lacks_state"):
+                            raise ModuleConfigError(
+                                f"{patch_id} product protonation is unavailable "
+                                f"in {ff_name} at pH {pH}"
+                            )
+                        for atom_idx in current_indices:
+                            system.structure.resnames[atom_idx] = state["assigned_name"]
+                        log.append(
+                            f"{patch_id} product at {key[0]}:{key[1]}: "
+                            f"{state['assigned_name']} at pH {pH:g} using product model pKa"
+                        )
                 else:
                     from gmxbuilder.modules.forcefield.rtp_parser import load_force_field_rtp
 
@@ -1280,12 +1607,25 @@ class StructureProcessor(BaseModule):
                 applied.append(f"{old}→{patch.product_name}")
             if applied:
                 log.append(
-                    f"Modifications: {len(applied)} applied ({', '.join(applied[:5])}{'...' if len(applied) > 5 else ''})"
+                    f"Modifications: {len(applied)} applied "
+                    f"({', '.join(applied[:5])}"
+                    f"{'...' if len(applied) > 5 else ''})"
                 )
             for patch_id, (chain, resid), quality in geometry_reports:
+                deposition = next(
+                    (
+                        record
+                        for record in system.metadata["input_modification_geometry"]
+                        if record["chain"] == chain and record["resid"] == resid
+                    ),
+                    {},
+                )
+                if deposition:
+                    log.append(f"Uploaded PTM geometry at {chain}:{resid}: {deposition}")
                 geometry_metadata.append(
                     {
                         "patch_id": patch_id,
+                        "deposited_geometry": deposition,
                         "chain": chain or "?",
                         "resid": resid,
                         "added_atoms": list(quality.added_atoms),
@@ -1332,6 +1672,7 @@ class StructureProcessor(BaseModule):
                                 system.structure.chain_ids,
                                 system.structure.resids,
                                 system.structure.atom_names,
+                                strict=True,
                             )
                         )
                         if str(atom_chain) == chain
@@ -1369,6 +1710,7 @@ class StructureProcessor(BaseModule):
                 )
 
         # ---- 3. Termini capping ----
+        report_progress(0.55, "Capping chain termini")
         # Empty/default termini entries intentionally retain the standard
         # charged termini.  Non-empty caps were rejected during preflight.
 
@@ -1380,6 +1722,7 @@ class StructureProcessor(BaseModule):
             _validate_protein_heavy_atoms(system, ff_name)
 
         # ---- 4. Add missing hydrogens using HDB rules ----
+        report_progress(0.65, "Adding missing hydrogens")
         from gmxbuilder.modules.forcefield.hdb import HDBHydrogenAdder
 
         hdb_path = _find_hdb(ff_name)
@@ -1405,6 +1748,18 @@ class StructureProcessor(BaseModule):
                 system.structure.occupancies = list(system.structure.occupancies) + [1.0] * n_added
                 system.structure.tempfactors = list(system.structure.tempfactors) + [0.0] * n_added
                 system.structure.segids = list(system.structure.segids) + [""] * n_added
+                # And whatever else carries one value per atom. Naming the
+                # fields here by hand is how source_ids came to be left at the
+                # pre-hydrogen length: nothing complained until a membrane
+                # build merged the structure, thousands of atoms later.
+                for field_name in PER_ATOM_FIELDS:
+                    values = list(getattr(system.structure, field_name))
+                    if len(values) == n_old:
+                        setattr(
+                            system.structure,
+                            field_name,
+                            values + [type(values[0])() if values else ""] * n_added,
+                        )
                 # New H atoms belong to the PROTEIN component containing their
                 # parent residue.  Adding every H to every protein component
                 # duplicates indices for multi-component structures.
@@ -1454,6 +1809,7 @@ class StructureProcessor(BaseModule):
                 log.append(f"HDB: added {n_added} hydrogen atoms")
 
         # ---- 5. Prepare standard charged protein termini ----
+        report_progress(0.9, "Preparing charged protein termini")
         # HDB first builds the complete internal-residue hydrogen set.  We then
         # reconcile only the first/last residue of each protein chain with the
         # selected force field's NH3+/COO- terminal template.
@@ -1556,6 +1912,15 @@ class StructureProcessor(BaseModule):
         # Store processing metadata for downstream modules
         system.metadata["protonation_pH"] = pH
         system.metadata["n_residues_renamed"] = len(renamed_residues)
+        from gmxbuilder.modules.modifications.selection import (
+            CHEMISTRY_POLICY_VERSION,
+            chemistry_fingerprint,
+        )
+
+        system.metadata["structure_chemistry"] = {
+            "policy_version": CHEMISTRY_POLICY_VERSION,
+            "config_sha256": chemistry_fingerprint(config),
+        }
         system.metadata["n_modifications"] = len(validated_modifications) + 2 * len(
             validated_disulfides
         )
@@ -1563,5 +1928,56 @@ class StructureProcessor(BaseModule):
         system.metadata["crosslinks"] = disulfide_metadata
         system.metadata["standard_termini_prepared"] = prepared_termini
         system.metadata["terminal_caps"] = built_caps
+        if prepared_termini and built_caps:
+            terminal_model = "mixed-canonical-free-and-explicit-caps"
+        elif prepared_termini:
+            terminal_model = "canonical-free-NH3+/COO-"
+        elif built_caps:
+            terminal_model = "explicit-neutral-chemical-caps"
+        else:
+            terminal_model = "input-terminal-chemistry-not-rebuilt"
+        # Recorded in every band, not only on rejection: the canonical templates
+        # are an approximation at any pH, and the package provenance should say
+        # how large it was rather than only whether a threshold was crossed.
+        system.metadata["terminal_protonation_boundary"] = {
+            "model": terminal_model,
+            "selected_pH": pH,
+            "band": terminal_band,
+            "supported_free_termini_pH": [
+                round(value, 3) for value in _STANDARD_FREE_TERMINI_PH_RANGE
+            ],
+            "majority_free_termini_pH": [
+                round(value, 3) for value in _MAJORITY_FREE_TERMINI_PH_RANGE
+            ],
+            "canonical_population": {
+                state: round(fraction, 4) for state, fraction in _terminal_populations(pH).items()
+            },
+            "dominant_fraction_threshold": CANONICAL_TERMINUS_DOMINANT_FRACTION,
+            "majority_fraction_threshold": CANONICAL_TERMINUS_MAJORITY_FRACTION,
+            "uncapped_termini": list(uncapped),
+        }
+
+        # ---- 6. Put each hydrogen beside the atom it is bonded to ----
+        # Hydrogens are added after the heavy-atom template is placed, so a
+        # residue comes out as all its heavy atoms then all its hydrogens.
+        # GROMACS then refuses update groups -- "atoms that are (in)directly
+        # constrained together are interdispersed with other atoms" -- which
+        # costs GPU performance for the whole simulation. Lipids and water
+        # already arrive in the right order; only the protein needs this.
+        report_progress(0.97, "Ordering hydrogens beside their parent atoms")
+        ordering = order_hydrogens_after_parents(system)
+        if ordering.get("reordered"):
+            log.append(
+                f"Ordered hydrogens beside their parent atoms in "
+                f"{ordering['residues_reordered']} residues so GROMACS can use "
+                f"update groups"
+            )
+            if ordering.get("unassigned_hydrogens"):
+                log.append(
+                    f"WARNING: {ordering['unassigned_hydrogens']} hydrogen(s) had no "
+                    f"heavy atom within {ordering.get('longest_bond_nm', 0)} nm in their "
+                    f"residue and were left in place"
+                )
+        system.metadata["hydrogen_ordering"] = ordering
 
         return ModuleResult(success=True, system=system, log=log)

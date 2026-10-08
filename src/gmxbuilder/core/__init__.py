@@ -1,31 +1,31 @@
 """Core data structures for GMXBUILDER."""
 
-from gmxbuilder.core.enums import ComponentKind, BoxShape
+from gmxbuilder.core.component import Component
+from gmxbuilder.core.enums import BoxShape, ComponentKind
 from gmxbuilder.core.exceptions import (
-    GMXBuilderError,
-    ParseError,
-    ValidationError,
-    ModuleError,
-    ModuleConfigError,
-    TopologyError,
-    GeometryError,
     ForceFieldError,
+    GeometryError,
+    GMXBuilderError,
+    ModuleConfigError,
+    ModuleError,
     OverlapError,
+    ParseError,
     PipelineError,
+    TopologyError,
+    ValidationError,
 )
 from gmxbuilder.core.structure import Structure
+from gmxbuilder.core.system import System
 from gmxbuilder.core.topology import (
+    Angle,
     AtomType,
     Bond,
-    Angle,
     Dihedral,
     Improper,
-    Pair,
     MoleculeBlock,
+    Pair,
     Topology,
 )
-from gmxbuilder.core.component import Component
-from gmxbuilder.core.system import System
 
 __all__ = [
     "ComponentKind",

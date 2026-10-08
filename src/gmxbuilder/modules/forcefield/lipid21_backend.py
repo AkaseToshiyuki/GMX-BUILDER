@@ -13,7 +13,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 _TAIL_MODULES = {
     (12, 0): "LAL",
     (14, 0): "MY",
@@ -23,7 +22,7 @@ _TAIL_MODULES = {
     (20, 4): "AR",
     (22, 6): "DHA",
 }
-_HEAD_MODULES = {"PC": "PC", "PE": "PE", "PG": "PGR", "PS": "PS", "PA": "PH-"}
+_HEAD_MODULES = {"PC": "PC", "PE": "PE", "PG": "PGS", "PS": "PS", "PA": "PH-"}
 _NON_ESTER_IDENTITIES = {"PPCPL", "PPEPL"}
 
 
@@ -62,7 +61,30 @@ def lipid21_capability(lipid_name: str) -> tuple[bool, str]:
         return False, "not represented by an exact Amber Lipid21 module combination"
     if not (_data_root() / "itp" / f"{name}.itp").is_file():
         return False, "exact Lipid21 source is known but the bundled template is missing"
+    from gmxbuilder.modules.membrane.lipids import LipidRegistry
+
+    try:
+        _validate_template_identity(name, LipidRegistry.get(name).smiles)
+    except (KeyError, ValueError, OSError) as exc:
+        return False, f"Lipid21 template identity could not be established: {exc}"
     return True, "exact Amber Lipid21 v1.0 parameters"
+
+
+@lru_cache(maxsize=256)
+def _validate_template_identity(name: str, smiles: str) -> None:
+    """Check connectivity/H counts and declared stereo against bundled coordinates.
+
+    A chain-length summary cannot distinguish positional or E/Z isomers. This
+    check uses the independently bundled template graph and geometry; it does
+    not validate force-field coefficients or external chemical provenance.
+    """
+    from gmxbuilder.geometry.molecular_identity import itp_graph, validate_stereochemistry
+
+    atom_names, elements, bonds = itp_graph(lipid21_itp_path(name))
+    coordinates, coordinate_names = _load_template_geometry(name)
+    if list(atom_names) != coordinate_names:
+        raise ValueError("Lipid21 topology and coordinate atom order differ")
+    validate_stereochemistry(smiles, elements, bonds, coordinates)
 
 
 def _data_root() -> Path:
@@ -79,6 +101,17 @@ def _templates() -> dict:
 
 def load_lipid21_geometry(lipid_name: str) -> tuple[np.ndarray, list[str]]:
     """Load one exact-topology coordinate template in nanometres."""
+    from gmxbuilder.modules.membrane.lipids import LipidRegistry
+
+    name = str(lipid_name).strip().upper()
+    # Direct callers have the same identity contract as capability discovery;
+    # knowing a module sequence cannot authorize a different positional isomer.
+    _validate_template_identity(name, LipidRegistry.get(name).smiles)
+    return _load_template_geometry(name)
+
+
+def _load_template_geometry(lipid_name: str) -> tuple[np.ndarray, list[str]]:
+    """Raw loading stays private to avoid recursion during identity validation."""
     name = str(lipid_name).strip().upper()
     entry = _templates().get(name)
     if entry is None:

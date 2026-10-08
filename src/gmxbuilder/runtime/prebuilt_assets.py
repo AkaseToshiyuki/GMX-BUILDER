@@ -7,22 +7,27 @@ not repeat GAFF2 parameterization or explicit-solvent lipid equilibration.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import logging
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
 import tempfile
-from typing import Iterator
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
 
 from gmxbuilder.modules.membrane.equilibrated_library import (
     SCHEMA_VERSION as LIBRARY_SCHEMA_VERSION,
+)
+from gmxbuilder.modules.membrane.equilibrated_library import (
     EquilibratedLipidLibrary,
 )
 
+logger = logging.getLogger(__name__)
 
 ASSET_SCHEMA_VERSION = 1
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "prebuilt_assets"
@@ -30,12 +35,9 @@ _MANIFEST_PATH = _DATA_DIR / "manifest.json"
 
 
 def _configured_roots() -> tuple[Path, Path]:
-    lipid_root = Path(
-        os.environ.get(
-            "GMXBUILDER_LIPID_LIBRARY",
-            Path.home() / ".cache" / "gmxbuilder" / "lipid_equilibrated",
-        )
-    ).expanduser()
+    from gmxbuilder.modules.membrane.equilibrated_library import configured_library_root
+
+    lipid_root = configured_library_root()
     gaff_root = Path(
         os.environ.get(
             "GMXBUILDER_GAFF_CACHE",
@@ -128,6 +130,19 @@ def _write_marker(root: Path, manifest: dict, installed_files: int) -> None:
     temporary.replace(_marker_path(root))
 
 
+#: How deep this process already is inside each installation lock.
+#:
+#: ``flock`` is held per open file description, so a process that opens the lock
+#: file a second time and asks for it again waits for itself -- forever, with
+#: every other process queued behind it. The nesting is not theoretical: the
+#: installation removes library entries the current runtime rejects, and asking
+#: whether an entry is still valid can reach back here. That stalled a test
+#: suite for four hours and two charge fits behind it. Threads serialise on the
+#: reentrant guard; the file lock is taken once, by the outermost caller.
+_LOCK_DEPTH: dict[Path, int] = {}
+_LOCK_GUARD = threading.RLock()
+
+
 @contextmanager
 def _installation_lock(lipid_root: Path, gaff_root: Path) -> Iterator[None]:
     common = Path(
@@ -142,12 +157,22 @@ def _installation_lock(lipid_root: Path, gaff_root: Path) -> Iterator[None]:
         common = Path.home() / ".cache" / "gmxbuilder"
     common.mkdir(parents=True, exist_ok=True)
     lock_path = common / ".prebuilt-assets.lock"
-    with lock_path.open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    with _LOCK_GUARD:
+        if _LOCK_DEPTH.get(lock_path, 0):
+            _LOCK_DEPTH[lock_path] += 1
+            try:
+                yield
+            finally:
+                _LOCK_DEPTH[lock_path] -= 1
+            return
+        with lock_path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _LOCK_DEPTH[lock_path] = 1
+            try:
+                yield
+            finally:
+                _LOCK_DEPTH[lock_path] -= 1
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _validate_member(member: tarfile.TarInfo) -> None:
@@ -186,6 +211,8 @@ def _merge_tree(source: Path, destination: Path) -> int:
 
 def _validate_staging(staging: Path, manifest: dict) -> None:
     """Reject a hash-valid archive whose scientific entries are unusable."""
+    from gmxbuilder.modules.forcefield.gaff_backend import _safe_name, task_gaff_cache
+
     lipid_root = staging / "lipid_equilibrated"
     metadata_files = sorted(lipid_root.glob("*/*/metadata.json"))
     expected_lipids = int(manifest["contents"]["strict_library_entries"])
@@ -193,6 +220,7 @@ def _validate_staging(staging: Path, manifest: dict) -> None:
         raise RuntimeError("Prebuilt lipid asset entry count does not match its manifest")
 
     library = EquilibratedLipidLibrary([lipid_root])
+    incompatible: list[str] = []
     for metadata_path in metadata_files:
         try:
             metadata = json.loads(metadata_path.read_text())
@@ -204,14 +232,43 @@ def _validate_staging(staging: Path, manifest: dict) -> None:
                 f"Invalid strict lipid metadata in release archive: "
                 f"{metadata_path.relative_to(staging)}"
             ) from exc
-        if library.inspect(name, force_field, lipid_ff) is None:
-            raise RuntimeError(
-                f"Prebuilt lipid entry is incompatible with the current runtime: "
-                f"{metadata_path.relative_to(staging)}"
-            )
+        parameter_names = {_safe_name(name)}
+        host = metadata.get("equilibration_host")
+        if isinstance(host, dict) and host.get("lipid_name"):
+            parameter_names.add(_safe_name(str(host["lipid_name"])))
+        # Admission must describe the downloaded bundle, independently of the
+        # user's cache. Otherwise empty caches falsely reject bundled GAFF
+        # entries, while an existing fit can hide missing bundled parameters.
+        with task_gaff_cache(staging / "gaff2", parameter_names):
+            entry = library.inspect(name, force_field, lipid_ff)
+        if entry is None:
+            # One stale entry disables that lipid, not the whole library.
+            #
+            # This used to abort the install. It made a correction to a single
+            # registry identity unusable in practice: the shipped archive is
+            # validated as a unit, so refusing it for one entry withdrew every
+            # other lipid in it as well -- hundreds of entries whose chemistry
+            # was never in question. Correcting 46 lipid structures against the
+            # force field's own residues would have taken the entire
+            # pre-equilibrated library offline until it was rebuilt.
+            #
+            # Nothing is served that should not be: the per-lipid guard in
+            # EquilibratedLipidLibrary.inspect() is the check that matters, it
+            # runs on every access, and it refuses exactly these entries. This
+            # one only decided whether a single refusal was fatal to the rest.
+            incompatible.append(str(metadata_path.relative_to(staging)))
+    if incompatible:
+        logger.warning(
+            "%d of %d prebuilt lipid entries do not match the current identity or "
+            "parameter requirements and will not be served; the rest of the library installs "
+            "normally. First few: %s",
+            len(incompatible),
+            len(metadata_files),
+            ", ".join(sorted(incompatible)[:5]),
+        )
 
     gaff_root = staging / "gaff2"
-    gaff_entries = [path for path in gaff_root.iterdir()] if gaff_root.is_dir() else []
+    gaff_entries = list(gaff_root.iterdir()) if gaff_root.is_dir() else []
     expected_gaff = int(manifest["contents"]["gaff2_cache_entries"])
     if len([path for path in gaff_entries if path.is_dir()]) != expected_gaff:
         raise RuntimeError("Prebuilt GAFF2 cache entry count does not match its manifest")

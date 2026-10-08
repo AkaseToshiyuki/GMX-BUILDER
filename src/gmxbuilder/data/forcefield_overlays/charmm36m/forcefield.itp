@@ -1,5 +1,5 @@
 ; Base asset: official CHARMM36 July 2022 GROMACS port.
-; GMXBUILDER adds only the cited plasmalogen bonded extension below.
+; Plasmalogen supplements are emitted as local molecule terms, never global overrides.
 #define _FF_CHARMM
 
 [ defaults ]
@@ -8,7 +8,6 @@
 
 #include "ffnonbonded.itp"
 #include "ffbonded.itp"
-#include "gmxbuilder-plasmalogen-bonded.itp"
 
 #ifdef USE_OLD_C36
 #error This port does not support the old CHARMM36 CMAP parameters.

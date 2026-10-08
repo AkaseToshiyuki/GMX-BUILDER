@@ -9,7 +9,6 @@ import pytest
 
 from gmxbuilder.modules.membrane.builder import MembraneBuilder
 
-
 _PHYSIOLOGICAL_SCENARIOS = {
     "mammalian_plasma_asymmetric": {
         "upper": [

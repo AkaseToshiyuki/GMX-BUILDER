@@ -1,18 +1,20 @@
-from fastapi.testclient import TestClient
-
 from pathlib import Path
+
 import numpy as np
+import pytest
+from fastapi.testclient import TestClient
 
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
-from gmxbuilder.io.pdb import PDBParser, PDBValidator
 from gmxbuilder.io.mdp import MDPWriter
+from gmxbuilder.io.pdb import PDBParser, PDBValidator
 from gmxbuilder.modules.membrane.orient_module import OrientModule
 from gmxbuilder.web import server
 from gmxbuilder.web.server import app, task_manager
 from gmxbuilder.web.task_types import get_task_type_detail
+from tests.prerequisites import requires_gaff_runtime
 
 
 def test_frontend_residue_indices_preserve_coordinate_encounter_order():
@@ -36,10 +38,10 @@ def test_task_resume_uses_standardized_input_checkpoint(tmp_path, monkeypatch):
     task = task_manager.create_task(filename="modified.pdb")
     task_id = task["task_id"]
     raw = (
-        "ATOM      1  N   SEP A  10       0.000   0.000   0.000  1.00  0.00           N\n"
-        "ATOM      2  CA  SEP A  10       1.458   0.000   0.000  1.00  0.00           C\n"
-        "END\n"
-    ).encode()
+        b"ATOM      1  N   SEP A  10       0.000   0.000   0.000  1.00  0.00           N\n"
+        b"ATOM      2  CA  SEP A  10       1.458   0.000   0.000  1.00  0.00           C\n"
+        b"END\n"
+    )
     uploaded = task_manager.save_uploaded_pdb(task_id, "modified.pdb", raw)
     task_manager.update_state(
         task_id,
@@ -126,6 +128,10 @@ def test_step_endpoint_rejects_non_object_config(monkeypatch):
 
 
 def test_build_accepts_stage_owned_default_simulation_payload(tmp_path, monkeypatch):
+    from gmxbuilder.pipeline.step_executor import StepRunner
+
+    # Isolate simulation-payload validation from the independent upload gate.
+    monkeypatch.setattr(StepRunner, "input_validation_current", lambda self: True)
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="default.pdb")
     task_id = task["task_id"]
@@ -204,16 +210,30 @@ def test_propka_uses_input_checkpoint_not_structure_checkpoint(tmp_path, monkeyp
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="input.pdb")
     task_dir = task_manager.get_task_dir(task["task_id"])
-    input_viewer = task_dir / "steps" / "input" / "viewer.pdb"
-    structure_viewer = task_dir / "steps" / "structure" / "viewer.pdb"
-    input_viewer.parent.mkdir(parents=True)
-    structure_viewer.parent.mkdir(parents=True)
-    input_viewer.write_text("INPUT\n")
-    structure_viewer.write_text("STRUCTURE\n")
+    from gmxbuilder.modules.input.validation import INPUT_VALIDATION_VERSION
+    from tests.structure_fixtures import peptide_structure
 
+    original = peptide_structure("AS")
+    checked = System(
+        original,
+        metadata={
+            "input_validation": {
+                "policy_version": INPUT_VALIDATION_VERSION,
+                "can_proceed": True,
+                "errors": [],
+            }
+        },
+    )
+    checked.save_checkpoint(task_dir / "steps" / "input")
+    processed = checked.copy()
+    processed.structure.translate(np.array([1.0, 2.0, 3.0]))
+    processed.save_checkpoint(task_dir / "steps" / "structure")
+    (task_dir / "steps" / "input" / "viewer.pdb").write_text("DISPLAY ONLY\n")
     resolved = server._resolve_propka_pdb_path(task["task_id"])
-
-    assert Path(resolved) == input_viewer
+    assert Path(resolved).name == "propka-input.pdb"
+    np.testing.assert_allclose(
+        PDBParser().parse(resolved).coordinates, original.coordinates, atol=0.000051, rtol=0
+    )
 
 
 def test_protonate_endpoint_rejects_out_of_range_ph():
@@ -259,7 +279,12 @@ def test_protonate_endpoint_reports_failed_environment_sensitive_fallback(
 ):
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="input.pdb")
-    task_manager.save_uploaded_pdb(task["task_id"], "input.pdb", b"END\n")
+    from gmxbuilder.io.pdb import PDBWriter
+    from tests.structure_fixtures import peptide_structure
+
+    path = tmp_path / "valid.pdb"
+    PDBWriter.write(peptide_structure("AD"), path)
+    task_manager.save_uploaded_pdb(task["task_id"], "input.pdb", path.read_bytes())
 
     async def empty_propka(_path):
         return []
@@ -282,7 +307,34 @@ def test_protonate_endpoint_reports_failed_environment_sensitive_fallback(
     assert "could not produce" in response.json()["propka_warning"]
 
 
-def test_options_advertise_validated_lipid21_but_reject_gaff2_chol():
+@pytest.fixture
+def option_readiness(monkeypatch, unpopulated_default_lipid_library):
+    """Exercise option rendering with an explicit synthetic V4 readiness snapshot."""
+    from types import SimpleNamespace
+
+    from gmxbuilder.modules.membrane import v4_availability
+    from gmxbuilder.web.server_parts import option_catalog, web_options
+
+    monkeypatch.setattr(
+        option_catalog,
+        "get_catalog",
+        lambda: SimpleNamespace(read=lambda **kwargs: web_options.build_ui_options()),
+    )
+
+    entries = [
+        {"lipid_name": name, "lipid_ff": source, "ready": True, "amber_mixed_ready": False}
+        for name, sources in {
+            "CHOL": ("lipid21", "charmm36m", "charmm36"),
+            "BSM": ("charmm36m", "charmm36"),
+            "POPC": ("lipid21", "charmm36m", "charmm36"),
+            "GM1": ("charmm36m", "charmm36"),
+        }.items()
+        for source in sources
+    ]
+    monkeypatch.setattr(v4_availability, "refresh_availability_list", lambda: {"entries": entries})
+
+
+def test_options_advertise_validated_lipid21_but_reject_gaff2_chol(option_readiness):
     with TestClient(app) as client:
         response = client.get("/api/options")
 
@@ -295,7 +347,7 @@ def test_options_advertise_validated_lipid21_but_reject_gaff2_chol():
     assert "93.8% correctly oriented" in chol["gaff2_unavailable_reason"]
 
 
-def test_options_reject_thin_gaff2_bsm_and_advertise_exact_charmm():
+def test_options_reject_thin_gaff2_bsm_and_advertise_exact_charmm(option_readiness):
     with TestClient(app) as client:
         response = client.get("/api/options")
 
@@ -307,17 +359,18 @@ def test_options_reject_thin_gaff2_bsm_and_advertise_exact_charmm():
     assert "use CHARMM36m or CHARMM36" in bsm["gaff2_unavailable_reason"]
 
 
-def test_options_advertise_exact_lipid21_popc_support():
+def test_options_advertise_exact_lipid21_popc_support(option_readiness):
     with TestClient(app) as client:
         response = client.get("/api/options")
 
     assert response.status_code == 200
     popc = next(item for item in response.json()["lipids"] if item["name"] == "POPC")
     assert popc["parameterizations"][0] == "lipid21"
-    assert "Amber Lipid21 v1.0 (exact)" in popc["parameterization"]
+    assert "Amber Lipid21 (native parameters)" in popc["parameterization"]
+    assert "v1.0" not in popc["parameterization"]
 
 
-def test_options_mark_validated_gm1_and_oxysterol_alternatives():
+def test_options_mark_validated_gm1_and_oxysterol_alternatives(option_readiness):
     with TestClient(app) as client:
         response = client.get("/api/options")
 
@@ -327,6 +380,31 @@ def test_options_mark_validated_gm1_and_oxysterol_alternatives():
     assert lipids["GM1"]["charge"] == -1
     assert lipids["20AHC"]["parameterizations"] == []
     assert "no validated bundled alternative" in lipids["20AHC"]["gaff2_unavailable_reason"]
+
+
+def test_options_keep_unaccepted_parameter_sources_disabled(
+    monkeypatch, unpopulated_default_lipid_library
+):
+    from types import SimpleNamespace
+
+    from gmxbuilder.modules.membrane import v4_availability
+    from gmxbuilder.web.server_parts import option_catalog, web_options
+
+    monkeypatch.setattr(
+        option_catalog,
+        "get_catalog",
+        lambda: SimpleNamespace(read=lambda **kwargs: web_options.build_ui_options()),
+    )
+
+    monkeypatch.setattr(v4_availability, "refresh_availability_list", lambda: {"entries": []})
+    with TestClient(app) as client:
+        response = client.get("/api/options")
+    assert response.status_code == 200
+    chol = next(item for item in response.json()["lipids"] if item["name"] == "CHOL")
+    assert "lipid21" in chol["parameter_sources"]
+    assert chol["parameterizations"] == []
+    assert chol["parameterization"] == "Unavailable"
+    assert chol["library_version"] == 4
 
 
 def test_crosslink_capabilities_are_force_field_specific_and_scientific():
@@ -343,6 +421,7 @@ def test_crosslink_capabilities_are_force_field_specific_and_scientific():
     assert "force-field-native cross-residue patch" in charmm.json()["disulfide"]["reason"]
 
 
+@requires_gaff_runtime
 def test_ligand_charge_suggestion_endpoint_uses_target_ph(tmp_path, monkeypatch):
     monkeypatch.setattr(task_manager, "root", tmp_path)
     task = task_manager.create_task(filename="ligand.pdb")
@@ -439,3 +518,16 @@ def test_orientation_preview_matches_real_step_module(tmp_path, monkeypatch):
         expected.structure.coordinates,
         atol=1.1e-4,
     )
+
+
+def test_protonate_invalid_structure_returns_actionable_4xx(tmp_path, monkeypatch):
+    monkeypatch.setattr(task_manager, "root", tmp_path)
+    task = task_manager.create_task(filename="empty.pdb")
+    task_manager.save_uploaded_pdb(task["task_id"], "empty.pdb", b"END\n")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        result = client.post(
+            "/api/protonate", json={"task_id": task["task_id"], "residues": ["ASP"], "pH": 7.0}
+        )
+    assert result.status_code == 400
+    assert "No atoms found" in result.json()["error"]
+    assert str(tmp_path) not in result.text

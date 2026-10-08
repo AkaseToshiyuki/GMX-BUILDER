@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 import re
+from functools import lru_cache
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -152,7 +153,8 @@ def _sample_lipid_tail_torsions(mol, conformer, names: list[str], rtp: dict, see
             atoms = [index[name] for name in chain_names[start : start + 4]]
             if not all(
                 mol.GetBondBetweenAtoms(left, right) is not None
-                for left, right in zip(atoms, atoms[1:])
+                # strict=False on purpose: consecutive pairs: the tail is one shorter.
+                for left, right in zip(atoms, atoms[1:], strict=False)
             ):
                 continue
             central = chain_names[start + 1 : start + 3]
@@ -222,75 +224,10 @@ def _orient_for_membrane(coords: np.ndarray, names: list[str]) -> np.ndarray:
     return oriented - oriented.mean(axis=0)
 
 
-def _align_tail_subtrees(coords: np.ndarray, names: list[str], rtp: dict) -> np.ndarray:
-    """Rigidly point both complete acyl-tail subtrees down the membrane Z axis."""
-    name_index = {name: index for index, name in enumerate(names)}
-    adjacency = {name: set() for name in names}
-    for left, right in rtp["bonds"]:
-        if left in adjacency and right in adjacency:
-            adjacency[left].add(right)
-            adjacency[right].add(left)
+def _align_tail_subtrees(coords, names, rtp, *, smiles):
+    from gmxbuilder.geometry.tail_torsions import align_tail_torsions
 
-    for root, first, pattern, x_component, y_component in (
-        ("C21", "C22", r"C2(\d+)", 0.12, 0.10),
-        ("C31", "C32", r"C3(\d+)", -0.12, -0.10),
-        ("C1F", "C2F", r"C(\d+)F", 0.12, 0.10),
-        ("C3S", "C4S", r"C(\d+)S", -0.12, -0.10),
-    ):
-        if root not in name_index or first not in name_index or first not in adjacency[root]:
-            continue
-        terminal_candidates = []
-        for name in names:
-            match = re.fullmatch(pattern, name)
-            if match:
-                terminal_candidates.append((int(match.group(1)), name))
-        if not terminal_candidates:
-            continue
-        terminal = max(terminal_candidates)[1]
-        subtree = set()
-        stack = [first]
-        while stack:
-            name = stack.pop()
-            if name == root or name in subtree:
-                continue
-            subtree.add(name)
-            stack.extend(adjacency[name] - subtree - {root})
-        origin = coords[name_index[root]]
-        axis = coords[name_index[terminal]] - origin
-        if np.linalg.norm(axis) < 1e-8:
-            continue
-        axis /= np.linalg.norm(axis)
-        # Give the two inward-facing tails a small opposing azimuthal spread.
-        # This remains a rigid subtree rotation, preserves stereochemistry and
-        # bond geometry, and avoids the artificial tail/head intersections
-        # produced when both branches are forced into the same XZ plane.
-        target = np.array([x_component, y_component, -1.0])
-        target /= np.linalg.norm(target)
-        rotation, _ = Rotation.align_vectors([target], [axis])
-        indices = [name_index[name] for name in subtree]
-        base_values = rotation.apply(coords[indices] - origin)
-        fixed_indices = [index for index in range(len(coords)) if index not in indices]
-        fixed_values = coords[fixed_indices]
-        best_values = base_values
-        best_clearance = -np.inf
-        # Alignment fixes the root-to-terminal direction but leaves a free
-        # roll around that axis.  Select the deterministic roll with greatest
-        # clearance from the headgroup/other tail.  This prevents a valid
-        # sphingolipid tail from being discarded merely because C2F happens to
-        # land on the amide nitrogen in the zero-roll orientation.
-        for degrees in (0, 60, -60, 120, -120, 180):
-            roll = Rotation.from_rotvec(target * np.deg2rad(degrees))
-            candidate = roll.apply(base_values) + origin
-            if len(fixed_values):
-                separations = candidate[:, None, :] - fixed_values[None, :, :]
-                clearance = float(np.linalg.norm(separations, axis=2).min())
-            else:
-                clearance = np.inf
-            if clearance > best_clearance:
-                best_clearance = clearance
-                best_values = candidate
-        coords[indices] = best_values
-    return coords
+    return align_tail_torsions(coords, names, rtp, smiles=smiles)
 
 
 def _align_gaff_tail_subtrees(
@@ -447,16 +384,163 @@ def _align_gaff_tail_subtrees(
                 coords[indices] = best_values
 
         origin = coords[root]
-        axis = coords[terminal] - origin
+        # Turn about the attachment bond, not an arbitrary axis through the
+        # root: the latter bends covalent angles and can invert ceramide C3.
+        axis = coords[path[2]] - origin
         if np.linalg.norm(axis) < 1e-8:
             continue
         axis /= np.linalg.norm(axis)
         target = np.asarray([0.12 if branch_number == 0 else -0.12, 0.0, -1.0])
         target /= np.linalg.norm(target)
-        rotation, _ = Rotation.align_vectors([target], [axis])
         indices = with_hydrogens(component)
-        coords[indices] = rotation.apply(coords[indices] - origin) + origin
+        best, best_score = coords[indices].copy(), -np.inf
+        for degrees in (0, 60, -60, 120, -120, 180):
+            rotation = Rotation.from_rotvec(axis * np.deg2rad(degrees))
+            direction = rotation.apply(coords[terminal] - origin)
+            score = float(np.dot(direction, target))
+            if score > best_score:
+                best = rotation.apply(coords[indices] - origin) + origin
+                best_score = score
+        coords[indices] = best
     return coords
+
+
+def _chirality_signature(coords: np.ndarray, adjacency: list[tuple[int, ...]]) -> tuple:
+    """The handedness of every four-coordinate atom, as a tuple of signs.
+
+    Rotating a rigid subtree about the bond that attaches it cannot change a
+    stereocentre -- but only if the subtree really is everything on one side of
+    that bond. Where the partition is wrong the rotation moves some of a
+    centre's substituents and not others, and the centre can come out inverted.
+    That is not a hypothetical: aligning the tails of C16 ceramide inverted its
+    sphingoid C3 on one seed in four, turning D-erythro ceramide into its C3
+    epimer in a conformer that was otherwise perfectly good.
+    """
+    signs = []
+    for index, neighbours in enumerate(adjacency):
+        if len(neighbours) != 4:
+            continue
+        a, b, c, d = (coords[n] for n in neighbours)
+        # The volume spanned by all four substituents, not three of them and
+        # the centre. Tail alignment re-points a whole branch, so the atom that
+        # moves is often the fourth one; a triple that happens to leave it out
+        # reports no change while the centre has inverted.
+        volume = float(np.dot(np.cross(b - a, c - a), d - a))
+        signs.append((index, volume))
+    return tuple(signs)
+
+
+#: How far a stereocentre may flatten before its rearrangement is refused.
+#:
+#: The sign of the substituent tetrahedron is not enough on its own. Aligning
+#: C16 ceramide's tail left the sign of its sphingoid C3 alone but collapsed the
+#: tetrahedron from 0.0077 to 0.0012 nm^3, and a centre that nearly planar has
+#: no reliable handedness left -- RDKit read the flattened conformer as the C3
+#: epimer. A rigid rotation of a branch about the bond that attaches it does not
+#: touch the geometry at the centre at all, so any real collapse means the
+#: rearrangement was not that.
+MINIMUM_CHIRAL_VOLUME_RATIO = 0.5
+
+
+def _double_bond_signature(coords: np.ndarray, adjacency: list[tuple[int, ...]]) -> tuple:
+    """Which side of each sp2-sp2 bond its substituents sit on.
+
+    Chirality alone is not enough: the same rearrangement that can invert a
+    centre can swing a double bond from cis to trans, and a plasmalogen's vinyl
+    ether flipped on two seeds in three. An RTP file carries no bond orders, so
+    a bond between two three-coordinate atoms stands in for one -- it is the
+    geometry that has to be preserved either way.
+    """
+    signs = []
+    for first, neighbours in enumerate(adjacency):
+        if len(neighbours) != 3:
+            continue
+        for second in neighbours:
+            if second <= first or len(adjacency[second]) != 3:
+                continue
+            left = next(n for n in adjacency[first] if n != second)
+            right = next(n for n in adjacency[second] if n != first)
+            axis = coords[second] - coords[first]
+            norm = float(np.linalg.norm(axis))
+            if norm < 1e-9:
+                continue
+            axis = axis / norm
+            a = coords[left] - coords[first]
+            b = coords[right] - coords[second]
+            a = a - axis * float(np.dot(a, axis))
+            b = b - axis * float(np.dot(b, axis))
+            if np.linalg.norm(a) < 1e-6 or np.linalg.norm(b) < 1e-6:
+                continue
+            signs.append(((first, second), float(np.sign(np.dot(a, b)))))
+    return tuple(signs)
+
+
+def _keeps_chirality(
+    before: np.ndarray, after: np.ndarray, adjacency: list[tuple[int, ...]]
+) -> bool:
+    """Whether a rearrangement left the molecule's stereochemistry alone.
+
+    Both kinds: every four-coordinate atom's handedness, and which side of each
+    sp2-sp2 bond its substituents lie on.
+    """
+    first, second = (
+        _chirality_signature(before, adjacency),
+        _chirality_signature(after, adjacency),
+    )
+    if len(first) != len(second):
+        return False
+    for (index, was), (also, now) in zip(first, second, strict=True):
+        if index != also:
+            return False
+        if np.sign(was) != np.sign(now):
+            return False
+        if abs(now) < MINIMUM_CHIRAL_VOLUME_RATIO * abs(was):
+            return False
+    return _double_bond_signature(before, adjacency) == _double_bond_signature(after, adjacency)
+
+
+def _adjacency_from_bonds(names: list[str], bonds) -> list[tuple[int, ...]]:
+    position = {str(name).strip(): index for index, name in enumerate(names)}
+    neighbours: list[set[int]] = [set() for _ in names]
+    for first, second in bonds:
+        a, b = str(first), str(second)
+        if a not in position or b not in position:
+            continue
+        neighbours[position[a]].add(position[b])
+        neighbours[position[b]].add(position[a])
+    return [tuple(sorted(entry)) for entry in neighbours]
+
+
+def _adjacency_from_rdkit(smiles: str, names: list[str]) -> list[tuple[int, ...]] | None:
+    """Bond graph for a GAFF conformer, in the atom order ACPYPE returned.
+
+    Only where ACPYPE really did keep the SMILES heavy-atom order and append the
+    hydrogens. It does not always: for digalactosyldiacylglycerol it interleaves
+    them, and eight positions carry a different element from the SMILES. Equal
+    atom counts do not establish the correspondence, so the elements are
+    compared -- the same test `_align_gaff_tail_subtrees` applies before it will
+    touch anything, so the two agree about when the assumption holds.
+    """
+    from rdkit import Chem
+
+    molecule = Chem.MolFromSmiles(str(smiles).strip())
+    if molecule is None:
+        return None
+    heavy = molecule.GetNumAtoms()
+    if heavy > len(names):
+        return None
+    expected = [atom.GetSymbol().upper() for atom in molecule.GetAtoms()]
+    if expected != [_element(name) for name in names[:heavy]]:
+        return None
+    molecule = Chem.AddHs(molecule)
+    if molecule.GetNumAtoms() != len(names):
+        return None
+    neighbours: list[set[int]] = [set() for _ in names]
+    for bond in molecule.GetBonds():
+        a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        neighbours[a].add(b)
+        neighbours[b].add(a)
+    return [tuple(sorted(entry)) for entry in neighbours]
 
 
 def _has_intramolecular_overlap(coords: np.ndarray, cutoff_nm: float = 0.05) -> bool:
@@ -467,6 +551,40 @@ def _has_intramolecular_overlap(coords: np.ndarray, cutoff_nm: float = 0.05) -> 
     distances = np.linalg.norm(differences, axis=2)
     np.fill_diagonal(distances, np.inf)
     return bool(float(distances.min()) < cutoff_nm)
+
+
+def _validated_gaff_geometry(template, smiles):
+    """Accept optional packing torsions only if the exact ITP geometry survives."""
+    from itertools import combinations
+
+    from gmxbuilder.geometry.molecular_identity import itp_graph, validate_stereochemistry
+
+    names, elements, bonds = itp_graph(template.itp_path)
+    if names != template.atom_names:
+        raise ValueError("GAFF coordinate/topology atom order differs")
+    coords = _orient_for_membrane(template.coordinates.copy(), list(names))
+    validate_stereochemistry(smiles, elements, bonds, coords)
+    aligned = _align_gaff_tail_subtrees(coords.copy(), list(names), smiles)
+    adjacency = [set() for _ in names]
+    for i, j in bonds:
+        adjacency[i].add(j)
+        adjacency[j].add(i)
+    # Bond lengths plus the distances between each pair of bonded neighbours
+    # establish all covalent bond angles, including hydrogens. This catches
+    # a wrongly partitioned branch even when its CIP sign happens to survive.
+    pairs = list(bonds) + [pair for neighbours in adjacency for pair in combinations(neighbours, 2)]
+    indices = np.asarray(pairs, dtype=int)
+    before = np.linalg.norm(coords[indices[:, 0]] - coords[indices[:, 1]], axis=1)
+    after = np.linalg.norm(aligned[indices[:, 0]] - aligned[indices[:, 1]], axis=1)
+    intact = np.allclose(before, after, atol=1e-7, rtol=0)
+    try:
+        validate_stereochemistry(smiles, elements, bonds, aligned)
+    except ValueError:
+        intact = False
+    if intact and not _has_intramolecular_overlap(aligned):
+        coords = aligned
+    coords -= coords.mean(axis=0)
+    return coords
 
 
 @lru_cache(maxsize=256)
@@ -480,29 +598,62 @@ def _build_cached(
         from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
 
         template = prepare_gaff_lipid(lipid_name, smiles, net_charge)
-        coords = _orient_for_membrane(template.coordinates.copy(), list(template.atom_names))
-        aligned = _align_gaff_tail_subtrees(
-            coords.copy(),
-            list(template.atom_names),
-            smiles,
-        )
-        # Tail rotations are an optional bootstrap improvement, not a reason
-        # to corrupt a valid GAFF2 conformer.  Some branched headgroups (DPPS
-        # in particular) can make independently rotated subtrees cross even
-        # though every moved covalent bond remains intact.
-        if not _has_intramolecular_overlap(aligned):
-            coords = aligned
-        coords -= coords.mean(axis=0)
+        coords = _validated_gaff_geometry(template, smiles)
         return coords, template.atom_names
 
+    # Only generated RTP bootstrap coordinates may try another seed. Cached
+    # GAFF2/Lipid21 coordinates above are authoritative and are never replaced.
+    failures = []
+    for attempt in dict.fromkeys((seed, *range(5))):
+        try:
+            result = _build_rtp_seed(smiles, rtp, attempt)
+        except _BootstrapGeometryError as exc:
+            failures.append(f"seed {attempt}: {exc}")
+            continue
+        if attempt != seed:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "%s/%s bootstrap seed %s rejected; using validated seed %s (%s)",
+                lipid_name,
+                force_field,
+                seed,
+                attempt,
+                "; ".join(failures),
+            )
+        return result
+    raise _BootstrapGeometryError(
+        f"No valid bootstrap geometry for {lipid_name}/{force_field}: " + "; ".join(failures)
+    )
+
+
+class _BootstrapGeometryError(ValueError):
+    """A generated conformer failed; a different deterministic seed may work."""
+
+
+def _validate_rtp_bootstrap(smiles, names, rtp, coords, *, check_overlap=True):
+    from gmxbuilder.geometry.molecular_identity import validate_stereochemistry
+
+    positions = {name: i for i, name in enumerate(names)}
+    elements = tuple(_element(name) for name in names)
+    bonds = tuple((positions[a], positions[b]) for a, b in rtp["bonds"])
+    try:
+        validate_stereochemistry(smiles, elements, bonds, coords)
+    except ValueError as exc:
+        raise _BootstrapGeometryError(str(exc)) from exc
+    if check_overlap and _has_intramolecular_overlap(coords):
+        raise _BootstrapGeometryError("Intramolecular overlap in generated coordinates")
+
+
+def _build_rtp_seed(smiles, rtp, seed):
+    """Generate and validate one seed; no retries or identity substitution here."""
     from rdkit.Chem import AllChem
 
     mol, names = _molecule_from_rtp(rtp)
     stereo_seeded = _seed_explicit_stereochemistry(mol, smiles, int(seed))
     if "@" in smiles and not stereo_seeded:
-        raise ValueError(
-            f"Explicit stereochemistry for lipid {lipid_name} cannot be mapped "
-            "exactly onto its force-field atom graph"
+        raise _BootstrapGeometryError(
+            "Explicit stereochemistry cannot be mapped exactly onto its force-field atom graph"
         )
     if not stereo_seeded:
         status = -1
@@ -517,8 +668,8 @@ def _build_cached(
             if status == 0:
                 break
         if status != 0:
-            raise ValueError(
-                f"RDKit could not embed lipid {lipid_name} after four deterministic attempts"
+            raise _BootstrapGeometryError(
+                "RDKit could not embed lipid after four deterministic attempts"
             )
     conformer = mol.GetConformer()
     _sample_lipid_tail_torsions(mol, conformer, names, rtp, seed)
@@ -528,16 +679,22 @@ def _build_cached(
     )
 
     coords = _orient_for_membrane(np.asarray(coords), list(names))
+    # A torsion may resolve a steric clash, but must start with intact identity.
+    _validate_rtp_bootstrap(smiles, names, rtp, coords, check_overlap=False)
     prealigned = coords.copy()
-    # The RTP path has an exact bond graph, so orient each complete acyl-tail
-    # subtree after the whole-molecule head-to-tail alignment.  This helper
-    # existed previously but was never called, leaving many lipids lying in
-    # the XY membrane plane and producing sub-angstrom intermolecular clashes.
-    aligned = _align_tail_subtrees(coords.copy(), list(names), rtp)
-    # Tail alignment is a packing aid, never authority to corrupt the exact
-    # RTP conformer.  Fall back to the whole-molecule rigid orientation when
-    # independently rotated subtrees interpenetrate.
-    coords = prealigned if _has_intramolecular_overlap(aligned) else aligned
+    # Improve tail directions with torsions only. An arbitrary branch-root
+    # rotation used to flatten PSM's C3S while still reporting the R isomer.
+    aligned = _align_tail_subtrees(coords.copy(), list(names), rtp, smiles=smiles)
+    # An optional packing operation cannot weaken the identity contract. Check
+    # the proposed coordinates, not merely a relative tetrahedral-volume sign.
+    adjacency = _adjacency_from_bonds(list(names), rtp.get("bonds") or [])
+    try:
+        _validate_rtp_bootstrap(smiles, names, rtp, aligned)
+        intact = _keeps_chirality(prealigned, aligned, adjacency)
+    except _BootstrapGeometryError:
+        intact = False
+    coords = aligned if intact else prealigned
+    _validate_rtp_bootstrap(smiles, names, rtp, coords)
     coords -= coords.mean(axis=0)
     return coords, tuple(names)
 
@@ -551,7 +708,9 @@ def build_rdkit_lipid_geometry(
     lipid_ff: str | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Build one optimized all-atom lipid conformation."""
-    selected_lipid_ff = str(lipid_ff or "").strip().lower()
+    from gmxbuilder.modules.forcefield.lipid_policy import lipid_backend_for
+
+    selected_lipid_ff = lipid_backend_for(lipid_name, lipid_ff)
     if selected_lipid_ff == "lipid21":
         from gmxbuilder.modules.forcefield.lipid21_backend import load_lipid21_geometry
         from gmxbuilder.modules.membrane.lipid_orientation import (
@@ -577,15 +736,7 @@ def build_rdkit_lipid_geometry(
         from gmxbuilder.modules.forcefield.gaff_backend import prepare_gaff_lipid
 
         template = prepare_gaff_lipid(lipid_name, smiles, int(net_charge))
-        coords = _orient_for_membrane(template.coordinates.copy(), list(template.atom_names))
-        aligned = _align_gaff_tail_subtrees(
-            coords.copy(),
-            list(template.atom_names),
-            smiles,
-        )
-        if not _has_intramolecular_overlap(aligned):
-            coords = aligned
-        coords -= coords.mean(axis=0)
+        coords = _validated_gaff_geometry(template, smiles)
         return coords, list(template.atom_names)
     coords, names = _build_cached(
         lipid_name.upper(), smiles, force_field.lower(), int(seed), int(net_charge)

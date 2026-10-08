@@ -9,10 +9,11 @@ from gmxbuilder.modules.coarse_grained.backend import (
     validate_protein_box,
 )
 from gmxbuilder.modules.coarse_grained.common import system_from_gro
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGEnvironmentModule(BaseModule):
+class CGEnvironmentModule(CGWorkflowAdmission, BaseModule):
     name = "cg_environment"
     description = "Place CG protein and construct an optional flat Martini 3 bilayer"
 
@@ -36,7 +37,9 @@ class CGEnvironmentModule(BaseModule):
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         output = system.copy()
+        output.metadata["seed"] = int(config.get("seed", output.metadata.get("seed", 42)))
         normalized = normalize_environment(config, output.metadata, output.structure.coordinates)
         if normalized["environment"] == "solution" and not normalized["include_protein"]:
             raise ModuleConfigError("A solution-phase CG task requires a protein")
@@ -49,13 +52,19 @@ class CGEnvironmentModule(BaseModule):
         environment = normalized["environment"]
         logs = [
             f"Constructed dry Martini 3 {environment} environment",
-            f"Box: {normalized['box_xy']:.2f} × {normalized['box_xy']:.2f} × {normalized['box_z']:.2f} nm",
+            (
+                f"Box: {normalized['box_xy']:.2f} × {normalized['box_xy']:.2f} × "
+                f"{normalized['box_z']:.2f} nm"
+            ),
             f"CG beads: {built.num_atoms}",
         ]
+        if normalized.get("automatic_box_adjustments"):
+            logs.append("Expanded the automatic box to preserve protein PBC clearance")
         if environment == "bilayer":
             logs.append(
                 f"Requested {normalized['n_lipids_per_leaflet']} lipids per leaflet; "
-                f"X/Y derived from weighted APL {normalized['weighted_apl_nm2']:.3f} nm²"
+                f"X/Y derived from conservative weighted construction area "
+                f"{normalized['weighted_apl_nm2']:.3f} nm²"
             )
             logs.append(
                 "Built independent upper and lower leaflets with tails facing the bilayer core"
@@ -64,4 +73,15 @@ class CGEnvironmentModule(BaseModule):
                 "Construction checkpoint is not energy-minimized or equilibrated; "
                 "run the exported minimization, NVT, and semi-isotropic NPT stages"
             )
-        return ModuleResult(True, built, logs)
+        from gmxbuilder.modules.membrane.composition_warnings import composition_warnings
+
+        advice = (
+            composition_warnings(
+                {"upper": normalized["upper_leaflet"], "lower": normalized["lower_leaflet"]},
+                resolution="martini3",
+            )
+            if environment == "bilayer"
+            else []
+        )
+        built.metadata["membrane_composition_warnings"] = advice
+        return ModuleResult(True, built, logs, warnings=[item["message"] for item in advice])

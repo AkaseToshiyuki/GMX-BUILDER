@@ -72,7 +72,7 @@ def test_queue_status_has_task_id_and_start_estimate(monkeypatch):
     monkeypatch.setattr(server, "_building_tasks", {"b" * 32})
     monkeypatch.setattr(server, "_build_started_at", {"b" * 32: time.time() - 5.0})
     server._build_duration_history.clear()
-    server._build_duration_history.append(20.0)
+    server._build_duration_history.append((20.0, 4))
 
     status = asyncio.run(server.api_build_queue_status(task_id))
 
@@ -89,7 +89,7 @@ def test_queue_estimate_accounts_for_positions_beyond_currently_free_slots(monke
     monkeypatch.setattr(server, "_building_tasks", {"active"})
     monkeypatch.setattr(server, "_build_started_at", {"active": now})
     server._build_duration_history.clear()
-    server._build_duration_history.append(20.0)
+    server._build_duration_history.append((20.0, 4))
 
     assert server._queue_estimate(3)["estimated_wait_seconds"] == 0
     assert server._queue_estimate(4)["estimated_wait_seconds"] >= 19
@@ -152,6 +152,10 @@ def test_queue_admission_persists_request_and_returns_restorable_task_id(tmp_pat
         },
     }
 
+    unconfirmed = asyncio.run(server.api_build(_json_request(payload)))
+    assert unconfirmed.status_code == 409
+    assert manager.load_build_request(task_id) is None
+    _confirm_membrane(manager, task_id)
     response = asyncio.run(server.api_build(_json_request(payload)))
     result = json.loads(response.body)
 
@@ -206,7 +210,21 @@ def test_full_queue_does_not_persist_an_unaccepted_build(tmp_path, monkeypatch):
         },
     }
 
+    _confirm_membrane(manager, task_id)
     response = asyncio.run(server.api_build(_json_request(payload)))
 
     assert response.status_code == 503
     assert manager.load_build_request(task_id) is None
+
+
+def _confirm_membrane(manager, task_id):
+    from gmxbuilder.web.server_parts.viewer_data import checkpoint_revision
+
+    directory = manager.get_task_dir(task_id) / "steps" / "membrane"
+    response = asyncio.run(
+        server.api_confirm_final_review(
+            task_id,
+            _json_request({"source_step": "membrane", "revision": checkpoint_revision(directory)}),
+        )
+    )
+    assert response["confirmed"] is True

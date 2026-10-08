@@ -13,6 +13,7 @@ import numpy as np
 
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
+from gmxbuilder.core.hydrophobicity import WW_INTERFACE
 from gmxbuilder.geometry.align import compute_principal_axes
 from gmxbuilder.geometry.transforms import (
     rotation_matrix_from_axis_angle,
@@ -25,41 +26,8 @@ from gmxbuilder.modules.coarse_grained.common import (
 )
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
-
-# Wimley-White whole-residue water-to-interface transfer free energies.
-# The CG pose is scored per Martini backbone bead, retaining residue identity.
-_TRANSFER = {
-    "ALA": 0.17,
-    "ARG": 0.81,
-    "ASN": 0.42,
-    "ASP": 1.23,
-    "CYS": -0.24,
-    "GLN": 0.58,
-    "GLU": 0.11,
-    "GLY": 0.01,
-    "HIS": 0.96,
-    "ILE": -0.31,
-    "LEU": -0.56,
-    "LYS": 0.99,
-    "MET": -0.22,
-    "PHE": -1.13,
-    "PRO": 0.45,
-    "SER": 0.13,
-    "THR": 0.14,
-    "TRP": -1.85,
-    "TYR": -0.94,
-    "VAL": -0.07,
-    "ASH": 1.23,
-    "GLH": 0.11,
-    "CYX": -0.24,
-    "HID": 0.96,
-    "HIE": 0.96,
-    "HIP": 0.96,
-    "HSD": 0.96,
-    "HSE": 0.96,
-    "HSP": 0.96,
-    "LYN": 0.99,
-}
+# Shared experimental constants; the AA/CG pose algorithms remain separate.
+_TRANSFER = {"CYX": -0.24, "LYN": 0.99, **WW_INTERFACE}
 _HYDROPHOBIC = {"ALA", "CYS", "ILE", "LEU", "MET", "PHE", "TRP", "TYR", "VAL"}
 
 
@@ -301,6 +269,20 @@ class CGOrientationModule(BaseModule):
                 "Manual pose requires visual review against both membrane interfaces",
             ]
 
+        uncalibrated = sorted(
+            {
+                str(resname).strip().upper()
+                for atom, resname in zip(
+                    output.structure.atom_names, output.structure.resnames, strict=True
+                )
+                if str(atom).strip().upper() == "BB"
+            }
+            - WW_INTERFACE.keys()
+        )
+        if uncalibrated:
+            warning = "Unvalidated orientation weights for residues: " + ", ".join(uncalibrated)
+            metrics["warnings"] = [warning]
+            logs.append(warning)
         output.metadata["cg_orientation"] = metrics
         output.metadata["cg_orientation_method"] = method
         oriented_path = task_step_dir(config) / "oriented_protein.pdb"

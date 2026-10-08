@@ -5,8 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from gmxbuilder.core.topology import Topology
 from gmxbuilder.core.system import System
+from gmxbuilder.core.topology import Topology
 
 
 class ForceField(ABC):

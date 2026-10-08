@@ -10,15 +10,15 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
-from gmxbuilder.modules.input.pdb_input import PDBInputModule
-from gmxbuilder.modules.solution.forcefield import SolutionForceFieldSelector
-from gmxbuilder.modules.solution.structure import SolutionStructureProcessor
-from gmxbuilder.modules.nucleic_acid.native import _make_polymer_molecules_contiguous
-from gmxbuilder.modules.forcefield.compatibility import compatibility_report
-from gmxbuilder.runtime.hardware import find_gromacs_executable
 from gmxbuilder.io.pdb import PDBParser, PDBValidator
 from gmxbuilder.io.top import TopologyWriter
-
+from gmxbuilder.modules.forcefield.compatibility import compatibility_report
+from gmxbuilder.modules.input.pdb_input import PDBInputModule
+from gmxbuilder.modules.nucleic_acid.native import _make_polymer_molecules_contiguous
+from gmxbuilder.modules.solution.forcefield import SolutionForceFieldSelector
+from gmxbuilder.modules.solution.structure import SolutionStructureProcessor
+from gmxbuilder.runtime.hardware import find_gromacs_executable
+from tests.prerequisites import requires_forcefield, requires_gromacs
 
 FIXTURE = Path(__file__).parent / "fixtures" / "dna_dinucleotide.pdb"
 
@@ -76,7 +76,7 @@ def test_broken_nucleic_backbone_is_explicitly_blocked():
     right_p = next(
         index
         for index, (resid, atom_name) in enumerate(
-            zip(system.structure.resids, system.structure.atom_names)
+            zip(system.structure.resids, system.structure.atom_names, strict=True)
         )
         if int(resid) == 2 and str(atom_name).strip() == "P"
     )
@@ -168,10 +168,19 @@ def test_protein_and_nucleic_polymer_atoms_become_contiguous():
 
 
 @pytest.mark.skipif(find_gromacs_executable() is None, reason="GROMACS unavailable")
-def test_native_charmm36m_dna_topology_adds_hydrogens_and_exact_charge(tmp_path):
-    system = (
-        SolutionForceFieldSelector().run(_input_system(), _force_field_config("charmm36m")).system
-    )
+@pytest.mark.parametrize(
+    "force_field",
+    [
+        pytest.param(name, marks=requires_forcefield(name))
+        for name in ("charmm36m", "amber14sb_ol24")
+    ],
+)
+def test_native_dna_topology_adds_hydrogens_and_exact_charge(tmp_path, force_field):
+    from tests.test_atom_provenance import assert_surviving_heavy_sources
+
+    source = _input_system()
+    original = source.structure.copy()
+    system = SolutionForceFieldSelector().run(source, _force_field_config(force_field)).system
     prepared = SolutionStructureProcessor().run(system, {}).system
     component = prepared.component_by_kind(ComponentKind.NUCLEIC_ACID)[0]
     assert prepared.num_atoms > 38
@@ -188,5 +197,64 @@ def test_native_charmm36m_dna_topology_adds_hydrogens_and_exact_charge(tmp_path)
     checkpoint = tmp_path / "checkpoint"
     prepared.save_checkpoint(checkpoint)
     loaded = System.load_checkpoint(checkpoint)
+    assert_surviving_heavy_sources(original, loaded.structure, tolerance=0.002)
     assert loaded.total_charge() == -1.0
     assert loaded.metadata["native_nucleic_topologies"][0]["atom_count"] == prepared.num_atoms
+
+
+@requires_gromacs
+@requires_forcefield("charmm36m")
+def test_parallel_nucleic_components_preserve_serial_order_and_parameters(tmp_path):
+    from gmxbuilder.io.pdb import PDBWriter
+    from gmxbuilder.runtime.hardware import task_thread_scope
+
+    first = PDBParser().parse(FIXTURE)
+    second = first.copy()
+    second.coordinates += [4, 0, 0]
+    second.chain_ids = ["B"] * second.num_atoms
+    path = tmp_path / "two-strands.pdb"
+    PDBWriter.write(first.append(second), path)
+    source = PDBInputModule().run(_empty_system(), {"pdb": str(path)}).system
+    source = SolutionForceFieldSelector().run(source, _force_field_config("charmm36m")).system
+    assert len(source.component_by_kind(ComponentKind.NUCLEIC_ACID)) == 2
+    with task_thread_scope(1):
+        serial = SolutionStructureProcessor().run(source.copy(), {}).system
+    with task_thread_scope(2):
+        parallel = SolutionStructureProcessor().run(source.copy(), {}).system
+    assert np.array_equal(serial.coordinates, parallel.coordinates)
+    assert serial.structure.atom_names == parallel.structure.atom_names
+    assert (
+        serial.metadata["native_nucleic_topologies"]
+        == parallel.metadata["native_nucleic_topologies"]
+    )
+
+
+@pytest.mark.parametrize(
+    "force_field",
+    [
+        pytest.param(name, marks=requires_forcefield(name))
+        for name in ("charmm36m", "amber14sb_ol24")
+    ],
+)
+@requires_gromacs
+def test_native_rna_uses_hydroxyl_ends_in_selected_force_field(tmp_path, force_field):
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    molecule = Chem.AddHs(Chem.MolFromFASTA("CG", flavor=2))
+    assert AllChem.EmbedMolecule(molecule, randomSeed=872) == 0
+    path = tmp_path / "rna.pdb"
+    Chem.MolToPDBFile(molecule, str(path))
+    from tests.test_atom_provenance import assert_surviving_heavy_sources
+
+    result = PDBInputModule().run(_empty_system(), {"pdb": str(path)})
+    assert result.success, result.log
+    system = result.system
+    original = system.structure.copy()
+    system = SolutionForceFieldSelector().run(system, _force_field_config(force_field)).system
+    prepared = SolutionStructureProcessor().run(system, {}).system
+    native = prepared.metadata["native_nucleic_topologies"][0]
+    assert_surviving_heavy_sources(original, prepared.structure, tolerance=0.002)
+    assert native["polymer_type"] == "RNA"
+    assert native["net_charge"] == -1.0
+    assert native["backend"] == f"gromacs-pdb2gmx-{force_field}"

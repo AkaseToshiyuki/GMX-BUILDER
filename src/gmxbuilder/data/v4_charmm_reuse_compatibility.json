@@ -1,0 +1,162 @@
+{
+  "schema": "v4-charmm-reuse-source-compatibility-1",
+  "audit_sha256": "f08f538d9ecc9d494523492d703be20b34022544693f4123f268ea4fa77d2da2",
+  "entries": [
+    "BSM",
+    "CER16",
+    "CER18",
+    "CER24",
+    "DAPC",
+    "DAPE",
+    "DAPG",
+    "DEPC",
+    "DGDG",
+    "DLIPA",
+    "DLIPC",
+    "DLIPE",
+    "DLIPG",
+    "DLIPS",
+    "DLPC",
+    "DMPC",
+    "DMPE",
+    "DMPG",
+    "DOPA",
+    "DOPC",
+    "DOPE",
+    "DOPG",
+    "DOPGD",
+    "DOPS",
+    "DPEPE",
+    "DPPA",
+    "DPPC",
+    "DPPE",
+    "DPPG",
+    "DPPGD",
+    "DPPS",
+    "DSM",
+    "DSPC",
+    "LPC16",
+    "LPC18",
+    "LPE16",
+    "MGDG",
+    "NSM",
+    "PAPC",
+    "PMPC",
+    "POPA",
+    "POPC",
+    "POPE",
+    "POPG",
+    "POPI",
+    "POPS",
+    "PSM",
+    "PUPC",
+    "SAPC",
+    "SMPC",
+    "SOPC",
+    "SOPE",
+    "SOPG",
+    "SOPI",
+    "SSM",
+    "TMCL",
+    "TOCL"
+  ],
+  "basis": "0.9.124: all 116 lipid/host ITP and NPT MDP outputs match the prior independent audit byte-for-byte. PPCPL/PPEPL are excluded. Exact source hashes only; no future edits inherit compatibility. 0.9.131: input snapshot/parse reuse preserves full parsed fields and source metadata against 0.9.130 PDB/mmCIF fixtures; CYX SG lookup is an equivalent endpoint index and does not alter lipid parameterization. New input helpers are bound by exact support_files hashes. Evidence: Private/reports/algorithm-repair-20260924/input-equivalence.json and focused input/topology tests. 2026-09-26: RTP cache catalog/locking preserves every installed parsed residue record; exact source binding retained. Identity-corrected lipids do not inherit protocol acceptance. CCD cache-only change is confined to _ccd; native lipid exports do not consult the small-molecule dictionary. Unchanged supported pairs are rechecked against recorded ITP/MDP hashes. 0.9.136: PDB200 reader and upload changes preserve all 114 real native ITP/NPT MDP exports for the existing 57-entry compatibility list against the independent audit; each export also passes grompp. New cell/residue identity helpers and changed validation/connection/error support are bound by exact hashes. Source audit, entry list, conditions and chemical exclusions remain unchanged. Evidence: Private/reports/pdb200-fixes-20260927/reuse-export-proof.json.",
+  "exporter_files": {
+    "io/gro.py": {
+      "current": "ab5eea9d6394ca88277ea237613ca702c67730b9794723aff66aaf7086843e31",
+      "prior": "93b13729b8cf1965a0728ec18989b263bcc59c1e8d672e3c8996315e86544c6f"
+    },
+    "modules/forcefield/amber.py": {
+      "current": "5f90ec972eeee6be773e7b7ecca1836755f22fb666ae09bd0073362e2f50233f",
+      "prior": "292c4eabfc4026b97e2348fbea5b5cd43752879124278183139fcc988ad7664d"
+    },
+    "modules/forcefield/cgenff_import.py": {
+      "current": "e827769ace2f1867c490b10ba663d8425c3b4968ed72ec3f1762169ec2820e5e",
+      "prior": "08e72251be78b4c0d9ee6e5eb48e894a8fd3d09c0503fb827d892c336203b43b"
+    },
+    "modules/forcefield/charmm36.py": {
+      "current": "7e7de1305bf329484d31b1e005494567a938a05be7a0de803b87dced248e3d82",
+      "prior": "1e0274bca26cd1012293e97a877931dd6e1f064e4e55f9cdc52a79f0445ceb19"
+    },
+    "modules/forcefield/charmm_charges.py": {
+      "current": "1c1e6fde2c5c5d14a14fe4148d1b4929f1f2742755c73b5110bc17ca0dd05e50",
+      "prior": "0a407213ac99ce9a1562a1e7d2f6ebf4d1934696cfa0f8b5b951e5160b4f8510"
+    },
+    "modules/forcefield/charmm_general.py": {
+      "current": "8ff994cfc078ebc6162fc4528a1f5fb0c3033a1ad0b0135ae159c0791acf0254",
+      "prior": "41c090bca70e3c7bea79d22ce9124efe7321efbe6f6b614d4dfafd45798fba00"
+    },
+    "modules/forcefield/charmm_typing.py": {
+      "current": "f3e0271d735fd568ddf2e7d037b2af65b0b17ed0ab745aa0c35da16a440885c2",
+      "prior": "354de251fc500072dd9a0641b29c44583a825d70d27ef63733acc79782d804a7"
+    },
+    "modules/forcefield/hdb.py": {
+      "current": "bd78af16eef24fe4729584c02d4fa360d611332ec1cf9e8728d18d170d038013",
+      "prior": "1b5840b42c8e8344da690d1662a553b4059533adf59492d6c7d8fb0205534a94"
+    },
+    "modules/forcefield/lipid_policy.py": {
+      "current": "6d1e088caa6ea5cb5fcd4a93d31c8624b475d9b2b2dffc8eb9ddeab6e125b512",
+      "prior": "3b8efb24b98d5a68a54d8c9efb1581e99e805863317a25d58bf218b9ed4c0354"
+    },
+    "modules/forcefield/opls.py": {
+      "current": "50ff41def4df733f9703960ba685bd016f98383a51a0a2adcb925090e07cb949",
+      "prior": "39f92b3cf212e7369835caad7dfbfee5d24c5909bb98b74b06d4ac50fa53cb11"
+    },
+    "modules/forcefield/protein_templates.py": {
+      "current": "b8899ac3af5a7a7491e971950abc6317c664c9f5156bb1890f9380d38eec7396",
+      "prior": "e8f3456f72ca282431544f4dc0bdce4e9e80a769f46ac5eb3481877e29910f26"
+    },
+    "modules/forcefield/rtp_parser.py": {
+      "current": "2fc864adfd03ea31bea4bbe8f3fd4ae8802eb585449fa340be9097e6fab79182",
+      "prior": "44d6eb51209527384f55076c10e54016de72998e1b5e38852ff4cf0857892585"
+    },
+    "modules/forcefield/selector.py": {
+      "current": "aae1f6d58d0b718398e677530ab7e1e475254f22f849da9d6d8229e2447015e9",
+      "prior": "a88a8dc87b0cd35486027322d1961f7cbc48e797ade72dea957bf1b9469182ba"
+    },
+    "io/cif.py": {
+      "current": "0e27093aaff6a01882ffd034606925e9165f74bb97a5e89c0f72f613aec09fed",
+      "prior": "86fe8ed8f785a128290c2610e14dd1a4e2ee18f8f7bc80999397e0088475727e"
+    },
+    "io/cif_document.py": {
+      "current": "f364277490c73c557fde5e24a2730f07172de929746f5fa9a7b55bee9a2e01a4",
+      "prior": "df5fe1013b9cb86320a94afc0d52c14273fc6d1637b63295366046bd02bdbf10"
+    },
+    "io/input_document.py": {
+      "current": "e87461c077033098fecbeb21dd3cb06929b1f3b54d1728aff0db67f858af7b31",
+      "prior": "91d9a98ba2ccd9971affc1f26b6d1d826b2ee537d862e55855598745b975b2d9"
+    },
+    "io/pdb.py": {
+      "current": "d1ffbe0161b8239e6b4f608894d792f507c6d8dd4af96644b3f95cced90f926e",
+      "prior": "75e7d8759c638e7cb42d9f738a5b3f6682f3d5a2c2647bf7a048c5e8a255af69"
+    },
+    "modules/forcefield/assign.py": {
+      "current": "3ddeb056ee1b6ecf08efe6359f4ad118af82da8146c98845c6f35a63812b6c68",
+      "prior": "24511392f1f5777248c98a4f510feab27982782f04fcffbc1fbffcd92b79bc21"
+    },
+    "modules/forcefield/ligand_identity.py": {
+      "current": "2702f38c889a524ff530693d16606687bcaa0d37fe9c72af9214bdaa55dcf3de",
+      "prior": "ec1199d4882c8cfaec748b6d44a6da93fc678f56c934b8727e12852c1641f9d1"
+    },
+    "modules/forcefield/lipid21_backend.py": {
+      "current": "26b13f8e295a7b9ea7ea7664fc6bb4f4138634484028fb5446bff003bfd935b2",
+      "prior": "4f217c32d97ffc1e98f183b5fad6e8ffa84d9230eaa1afbaf4278708703774a6"
+    },
+    "io/altloc.py": {
+      "current": "0cba05eefcb42e62a7fc9d52e19375f9e9775691574eff855d5bb9fceff5b5cb",
+      "prior": "8562dee10316a60d0355137556b364bc8d58be4c58685a4e1c1aa932956c5f1a"
+    },
+    "modules/forcefield/gaff_backend.py": {
+      "current": "f191d9deb3c61e2cd189d95d1ff047867681957af0c48a60183c493f3c5b6205",
+      "prior": "6a4ee9aa3953a370d5fe24482d331823a1b9d5effa0eb03cd2f2dc9937653ab5"
+    }
+  },
+  "support_files": {
+    "io/source_document.py": "93b0f432537878180219b95094bce75e5acf2d2db061b2d97a1c790a23af1acf",
+    "modules/input/validation.py": "b6fe40d62aa71fb35e8342672644c6961a43c97721cadc9b600d1830ecde6bf4",
+    "modules/input/connections.py": "acfdb3d7892f6b47b27bf04715570de30413e5684badd28f540b9e39e2536a00",
+    "io/cell.py": "b9578ce7b36231b96d12ac679d72edb081a8a9f59019e3ede3b176f6f354fcbb",
+    "io/residue_identity.py": "c8a3e7b41afe6c56362e10fc7b3002b5b1a943d7561e345892303328f6b2d361",
+    "core/exceptions.py": "0e016ddfbae5dec784e84b3716f3f17eced279dfce316a2dfe99660cbb1fe8ed"
+  }
+}

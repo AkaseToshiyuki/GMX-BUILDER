@@ -20,10 +20,11 @@ from gmxbuilder.modules.coarse_grained.common import (
     task_step_dir,
     topology_texts_from_dir,
 )
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGMappingModule(BaseModule):
+class CGMappingModule(CGWorkflowAdmission, BaseModule):
     name = "cg_mapping"
     description = "Map a standard protein to Martini 3 beads"
 
@@ -65,11 +66,13 @@ class CGMappingModule(BaseModule):
         upper = float(config.get("elastic_upper", 0.9))
         if elastic and not (500.0 <= force <= 1500.0 and 0.0 <= lower < upper <= 1.2):
             raise ModuleConfigError(
-                "Elastic network requires force 500-1500 kJ/mol/nm² and 0 <= lower < upper <= 1.2 nm"
+                "Elastic network requires force 500-1500 kJ/mol/nm² and 0 <= lower < upper <= "
+                "1.2 nm"
             )
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         if not system.metadata.get("cg_include_protein", True):
             output = system.copy()
             output.metadata.update(

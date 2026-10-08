@@ -8,7 +8,15 @@
       "source_url": "https://mackerell.umaryland.edu/charmm_ff.shtml#gromacs",
       "url": "https://mackerell.umaryland.edu/download.php?filename=CHARMM_ff_params_files%2Fcharmm36-jul2022.ff.tgz",
       "sha256": "9f31db8502852bc8fcf36497c27db14f1b6509b33701e7cafc2187840b7d2f09",
-      "required_files": ["forcefield.itp", "ffbonded.itp", "ffnonbonded.itp", "aminoacids.rtp", "lipid.rtp", "tip3p.itp", "ions.itp"],
+      "required_files": [
+        "forcefield.itp",
+        "ffbonded.itp",
+        "ffnonbonded.itp",
+        "aminoacids.rtp",
+        "lipid.rtp",
+        "tip3p.itp",
+        "ions.itp"
+      ],
       "overlay": "charmm36m"
     },
     {
@@ -18,8 +26,36 @@
       "source_url": "https://mackerell.umaryland.edu/charmm_ff.shtml#gromacs",
       "url": "https://mackerell.umaryland.edu/download.php?filename=CHARMM_ff_params_files%2Fcharmm36-mar2019.ff.tgz",
       "sha256": "93659165386d7b9eaf5888b3aad1f672e711409545433bae9a3dc6e82cfa72c6",
-      "required_files": ["forcefield.itp", "ffbonded.itp", "ffnonbonded.itp", "merged.rtp", "tip3p.itp", "ions.itp"],
+      "required_files": [
+        "forcefield.itp",
+        "ffbonded.itp",
+        "ffnonbonded.itp",
+        "merged.rtp",
+        "tip3p.itp",
+        "ions.itp"
+      ],
       "overlay": "charmm36"
+    },
+    {
+      "name": "OL24 DNA + OL3 RNA nucleic-acid parameters (Olomouc)",
+      "target": "amber14sb_ol24",
+      "archive_root": "amber14sb_OL24.ff",
+      "source_url": "https://fch.upol.cz/ff_ol/gmxOL24.php",
+      "url": "https://fch.upol.cz/ff_ol/amber14sb_OL24.ff.tar.gz",
+      "sha256": "8da239615c7a47fbc8babd625415b3b5279d086f53ef37b50d1ce917d44a73e8",
+      "merge_base": "amber14sb.ff",
+      "required_files": [
+        "forcefield.itp",
+        "ffbonded.itp",
+        "ffnonbonded.itp",
+        "atomtypes.atp",
+        "aminoacids.rtp",
+        "dna.rtp",
+        "rna.rtp",
+        "tip3p.itp",
+        "ions_tip3p.itp"
+      ],
+      "overlay": "amber14sb_ol24"
     }
   ]
 }

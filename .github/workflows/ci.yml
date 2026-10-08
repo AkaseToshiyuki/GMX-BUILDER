@@ -1,0 +1,105 @@
+name: CI
+
+# The same source and pinned external force fields are tested in both repositories.
+# Public exports omit those databases; acquire them from their official sources
+# with the installer checksum/overlay contract before exercising their templates.
+# GROMACS/GAFF and large LFS-dependent checks still declare their prerequisites.
+# Full construction verification also runs locally; dynamics are excluded.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # Ruff alone: no project dependencies are needed to check style, and
+      # keeping this job independent means style feedback does not wait on a
+      # multi-minute scientific dependency install.
+      - name: Check lint rules
+        run: uvx ruff@0.16.2 check --config pyproject.toml src tests scripts
+      - name: Check formatting
+        run: uvx ruff@0.16.2 format --check --config pyproject.toml src tests scripts
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The declared floor and the current default, not every version in
+        # between: the middle ones have never caught anything the ends did not.
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
+      - name: Install pinned external force fields
+        run: uv run --no-sync python scripts/install_external_assets.py
+      - name: Run tests
+        # Isolated state: the durable rate limiter and the task store otherwise
+        # default to a shared location, and a limiter carried between runs
+        # produces 429s that look like product failures.
+        env:
+          GMXBUILDER_RATE_LIMIT_DB: ${{ runner.temp }}/gmxbuilder-rate-limits.sqlite3
+        run: uv run --no-sync pytest -q -rs --construction-only --maxfail=5
+
+  browser:
+    name: Page health (headless Firefox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # Firefox ships on the runner image; geckodriver does not.
+      - uses: browser-actions/setup-geckodriver@latest
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+      # The page-health checks boot the real application and drive a browser at
+      # it. They are the only checks that can see a white screen: the classic
+      # scripts share one global scope, so a throw part-way through one file
+      # leaves every later file unexecuted while the Python suite stays green.
+      #
+      # GMXBUILDER_REQUIRE_BROWSER makes a missing browser a failure rather
+      # than a skip. Without it this job would go green while running nothing,
+      # which is the exact failure it exists to prevent.
+      - name: Install pinned external force fields
+        run: uv run --no-sync python scripts/install_external_assets.py
+      - name: Run the page-health checks
+        env:
+          GMXBUILDER_REQUIRE_BROWSER: "1"
+          GMXBUILDER_RATE_LIMIT_DB: ${{ runner.temp }}/gmxbuilder-rate-limits.sqlite3
+        run: uv run --no-sync pytest -q -rs --construction-only --maxfail=5 -m browser tests/
+
+  dependency-audit:
+    name: Locked dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install locked runtime and development dependencies
+        run: uv sync --locked --extra dev
+      - name: Audit installed locked dependencies
+        run: uv run --no-sync pip-audit

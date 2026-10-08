@@ -5,15 +5,16 @@ import pytest
 
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
+from gmxbuilder.core.exceptions import ModuleConfigError
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
-from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.modules.modifications.processor import StructureProcessor
 from gmxbuilder.modules.modifications.patches import (
     effective_patch_charge_shift,
     list_patches_for_residue,
 )
+from gmxbuilder.modules.modifications.processor import StructureProcessor
 from gmxbuilder.pipeline.step_executor import StepRunner
+from tests.prerequisites import requires_forcefield
 
 
 def test_hydrogens_are_assigned_to_their_parent_protein_component(tmp_path, monkeypatch):
@@ -274,6 +275,7 @@ def test_unsupported_patch_fails_before_mutating_structure(monkeypatch):
     np.testing.assert_array_equal(system.structure.coordinates, original.coordinates)
 
 
+@requires_forcefield("charmm36m")
 def test_charmm36m_phosphoserine_builds_native_heavy_atoms(monkeypatch):
     system = _residue_system(
         "SER",
@@ -310,6 +312,7 @@ def test_unparameterized_terminus_cap_fails_before_mutating_structure():
     assert set(system.structure.resnames) == {"ALA"}
 
 
+@requires_forcefield("charmm36m")
 def test_patch_catalog_is_forcefield_specific():
     asn = {item["id"]: item for item in list_patches_for_residue("ASN", "charmm36")}
     ser = {item["id"]: item for item in list_patches_for_residue("SER", "charmm36")}
@@ -336,6 +339,7 @@ def test_system_formal_charge_uses_forcefield_specific_modified_template():
     assert charmm.residue_formal_charge("SEP") == -1
 
 
+@requires_forcefield("charmm36m")
 def test_charmm_cysteine_oxidation_labels_match_native_templates():
     patches = {item["id"]: item for item in list_patches_for_residue("CYS", "charmm36m")}
     assert patches["CSO_CYS"]["supported"] is True
@@ -349,6 +353,7 @@ def test_charmm_cysteine_oxidation_labels_match_native_templates():
     assert patches["CSD_CYS"]["supported"] is False
 
 
+@requires_forcefield("charmm36m")
 def test_new_charmm_ptm_catalog_uses_unambiguous_native_chemistry():
     lysine = {item["id"]: item for item in list_patches_for_residue("LYS", "charmm36m")}
     assert lysine["KME_LYS"]["product_name"] == "MLZ"
@@ -383,12 +388,15 @@ def test_ambiguous_methionine_sulfoxide_remains_fail_closed():
 @pytest.mark.parametrize(
     "patch_id,force_field",
     [
-        ("MSO_R_MET", "charmm36m"),
-        ("HYP_PRO", "charmm36m"),
-        ("HYP_PRO", "amber14sb"),
-        ("HYP_PRO", "amber99sb"),
-        ("HYP_PRO", "amber99sb-ildn"),
-        ("HYL_LYS", "charmm36m"),
+        pytest.param(patch_id, force_field, marks=requires_forcefield(force_field))
+        for patch_id, force_field in (
+            ("MSO_R_MET", "charmm36m"),
+            ("HYP_PRO", "charmm36m"),
+            ("HYP_PRO", "amber14sb"),
+            ("HYP_PRO", "amber99sb"),
+            ("HYP_PRO", "amber99sb-ildn"),
+            ("HYL_LYS", "charmm36m"),
+        )
     ],
 )
 def test_explicit_stereochemistry_ptms_are_enabled(patch_id, force_field):
@@ -503,8 +511,19 @@ def test_name_collisions_and_missing_assets_report_the_scientific_boundary(
 
 
 def test_step_runner_returns_config_error_instead_of_http_500(tmp_path):
+    from gmxbuilder.modules.input.validation import INPUT_VALIDATION_VERSION
+
     system = _residue_system("ALA", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
     runner = StepRunner(tmp_path, pipeline_type="membrane-bilayer")
+    # 0.9.82 made every step of this pipeline require an input that has passed
+    # the current validation policy. Without one the runner reports that
+    # instead, which is a different error from the one under test here.
+    system.metadata["input_validation"] = {
+        "policy_version": INPUT_VALIDATION_VERSION,
+        "can_proceed": True,
+        "errors": [],
+    }
+    system.save_checkpoint(runner.step_dir("input"))
     system.save_checkpoint(runner.step_dir("forcefield"))
 
     result = runner.run_step(
@@ -518,3 +537,61 @@ def test_step_runner_returns_config_error_instead_of_http_500(tmp_path):
 
     assert result["status"] == "error"
     assert "FOR cap is unavailable" in result["error"]
+
+
+def test_omitting_protonation_assigns_it_automatically(monkeypatch):
+    """A YAML or API caller has no Compute button to press.
+
+    The error told them to "Run Compute again in Step 3", which is browser
+    guidance, and no command produced that list -- it came only from the
+    /api/protonate endpoint. Omitting the key now means "decide for me".
+    """
+    system = _residue_system("HIS", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
+
+    result = StructureProcessor().run(
+        system,
+        {"pH": 7.0, "skip_protonation": False, "prepare_standard_termini": False},
+    )
+    assert result.success
+    assert any("Assigned protonation" in line for line in result.log)
+
+
+def test_an_explicitly_empty_protonation_list_is_still_rejected(monkeypatch):
+    """Absent and empty are different statements.
+
+    An empty list is the browser flow failing to run Compute, and silently
+    filling it in would hide that.
+    """
+    system = _residue_system("HIS", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
+
+    with pytest.raises(ModuleConfigError, match="Incomplete protonation assignments"):
+        StructureProcessor().run(
+            system,
+            {
+                "pH": 7.0,
+                "protonation": [],
+                "skip_protonation": False,
+                "prepare_standard_termini": False,
+            },
+        )
+
+
+def test_automatic_protonation_follows_the_requested_ph(monkeypatch):
+    """The assignment must reflect the pH asked for, not a default."""
+    monkeypatch.setattr("gmxbuilder.modules.modifications.processor._find_hdb", lambda _name: None)
+
+    # Both values sit inside the free-terminus window, so this exercises the
+    # side-chain assignment rather than tripping the terminal pH boundary.
+    names = []
+    for pH in (4.5, 7.5):
+        system = _residue_system("HIS", ["N", "CA", "C", "O"], ["N", "C", "C", "O"])
+        result = StructureProcessor().run(
+            system,
+            {"pH": pH, "skip_protonation": False, "prepare_standard_termini": False},
+        )
+        assert result.success
+        names.append(result.system.structure.resnames[0])
+    # Histidine (pKa ~6.0) is protonated below it and neutral above.
+    assert names[0] != names[1], names

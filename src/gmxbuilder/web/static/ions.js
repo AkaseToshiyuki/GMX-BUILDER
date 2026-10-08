@@ -157,9 +157,9 @@
     Object.keys(totals).forEach(function(name) {
       var pool = ION_POOL.cations.concat(ION_POOL.anions);
       var ion = pool.find(function(item) { return item.name === name; }) || { charge: 0 };
-      rows += '<tr><td>' + name + '</td><td>' + (ion.charge > 0 ? '+' : '') + ion.charge +
-        '</td><td>' + (salt[name] || 0) + '</td><td>' + (neutralizing[name] || 0) +
-        '</td><td><b>' + totals[name] + '</b></td><td>' + Number(concentrations[name] || 0).toFixed(2) + '</td></tr>';
+      rows += '<tr><td>' + escapeHtml(String(name)) + '</td><td>' + (ion.charge > 0 ? '+' : '') + ion.charge +
+        '</td><td>' + Number(salt[name] || 0) + '</td><td>' + Number(neutralizing[name] || 0) +
+        '</td><td><b>' + Number(totals[name]) + '</b></td><td>' + Number(concentrations[name] || 0).toFixed(2) + '</td></tr>';
     });
     tbody.innerHTML = rows;
     resultDiv.classList.remove("hidden");
@@ -186,21 +186,11 @@
   }
 
   function applyIonSystemStyles(viewer) {
-    // Keep complete waters visible without drawing three opaque spheres per
-    // molecule. A blue line model plus one translucent oxygen sphere makes
-    // the solvent envelope legible even for 30k-50k waters.
-    viewer.setStyle(
-      {resn: WATER_RESIDUES},
-      {line: {opacity: 0.55, color: '0x60a5fa', linewidth: 1.0}}
-    );
-    viewer.addStyle(
-      {resn: WATER_RESIDUES, elem: 'O'},
-      {sphere: {radius: 0.11, opacity: 0.38, color: '0x3b82f6'}}
-    );
-    viewer.setStyle(
-      {resn: ION_RESIDUES},
-      {sphere: {radius: 0.45, opacity: 0.90, colorscheme: 'Jmol'}}
-    );
+    // Use the same water and ion representations as input and checkpoint views.
+    viewer.setStyle({resn: WATER_RESIDUES}, {});
+    viewer.setStyle({resn: WATER_RESIDUES, elem: 'O'}, GMXStyle.representation('SOLVENT', 'SOL'));
+    ION_RESIDUES.forEach(name =>
+      viewer.setStyle({resn: name}, GMXStyle.representation('IONS', name)));
   }
 
   async function renderIonViewer() {
@@ -210,7 +200,7 @@
     // specified review panel instead of the page/viewport origin.
     host.style.position = 'relative';
     host.style.overflow = 'hidden';
-    if (typeof $3Dmol === 'undefined') {
+    try { await GMXAssets.viewer(); } catch (error) {
       var unavailable = document.getElementById('ion-confirm-system-status');
       if (unavailable) {
         unavailable.textContent = '3D viewer library is unavailable; reload the page before confirmation.';
@@ -225,15 +215,15 @@
       _ionViewer = null;
     }
     while (host.firstChild) host.removeChild(host.firstChild);
-    _ionViewer = $3Dmol.createViewer(host, {backgroundColor: '0xffffff', antialias: true});
+    _ionViewer = $3Dmol.createViewer(host, {backgroundColor: window.gmxViewerBackground(), antialias: true});
     var viewer = _ionViewer;
-    viewer.setBackgroundColor('0xffffff');
+    viewer.setBackgroundColor(window.gmxViewerBackground());
     viewer.setSlab(-100000, 100000);
     viewer.addModel(pdb, 'pdb');
     if (typeof _applyUnifiedStyle === 'function') {
       _applyUnifiedStyle(viewer, pdb);
     } else {
-      viewer.setStyle({}, {stick: {radius: 0.12, colorscheme: 'Jmol'}});
+      GMXStyle.apply(viewer, GMXStyle.pdbAtoms(viewer, pdb));
     }
     applyIonSystemStyles(viewer);
     var waterCount = countWaterOxygens(pdb);
@@ -288,42 +278,43 @@
       return;
     }
     var cfg = buildModuleConfig().ions;
+    var progress = startStepProgress('ions', 'ion-check-btn', 'ion-check-status');
     try {
       _stepRunning = true;
       button.disabled = true;
-      statusEl.textContent = 'Running backend validation and placement...';
+      statusEl.textContent = '';
       statusEl.style.color = '#d97706';
       var result = await _apiFetch('/api/step/' + state.taskId + '/ions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ config: cfg })
       });
       if (result.status !== 'ok') throw new Error(result.error || 'Ion placement failed');
+      finishStepProgress(progress, true);
       var metrics = (result.metrics || {}).ions || {};
       renderIonSummary(metrics);
       _ionsChecked = true;
       _checkedSteps.add('ions');
       _checkedConfig = _checkedConfig || {};
       _checkedConfig.ions = cfg;
-      (result.invalidated_steps || []).forEach(function(step) { _checkedSteps.delete(step); });
-      statusEl.textContent = '✓ Checked and saved (' + (result.elapsed_s == null ? '?' : result.elapsed_s) + 's)';
+      (result.invalidated_steps || []).forEach(function(step) {
+        _checkedSteps.delete(step);
+        clearStepProgress(step);
+      });
+      statusEl.textContent = '';
       statusEl.style.color = '#059669';
       _systemConfirmed = false;
-      var viewerReady = await renderIonViewer();
-      var confirm = document.getElementById('ion-confirm-system-btn');
-      if (confirm) confirm.disabled = !viewerReady;
-      var confirmStatus = document.getElementById('ion-confirm-system-status');
-      if (confirmStatus && viewerReady) {
-        confirmStatus.textContent = 'Inspect the exact checked coordinates and periodic box, then confirm.';
-        confirmStatus.style.color = '#475569';
-      }
+      if (window.invalidateFinalReview) window.invalidateFinalReview();
+      statusEl.textContent = '✓ Ion Check complete. Continue to Final Structure Review.';
       updateStepNavHighlight();
     } catch (error) {
+      finishStepProgress(progress, false, error.message || 'Ion check failed');
       invalidateIonCheck();
-      statusEl.textContent = '✗ ' + (error.message || 'Ion check failed');
+      statusEl.textContent = '';
       statusEl.style.color = '#dc2626';
     } finally {
       _stepRunning = false;
       button.disabled = false;
+      finishUnfinishedStepProgress(progress);
       updateNextButtonState();
     }
   }
@@ -350,7 +341,7 @@
     if (addCat) addCat.onclick = function() { addIonSpecies("cation"); };
     if (addAni) addAni.onclick = function() { addIonSpecies("anion"); };
     if (checkBtn) checkBtn.onclick = function() { runIonCheck(); };
-    if (confirmSystem) confirmSystem.onclick = confirmSimulationSystem;
+
     ["ion-method", "ion-exclusion", "ion-neutralize-cation", "ion-neutralize-anion"].forEach(function(id) {
       var element = document.getElementById(id);
       if (element) element.addEventListener('change', function() {
@@ -374,11 +365,11 @@
     window._setIonsChecked = function(v) {
       _ionsChecked = Boolean(v);
       _systemConfirmed = false;
-      if (confirmSystem) confirmSystem.disabled = !_ionsChecked;
+      if (confirmSystem) confirmSystem.disabled = true;
     };
     window._setSystemConfirmed = function(v) {
       _systemConfirmed = Boolean(v) && _ionsChecked;
-      if (confirmSystem) confirmSystem.disabled = !_ionsChecked;
+      if (confirmSystem) confirmSystem.disabled = true;
     };
     window._isSystemConfirmed = function() { return _systemConfirmed; };
     window._renderIonViewer = renderIonViewer;
@@ -387,3 +378,6 @@
   });
 
 })();
+
+window.__gmxbuilderLoaded = window.__gmxbuilderLoaded || [];
+window.__gmxbuilderLoaded.push('ions.js');

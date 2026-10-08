@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ION_PROPERTIES: dict[str, dict[str, float]] = {
     "NA": {"charge": 1.0, "mass": 22.99, "vdw": 0.116},
     "K": {"charge": 1.0, "mass": 39.10, "vdw": 0.152},

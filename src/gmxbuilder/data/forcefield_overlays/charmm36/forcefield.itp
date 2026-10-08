@@ -7,7 +7,6 @@
 
 #include "ffnonbonded.itp"
 #include "ffbonded.itp"
-#include "gmxbuilder-plasmalogen-bonded.itp"
 #include "gmxbuilder-current-lipid-bonded.itp"
 #include "gb.itp"
 

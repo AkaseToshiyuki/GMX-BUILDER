@@ -1,31 +1,68 @@
 {
-  "archive": "gmxbuilder-lipid-assets-v3.tar.xz",
-  "archive_bytes": 35202412,
-  "archive_sha256": "84c96dcdce5c8a1771e19276ed7e0c5c5facdbfa31efc902b4a796fdb87e2e30",
-  "asset_version": 3,
+  "schema_version": 1,
+  "asset_version": 7,
+  "library_schema_version": 4,
+  "software_version": "0.9.143",
+  "archive": "gmxbuilder-lipid-assets-v7.tar.xz",
+  "download_url": "https://media.githubusercontent.com/media/AkaseToshiyuki/GMX-BUILDER/main/src/gmxbuilder/data/prebuilt_assets/gmxbuilder-lipid-assets-v7.tar.xz",
   "contents": {
-    "compatible_force_field_jobs": 260,
-    "conformations": 11400,
+    "catalog_force_field_jobs": 336,
+    "validated_force_field_jobs": 37,
+    "pending_force_field_jobs": 299,
+    "strict_library_entries": 37,
+    "strict_library_files": 134037,
+    "conformations": 134000,
     "force_fields": [
       "amber14sb",
-      "charmm36m",
-      "charmm36"
+      "charmm36",
+      "charmm36m"
     ],
-    "gaff2_cache_entries": 63,
-    "gaff2_cache_files": 252,
-    "strict_library_entries": 228,
-    "strict_library_files": 11628,
-    "unavailable_force_field_jobs": 32,
-    "validated_force_field_jobs": 228
+    "gaff2_cache_entries": 67,
+    "gaff2_cache_files": 268
   },
-  "download_url": "https://media.githubusercontent.com/media/AkaseToshiyuki/GMX-BUILDER/main/src/gmxbuilder/data/prebuilt_assets/gmxbuilder-lipid-assets-v3.tar.xz",
-  "library_schema_version": 3,
-  "schema_version": 1,
   "scientific_contract": {
     "gaff_charge_method": "am1-bcc",
-    "minimum_npt_ps": 1000,
-    "quarantined_or_unavailable_entries_included": false,
-    "strict_method": "explicit_solvent_semiisotropic_npt"
+    "strict_method": "explicit_solvent_semiisotropic_npt",
+    "parameter_provenance_required": true,
+    "legacy_conformations_withdrawn": true,
+    "unvalidated_conformer_libraries_included": false,
+    "prepared_parameter_caches_are_not_physical_acceptance": true,
+    "acceptance_scope": "initialization_conformers_only",
+    "assembled_v4_evidence_required": true,
+    "minimum_effective_samples_per_replica": 10,
+    "minimum_independent_replicas": 2,
+    "initial_membrane_water_policy": "complete-lipid-z-envelope-v1",
+    "previous_wet_initial_ensembles_withdrawn": true,
+    "local_conformer_policy": {
+      "method": "single-lipid-relaxation-2",
+      "scope": "relaxed_single_lipid_initialization_conformers",
+      "window": "fixed-final-half-of-NPT",
+      "shape_relative_margin": 0.05,
+      "shape_absolute_floor_nm": 0.02,
+      "bond_mean_margin_nm": 0.002,
+      "angle_mean_margin_degrees": 2.0,
+      "torsion_population_margin": 0.1,
+      "hydration_relative_margin": 0.1,
+      "hydration_absolute_floor": 0.1,
+      "hydration_cutoff_nm": 0.35,
+      "minimum_effective_samples": 10,
+      "minimum_segment_blocks": 2,
+      "minimum_extraction_spacing_ps": 1000.0,
+      "hard_interval_observables": [
+        "bond",
+        "angle",
+        "hydration"
+      ],
+      "shape_screen": "observed-median-change; interval-is-diagnostic",
+      "torsion_populations": "diagnostic; equilibrium-weights-not-required",
+      "nominal_interval": 0.95,
+      "maximum_npt_ns": 200.0,
+      "equilibrium_certification": false,
+      "sequential_error_control": false
+    },
+    "sampling": "equal-replica-then-uniform-conformer",
+    "equilibrium_weights_certified": false
   },
-  "software_version": "0.9.9"
+  "archive_bytes": 471239272,
+  "archive_sha256": "07a271ffc42daf4cd1fc31c27e2d4566760edb97ac7dcf297d4c2ae88c69ee0e"
 }

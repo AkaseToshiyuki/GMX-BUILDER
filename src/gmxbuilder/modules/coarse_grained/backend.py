@@ -393,7 +393,13 @@ def build_with_coby(
     if env.get("environment") == "bilayer":
         kwargs["membrane"] = _membrane_command(env, existing_corrections)
     if solvate and solv.get("include_solvent", True):
-        salt = float(solv.get("salt_molarity", 0.15)) if final_salt else 0.0
+        # Bilayer salt is placed after the complete lipid envelope is drained,
+        # so concentration is based on the actual remaining solvent volume.
+        salt = (
+            float(solv.get("salt_molarity", 0.15))
+            if final_salt and env.get("environment") != "bilayer"
+            else 0.0
+        )
         kwargs["solvation"] = f"solv:W pos:NA neg:CL salt_molarity:{salt:g}"
 
     output_capture = io.StringIO()
@@ -460,6 +466,16 @@ def build_with_coby(
     topology_text = top.read_text(encoding="utf-8")
     topology_text = topology_text.replace(str(work) + "/", "")
     top.write_text(topology_text, encoding="utf-8")
+    if solvate and solv.get("include_solvent", True) and env.get("environment") == "bilayer":
+        from gmxbuilder.modules.coarse_grained.water_exclusion import exclude_membrane_water
+
+        exclude_membrane_water(
+            gro,
+            top,
+            system.metadata,
+            salt_molarity=float(solv.get("salt_molarity", 0.15)) if final_salt else 0.0,
+            seed=int(env.get("seed", 42)),
+        )
     log = (
         (work / "coby.log").read_text(encoding="utf-8", errors="replace")
         if (work / "coby.log").is_file()

@@ -9,16 +9,17 @@ from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.structure import Structure
 from gmxbuilder.core.system import System
 from gmxbuilder.modules.membrane.builder import MembraneBuilder
-from gmxbuilder.modules.membrane.orient_module import (
-    OrientModule,
-    assess_membrane_orientation,
-)
 from gmxbuilder.modules.membrane.orient import (
     _analyze_tm_helix_bundle,
     _find_best_ppm_orientation,
     _membrane_transfer_score,
     _scan_ppm_z_and_tilt,
 )
+from gmxbuilder.modules.membrane.orient_module import (
+    OrientModule,
+    assess_membrane_orientation,
+)
+from tests.prerequisites import requires_lfs_assets
 
 
 def _synthetic_helical_bundle(tilt_degrees: float = 24.0) -> Structure:
@@ -83,6 +84,7 @@ def test_orientation_resume_uses_incremental_step_config():
     assert "_setOrientationModeUI();" in restore
 
 
+@requires_lfs_assets
 def test_membrane_builder_preserves_checked_orientation(monkeypatch):
     structure = Structure(
         coordinates=np.array(
@@ -105,7 +107,7 @@ def test_membrane_builder_preserves_checked_orientation(monkeypatch):
     system = System(
         structure=structure,
         components=[Component("PROTEIN", ComponentKind.PROTEIN, np.arange(6))],
-        metadata={"seed": 42},
+        metadata={"seed": 42, "force_field": "charmm36m", "lipid_ff": "charmm36m"},
     )
 
     monkeypatch.setattr(
@@ -137,9 +139,12 @@ def test_membrane_builder_preserves_checked_orientation(monkeypatch):
     checked_coordinates = oriented.structure.coordinates.copy()
     checked_params = dict(oriented.metadata["_orient_params"])
 
+    from tests.prerequisites import require_v4_entries
+
+    require_v4_entries(["DPPC"], "charmm36m")
     result = MembraneBuilder().run(
         oriented,
-        {"lipid_type": "POPC", "n_lipids_per_leaflet": 64},
+        {"lipid_type": "DPPC", "n_lipids_per_leaflet": 64},
     )
 
     protein = result.system.component_by_name("PROTEIN")

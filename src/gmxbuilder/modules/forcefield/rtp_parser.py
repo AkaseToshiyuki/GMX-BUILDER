@@ -7,6 +7,8 @@ charges, and bonded connectivity.
 from __future__ import annotations
 
 import copy
+import math
+import threading
 from pathlib import Path
 
 
@@ -31,7 +33,7 @@ class RTPParser:
         current_section = None
 
         with open(path) as fh:
-            for line in fh:
+            for line_number, line in enumerate(fh, 1):
                 # Strip inline comments (Amber/OPLS use trailing ; comments)
                 line = line.split(";")[0].strip()
                 if not line:
@@ -40,10 +42,8 @@ class RTPParser:
                 # New section header
                 if line.startswith("[") and line.endswith("]"):
                     section = line[1:-1].strip()
-                    if section in ("atoms", "bonds", "angles", "dihedrals", "impropers"):
+                    if section in ("atoms", "bonds", "angles", "dihedrals", "impropers", "cmap"):
                         current_section = section
-                    elif section == "bondedtypes":
-                        current_section = None
                     elif section == "bondedtypes":
                         current_res = None  # skip bondedtypes data
                         current_section = None
@@ -82,6 +82,7 @@ class RTPParser:
                                     "angles": [],
                                     "dihedrals": [],
                                     "impropers": [],
+                                    "cmap": [],
                                 }
                         else:
                             current_res = rn
@@ -93,6 +94,7 @@ class RTPParser:
                                     "angles": [],
                                     "dihedrals": [],
                                     "impropers": [],
+                                    "cmap": [],
                                 }
                     continue
 
@@ -105,19 +107,29 @@ class RTPParser:
 
                 res = self._residues[current_res]
 
-                if current_section == "atoms" and len(parts) >= 4:
+                if current_section == "atoms":
+                    if len(parts) < 4:
+                        raise ValueError(f"Malformed RTP atom at {path}:{line_number}")
                     try:
                         name = parts[0]
                         atype = parts[1]
                         charge = float(parts[2])
+                        if not math.isfinite(charge):
+                            raise ValueError("non-finite atom charge")
                         group = int(parts[3]) if len(parts) > 3 else 0
                         res["atoms"].append((name, atype, charge, group))
-                    except (ValueError, IndexError):
-                        pass  # skip malformed atom lines
+                    except (ValueError, IndexError) as exc:
+                        raise ValueError(
+                            f"Malformed RTP atom at {path}:{line_number}: {line}"
+                        ) from exc
 
                 elif current_section == "bonds" and len(parts) >= 2:
                     res["bonds"].append((parts[0], parts[1]))
 
+                elif current_section == "cmap":
+                    if len(parts) != 5:
+                        raise ValueError(f"Invalid five-atom CMAP in RTP residue {current_res}")
+                    res["cmap"].append(tuple(parts))
                 elif current_section in ("angles", "dihedrals", "impropers"):
                     if current_section == "angles" and len(parts) >= 3:
                         res["angles"].append(tuple(parts[:3]))
@@ -154,9 +166,22 @@ class RTPParser:
 # Singleton — loaded once
 _rtp: RTPParser | None = None
 _rtp_by_force_field: dict[str, RTPParser] = {}
+_rtp_lock = threading.RLock()
+
+
+def _canonical_force_field(force_field: str) -> str:
+    from gmxbuilder.modules.forcefield.catalog import get_force_field_profile
+
+    # Preserve the two installed naming styles, but never accept path syntax.
+    name = str(force_field).strip().lower().removesuffix(".ff")
+    try:
+        return get_force_field_profile(name).name
+    except ValueError as exc:
+        raise FileNotFoundError(f"Bundled force field directory not found: {force_field}") from exc
 
 
 def _force_field_path(force_field: str) -> Path:
+    force_field = _canonical_force_field(force_field)
     base = Path(__file__).resolve().parent.parent.parent / "data" / "forcefields"
     for candidate in (base / force_field, base / f"{force_field}.ff"):
         if candidate.is_dir():
@@ -166,24 +191,26 @@ def _force_field_path(force_field: str) -> Path:
 
 def load_force_field_rtp(force_field: str) -> RTPParser:
     """Load all RTP files belonging to the selected bundled force field."""
-    force_field = force_field.strip().lower()
-    cached = _rtp_by_force_field.get(force_field)
-    if cached is not None:
-        return cached
-    ff_path = _force_field_path(force_field)
-
-    rtp_files = sorted(ff_path.glob("*.rtp"))
-    if not rtp_files:
-        raise FileNotFoundError(f"No RTP files found for force field: {force_field}")
-
-    parser = RTPParser()
-    for rtp_file in rtp_files:
-        parser.parse(rtp_file)
-    _rtp_by_force_field[force_field] = parser
-    return parser
+    force_field = _canonical_force_field(force_field)
+    # A finite catalog bounds retained keys; serialize misses so concurrent
+    # callers share the same mutable parser, including generated terminals.
+    with _rtp_lock:
+        cached = _rtp_by_force_field.get(force_field)
+        if cached is not None:
+            return cached
+        ff_path = _force_field_path(force_field)
+        rtp_files = sorted(ff_path.glob("*.rtp"))
+        if not rtp_files:
+            raise FileNotFoundError(f"No RTP files found for force field: {force_field}")
+        parser = RTPParser()
+        for rtp_file in rtp_files:
+            parser.parse(rtp_file)
+        _rtp_by_force_field[force_field] = parser
+        return parser
 
 
 def _tdb_path(force_field: str, end: str) -> Path:
+    force_field = _canonical_force_field(force_field)
     ff_path = _force_field_path(force_field)
     suffix = "n.tdb" if end == "N" else "c.tdb"
     preferred = "merged" if force_field == "charmm36" else "aminoacids"
@@ -302,7 +329,7 @@ def _apply_tdb_patch(base_template: dict, patch: dict) -> dict:
             updated.append(tuple(rename.get(name, name) for name in term))
         return updated
 
-    for section in ("bonds", "angles", "dihedrals", "impropers"):
+    for section in ("bonds", "angles", "dihedrals", "impropers", "cmap"):
         result[section] = update_terms(result.get(section, []))
 
     bonds = list(result["bonds"])
@@ -326,12 +353,18 @@ def _apply_tdb_patch(base_template: dict, patch: dict) -> dict:
 
 def get_terminal_residue(force_field: str, base_resname: str, end: str) -> tuple[str, dict]:
     """Return the force-field-specific standard terminal residue template."""
-    force_field = force_field.strip().lower()
+    force_field = _canonical_force_field(force_field)
     base_resname = base_resname.strip().upper()
     end = end.strip().upper()
     if end not in {"N", "C"}:
         raise ValueError(f"Invalid terminus: {end!r}")
 
+    from gmxbuilder.modules.modifications.patches import ALL_PATCHES, validate_patch_position
+
+    # Deposited product residues must respect the same terminal boundary as UI patches.
+    for patch_id, patch in ALL_PATCHES.items():
+        if patch.product_name == base_resname:
+            validate_patch_position(patch_id, force_field, [end])
     parser = load_force_field_rtp(force_field)
     variant_name = f"{end}{base_resname}"
     existing = parser.get_residue(variant_name)

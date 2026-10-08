@@ -9,18 +9,17 @@ import numpy as np
 from gmxbuilder.core.component import Component
 from gmxbuilder.core.enums import ComponentKind
 from gmxbuilder.core.exceptions import ModuleConfigError
-from gmxbuilder.io.cif import CIFParser
-from gmxbuilder.io.pdb import PDBParser, PDBWriter
-from gmxbuilder.core.structure import Structure
+from gmxbuilder.io.pdb import PDBWriter
 from gmxbuilder.modules.coarse_grained.common import (
     STANDARD_PROTEIN_RESIDUES,
     strict_bool,
     task_step_dir,
 )
+from gmxbuilder.modules.coarse_grained.workflow import CGWorkflowAdmission
 from gmxbuilder.pipeline.base import BaseModule, ModuleResult
 
 
-class CGInputModule(BaseModule):
+class CGInputModule(CGWorkflowAdmission, BaseModule):
     name = "cg_input"
     description = "Audit an atomistic structure for Martini 3 mapping"
 
@@ -41,6 +40,11 @@ class CGInputModule(BaseModule):
             config,
             {
                 "pdb",
+                "allow_incomplete_protein",
+                "renumber_residues",
+                "chain_names",
+                "fragment_names",
+                "exclude_fragments",
                 "include_protein",
                 "environment",
                 "seed",
@@ -59,6 +63,7 @@ class CGInputModule(BaseModule):
         return True
 
     def run(self, system, config: dict) -> ModuleResult:
+        config = self.admit(system, config)
         include_protein = strict_bool(config, "include_protein", True)
         environment = str(config.get("environment", "bilayer")).lower()
         output = system.copy()
@@ -67,6 +72,7 @@ class CGInputModule(BaseModule):
                 "cg_environment": environment,
                 "cg_include_protein": include_protein,
                 "resolution": "coarse-grained",
+                "seed": int(config.get("seed", output.metadata.get("seed", 42))),
                 "force_field": "martini3",
             }
         )
@@ -84,7 +90,11 @@ class CGInputModule(BaseModule):
         if not source.is_file() or source.is_symlink():
             raise ModuleConfigError("Uploaded protein structure is unavailable")
         source_is_cif = self._is_cif(source)
-        parsed = CIFParser().parse(source) if source_is_cif else PDBParser().parse(source)
+        from gmxbuilder.io.input_document import canonical_path, read_input
+        from gmxbuilder.modules.input.reconstruction import reconstruct_input
+
+        parsed = read_input(canonical_path(source) if canonical_path(source).exists() else source)
+        reconstruction = reconstruct_input(parsed, config)
         water_names = {"HOH", "WAT", "SOL", "TIP", "TIP3", "SPC", "SPCE"}
         keep = np.asarray(
             [str(name).strip().upper() not in water_names for name in parsed.resnames], dtype=bool
@@ -92,18 +102,7 @@ class CGInputModule(BaseModule):
         ignored_water_atoms = int(np.count_nonzero(~keep))
         if ignored_water_atoms:
             indices = np.flatnonzero(keep)
-            parsed = Structure(
-                coordinates=parsed.coordinates[indices],
-                box_vectors=parsed.box_vectors.copy(),
-                atom_names=[parsed.atom_names[index] for index in indices],
-                resnames=[parsed.resnames[index] for index in indices],
-                resids=[parsed.resids[index] for index in indices],
-                chain_ids=[parsed.chain_ids[index] for index in indices],
-                segids=[parsed.segids[index] for index in indices],
-                elements=[parsed.elements[index] for index in indices],
-                occupancies=[parsed.occupancies[index] for index in indices],
-                tempfactors=[parsed.tempfactors[index] for index in indices],
-            )
+            parsed = parsed.take(indices)
         observed = sorted({str(name).strip().upper() for name in parsed.resnames})
         unsupported = [name for name in observed if name not in STANDARD_PROTEIN_RESIDUES]
         if unsupported:
@@ -132,6 +131,7 @@ class CGInputModule(BaseModule):
         ]
         output.metadata.update(
             {
+                "input_reconstruction": reconstruction,
                 "cg_input_file": "steps/input/cg_input.pdb",
                 "cg_input_residues": observed,
                 "cg_input_atom_count": parsed.num_atoms,

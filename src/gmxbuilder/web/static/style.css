@@ -18,6 +18,11 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
@@ -60,6 +65,8 @@ body {
 .copy-task-id { border: 1px solid #a5b4fc; background: transparent; color: #4f46e5; border-radius: 4px; padding: 2px 7px; font: inherit; cursor: pointer; }
 .copy-task-id:hover, .copy-task-id:focus-visible { background: #eef2ff; border-color: #6366f1; }
 .copy-task-id-status { min-width: 42px; color: #059669; font-size: 12px; }
+.exit-task { border: 1px solid #b91c1c; background: #b91c1c; color: #fff; border-radius: 4px; padding: 2px 7px; font: inherit; cursor: pointer; }
+.exit-task:hover, .exit-task:focus-visible { background: #991b1b; border-color: #991b1b; }
 .viewer-unavailable {
   display: flex;
   align-items: center;
@@ -186,7 +193,6 @@ body {
 .viewer-box {
   position: relative;
   width: 100%;
-  min-height: 280px;
   margin-top: 16px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -245,12 +251,20 @@ body {
 /* Result */
 .result-section { margin-top: 24px; padding: 20px; border: 1px solid var(--success); border-radius: var(--radius); background: #f0fdf4; }
 .result-section h3 { color: var(--success); font-size: 18px; margin-bottom: 12px; }
+.result-section[data-state="error"] { border-color: var(--danger); background: #fef2f2; }
+.result-section[data-state="error"] h3 { color: var(--danger); }
 .result-section table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
 .result-section td { padding: 4px 8px; font-size: 14px; }
 
 /* Task type cards */
 .section-desc { margin-bottom: 20px; color: var(--text-muted); }
 .task-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.planned-workflows { grid-column: 1 / -1; border-top: 1px solid var(--border); padding-top: 16px; margin-top: 8px; }
+.planned-workflows summary { cursor: pointer; color: var(--text-muted); font-size: 14px; padding: 8px 0; }
+.planned-workflows .task-grid { margin-top: 12px; }
+.planned-workflows .card-category-header { grid-column: 1 / -1; font-size: 13px; font-weight: 700; margin-top: 16px; }
+.planned-workflows .card-category-header:first-child { margin-top: 0; }
+.viewer-status { color: var(--text-muted); font-size: 13px; line-height: 1.6; margin-top: 12px; }
 .task-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -261,8 +275,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
 }
 .task-card:hover { border-color: var(--primary); box-shadow: 0 2px 8px rgba(37,99,235,.12); transform: translateY(-1px); }
+.task-card:focus-visible, .lipid-card:focus-visible,
+.chain-rename:focus-visible, .smallmol-name:focus-visible,
+.proc-mod-res:focus-visible { outline: 3px solid rgba(37,99,235,.35); outline-offset: 2px; }
 .task-card.selected { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.2); background: #eff6ff; }
 .task-card.disabled { opacity: .5; cursor: not-allowed; filter: grayscale(.3); }
 .task-card.disabled:hover { border-color: var(--border); box-shadow: none; transform: none; }
@@ -388,7 +409,8 @@ body {
   border: 1px solid var(--primary);
   border-radius: var(--radius);
   box-shadow: 0 12px 36px rgba(0,0,0,.18);
-  max-height: 480px;
+  max-height: min(480px, calc(100dvh - 16px));
+  max-width: calc(100vw - 16px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -428,6 +450,8 @@ body {
   transition: border-color .12s, background .12s;
   background: var(--surface);
   color: var(--text);
+  width: 100%;
+  font: inherit;
   text-align: left;
 }
 .lipid-card:hover { border-color: var(--primary); background: #eff6ff; }
@@ -627,7 +651,6 @@ body {
 /* 3Dmol viewer */
 .mol-viewer {
   width: 100%;
-  height: 420px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: #f8fafc; border: 1px solid #e2e8f0;
@@ -686,6 +709,29 @@ body {
 .input-check-report.error th, .input-check-report.error td { border-color: #fecaca; }
 .input-check-validation { color: #047857; }
 
+.experimental-assignment-warning {
+  display: flex; align-items: center; gap: 14px; padding: 16px;
+  margin: 12px 0; border: 1px solid #c18a00; border-radius: var(--radius);
+  background: #fff0b3; color: #654900; cursor: pointer; line-height: 1.6;
+}
+.experimental-assignment-warning input[type="checkbox"] {
+  flex: 0 0 20px; width: 20px; height: 20px; margin: 0; accent-color: #986800;
+}
+.experimental-assignment-warning span { flex: 1; min-width: 0; }
+#edit-input-selection { margin-bottom: 12px; }
+
+#input-reconstruction-options {
+  min-width: 0; margin: 14px 0; padding: 12px 16px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+#input-reconstruction-options legend { padding: 0 6px; font-weight: 600; }
+#input-reconstruction-options label {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+}
+#input-reconstruction-options input { width: 18px; height: 18px; flex-shrink: 0; }
+#input-reconstruction-options .hint { margin: 6px 0 12px 26px; }
+#input-reconstruction-options .hint:last-child { margin-bottom: 0; }
+
 /* ---- Chain checkboxes & rename ---- */
 .chain-check {
   display: inline-flex; align-items: center; gap: 6px;
@@ -696,6 +742,7 @@ body {
   display: inline-block; padding: 1px 6px; margin-left: 6px;
   border-radius: 3px; cursor: pointer; font-family: monospace;
   color: #6366f1; font-size: 13px; border: 1px solid transparent;
+  background: transparent;
 }
 .chain-rename:hover { background: #eef2ff; border-color: #c7d2fe; }
 .chain-rename-input {
@@ -719,7 +766,7 @@ body {
 .smallmol-name {
   padding: 1px 6px; border-radius: 3px; cursor: pointer;
   font-family: monospace; color: #059669; font-size: 13px;
-  border: 1px solid transparent;
+  border: 1px solid transparent; background: transparent;
 }
 .smallmol-name:hover { background: #ecfdf5; border-color: #a7f3d0; }
 .smallmol-rename-input {
@@ -737,10 +784,11 @@ body {
 .modal-overlay.hidden { display: none; }
 .modal-panel {
   background: #fff; border-radius: 10px;
-  padding: 24px 28px; width: 560px; max-height: 90vh;
+  padding: 24px 28px; width: min(560px, calc(100vw - 32px)); max-height: 90vh;
   overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
 }
 .modal-panel h3 { margin: 0 0 16px; font-size: 16px; }
+.modal-panel:focus { outline: none; }
 .modal-panel .form-grid { display: flex; flex-direction: column; gap: 10px; }
 .modal-panel .field label { display: block; font-size: 12px; margin-bottom: 4px; color: #475569; }
 .modal-panel .field input[type=text] {
@@ -748,12 +796,13 @@ body {
   font-size: 13px; font-family: monospace;
 }
 .custom-lipid-result { margin-top: 16px; }
-.custom-lipid-preview { display: flex; gap: 16px; align-items: flex-start; }
+.custom-lipid-preview { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .custom-lipid-structure {
   border: 1px solid #e2e8f0; border-radius: 6px;
-  min-width: 280px; background: #fafafa;
+  min-width: 0; max-width: 100%; background: #fafafa;
   display: flex; align-items: center; justify-content: center;
 }
+.custom-lipid-structure canvas { display: block; max-width: 100%; height: auto; }
 .custom-lipid-props { font-size: 12px; flex: 1; }
 .custom-lipid-props td { padding: 3px 6px; }
 .custom-lipid-props td:first-child { color: #64748b; white-space: nowrap; }
@@ -772,7 +821,7 @@ body {
 .custom-lipid-build-status.failed { border-color: #dc2626; background: rgba(220, 38, 38, .06); }
 .custom-lipid-build-status.failed #custom-lipid-build-progress { background: #dc2626; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
-.queue-modal-panel { width: 520px; }
+.queue-modal-panel { width: min(520px, calc(100vw - 32px)); }
 .queue-details {
   display: grid; grid-template-columns: 130px 1fr; gap: 10px 14px;
   margin: 18px 0; padding: 14px; border: 1px solid var(--border);
@@ -786,6 +835,22 @@ body {
   display: flex; align-items: center; gap: 8px; margin-top: 14px;
   color: #334155; font-weight: 600;
 }
+
+@media (max-width: 600px) {
+  .modal-overlay { align-items: flex-start; padding: 8px; }
+  .modal-panel, .queue-modal-panel {
+    width: 100%; max-height: calc(100dvh - 16px); padding: 18px 16px;
+  }
+  .custom-lipid-structure, .custom-lipid-props { width: 100%; }
+  .queue-details { grid-template-columns: 1fr; gap: 4px; }
+  .queue-details dd { margin-bottom: 8px; }
+  .lipid-cat-grid { grid-template-columns: minmax(0, 1fr); }
+  .lipid-card-meta { flex-wrap: wrap; }
+  .sim-stage-header { align-items: flex-start; flex-wrap: wrap; }
+  .sim-stage-toggle { flex-wrap: wrap; }
+  .sim-stage-summary { flex-basis: calc(100% - 32px); text-align: left; margin-left: 32px; }
+  .sim-stage-header .stage-enabled { margin: 0 14px 8px auto; }
+}
 /* Custom lipid option in picker */
 .lipid-option-custom { border-top: 1px dashed #cbd5e1; margin-top: 4px; padding-top: 6px; color: #6366f1; font-weight: 600; }
 
@@ -795,7 +860,7 @@ body {
 }
 .structproc-tab {
   padding: 8px 20px; border: none; background: none;
-  font-size: 13px; font-weight: 600; color: #94a3b8;
+  font-size: 13px; font-weight: 600; color: #64748b;
   cursor: pointer; border-bottom: 2px solid transparent;
   margin-bottom: -2px; transition: color .15s, border-color .15s;
 }
@@ -826,7 +891,9 @@ body {
 .proc-mod-res {
   padding: 2px 4px; border-radius: 3px; cursor: pointer;
   border: 1px solid transparent; position: relative; user-select: none;
+  background: transparent; color: inherit; font: inherit;
 }
+.proc-mod-res:disabled { cursor: default; }
 .proc-mod-res.titratable { border-bottom: 2px solid #f59e0b; }
 .proc-mod-res.modifiable { background: #dcfce7; border-color: #22c55e; }
 .proc-mod-res.catalog-only { color: #94a3b8; border-color: #e2e8f0; }
@@ -914,15 +981,22 @@ body {
   background: #fff; overflow: hidden;
 }
 .sim-stage-header {
-  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
-  background: #f8fafc; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 10px;
+  background: #f8fafc; user-select: none;
   border-bottom: 1px solid transparent;
 }
+.sim-stage-toggle {
+  display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+  padding: 8px 14px; border: 0; background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer;
+}
 .sim-stage-header:hover { background: #f1f5f9; }
+.sim-stage-toggle:focus-visible { outline: 3px solid rgba(37,99,235,.35); outline-offset: -3px; }
 .sim-stage-header.open { border-bottom-color: #e2e8f0; }
 .sim-stage-icon { font-size: 16px; width: 22px; text-align: center; }
 .sim-stage-title { font-weight: 600; font-size: 13px; color: #1e293b; flex: 1; }
 .sim-stage-summary { font-size: 11px; color: #64748b; text-align: right; line-height: 1.4; }
+.sim-stage-header .stage-enabled { margin-left: auto; margin-right: 14px; flex: 0 0 auto; }
 .sim-stage-body { display: none; padding: 10px 14px; }
 .sim-stage-body.open { display: block; }
 .sim-stage-body .param-row {
@@ -931,9 +1005,10 @@ body {
 }
 .sim-stage-body .param-row:last-child { border-bottom: none; margin-bottom: 0; }
 .sim-stage-body .param-item { flex: 0 0 auto; }
-.sim-stage-body .param-item label { display: block; font-size: 11px; color: #64748b; margin-bottom: 2px; }
+.sim-stage-body .param-item label,
+.sim-stage-body .param-item .param-label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
 .sim-stage-body .param-item input,
-.sim-stage-body .param-item select { padding: 4px 6px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px; }
+.sim-stage-body .param-item select { padding: 5px 7px; font-size: 14px; border: 1px solid #cbd5e1; border-radius: 4px; }
 .sim-stage-body .param-item input { width: 80px; }
 .sim-stage-body .param-item input.wide { width: 100px; }
 .sim-stage-body .param-item input.narrow { width: 60px; }
@@ -953,3 +1028,252 @@ body {
 .ion-neutralize-pair h4 { font-size: 13px; margin: 0 0 6px; color: #92400e; }
 .ion-neutralize-pair.hidden { display: none; }
 .ion-neutralize-pair select { padding: 3px 6px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px; }
+
+/* Optional homepage announcements, supplied by a deployment extension.
+   Absent in public builds, where the region renders nothing at all. */
+.announcements {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.announcement {
+  border: 1px solid #d6dae1;
+  border-left-width: 4px;
+  border-radius: 6px;
+  padding: 10px 14px;
+  background: #fbfcfd;
+}
+
+.announcement h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.announcement p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #444c56;
+  white-space: pre-wrap;
+}
+
+.announcement-info { border-left-color: #2563eb; }
+.announcement-notice { border-left-color: #0f9d58; }
+.announcement-warning { border-left-color: #f59e0b; }
+
+.announcement-critical { border-left-color: #dc2626; }
+
+.announcement-pinned {
+  background: #fff8ec;
+  border-color: #f0d9b5;
+}
+
+.announcement-pin {
+  color: #b45309;
+  font-weight: 700;
+  margin-right: 2px;
+}
+
+.announcement-link {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.announcement-link a { color: #2563eb; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Check progress: one bar per step, created under its own Check button.
+   Blue and animated while the step runs, green and static once it is done. */
+.step-progress {
+  /* The bar is inserted after a Check button wherever that button lives, so
+     it must claim a full row of whatever lays that panel out. */
+  width: 100%;
+  flex: 1 1 100%;
+  grid-column: 1 / -1;
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  transition: border-color 240ms ease, background-color 240ms ease;
+}
+
+.step-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.step-progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.step-progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: 4px;
+  background: var(--primary);
+  transition: width 300ms ease, background-color 240ms ease;
+}
+
+.step-progress-percent {
+  min-width: 38px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary-hover);
+}
+
+.step-progress-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.step-progress-elapsed { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Running: the fill holds the position the server last reported, so the
+   moving stripes -- not an invented percentage -- are what say the step is
+   still working during a long phase. */
+.step-progress[data-state="running"] { border-color: #bfdbfe; background: #f5f9ff; }
+.step-progress[data-state="running"] .step-progress-bar {
+  background-image: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, .35) 25%, transparent 25%,
+    transparent 50%, rgba(255, 255, 255, .35) 50%,
+    rgba(255, 255, 255, .35) 75%, transparent 75%
+  );
+  background-size: 22px 22px;
+  animation: step-progress-roll 800ms linear infinite;
+}
+
+@keyframes step-progress-roll {
+  from { background-position: 0 0; }
+  to { background-position: 22px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-progress[data-state="running"] .step-progress-bar { animation: none; }
+}
+
+.step-progress[data-state="done"] { border-color: #86efac; background: #f0fdf4; }
+.step-progress[data-state="done"] .step-progress-bar { background: var(--success); }
+.step-progress[data-state="done"] .step-progress-percent { color: #15803d; }
+.step-progress[data-state="done"] .step-progress-phase { color: #15803d; font-weight: 600; }
+
+.step-progress[data-state="error"] { border-color: #fecaca; background: #fef2f2; }
+.step-progress[data-state="error"] .step-progress-bar { background: var(--danger); }
+.step-progress[data-state="error"] .step-progress-percent { color: #b91c1c; }
+.step-progress[data-state="error"] .step-progress-phase { color: #b91c1c; font-weight: 600; }
+.step-progress[data-state="warning"] { border-color: #fbbf24; background: #fffbeb; }
+.step-progress[data-state="warning"] .step-progress-bar { background: #d97706; }
+.step-progress[data-state="warning"] .step-progress-percent,
+.step-progress[data-state="warning"] .step-progress-phase { color: #92400e; font-weight: 600; }
+#membrane-count-warning { margin: 10px 0 0; }
+
+/* Background ligand parameterization, reported on the Force Field panel. It
+   is a note about work already under way, not a control, so it stays quiet. */
+.ligand-prep {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ligand-prep[data-state="running"] { color: var(--primary-hover); }
+.ligand-prep[data-state="done"] { color: #15803d; }
+
+/* Operation feedback stays in the page, without a dialog or acknowledgement. */
+.operation-notice {
+  max-width: 1584px; margin: 18px 28px 0; padding: 14px 18px;
+  border: 1px solid var(--border); border-left: 3px solid var(--primary);
+  background: var(--surface); border-radius: var(--radius);
+}
+.operation-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px 20px; flex-wrap: wrap; }
+.operation-heading h3 { font-size: 15px; margin: 0; }
+.operation-heading > span { font-size: 13px; overflow-wrap: anywhere; }
+.operation-heading .btn { padding: 4px 10px; margin-left: 6px; }
+.operation-notice > p { font-size: 13px; margin-top: 6px; }
+.operation-metrics { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; color: var(--text-muted); font-size: 12px; }
+.operation-metrics b { font-weight: 500; }
+.operation-notice[data-state="failed"], .operation-notice[data-state="cancelled"] { border-left-color: var(--danger); }
+.operation-notice[data-state="failed"] #compute-queue-message { color: var(--danger); }
+.operation-notice[data-state="completed"] { display: none; }
+@media (max-width: 600px) {
+  .operation-notice { margin: 12px 16px 0; padding: 12px; }
+  .operation-heading code { font-size: 11px; }
+}
+
+.panel .operation-notice { margin: 12px 0; max-width: none; }
+
+/* One primary action and feedback region per workflow step. */
+.panel button:is(#input-check-btn,#forcefield-check-btn,#structure-check-btn,#orient-check-btn,#check-composition-btn,#solv-check-btn,#ion-check-btn,#ion-confirm-system-btn,.cg-check-button) { display:block; width:100%; }
+.panel :is(#input-check-status,#forcefield-check-status,#structure-check-status,#orient-check-status,#composition-status,#ion-confirm-system-status) { display:block; margin:8px 0 0 !important; }
+.step-action { margin-top:18px; }
+.viewer-loading { padding:12px; background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; }
+.viewer-loading::after { content:attr(data-elapsed); float:right; margin-left:12px; }
+.viewer-loading[data-state="error"] { background:#fef2f2; color:#991b1b; }
+.viewer-box,.viewer-container,.mol-viewer { background:#fff; }
+#final-component-summary { margin-bottom:16px; overflow:auto; }
+
+.card-category-header { grid-column:1 / -1; font-size:14px; margin:16px 0 0; }
+.card-category-header:first-child { margin-top:0; }
+
+.viewer-components { display:flex; flex-wrap:wrap; gap:8px 20px; padding:10px 0; font-size:13px; }
+.viewer-components label { display:flex; align-items:center; gap:5px; }
+.source-protein-group { margin-bottom: 18px; }
+.source-protein-group h4 { margin: 12px 0; }
+.fragment-model-warning {
+  padding: 12px 16px;
+  border: 1px solid #c18a00;
+  background: #fff0b3;
+  color: #654900;
+  line-height: 1.6;
+}
+
+/* Uploaded chemistry removal is an explicit, visible molecular-identity decision. */
+#proc-upload-modification-notice .input-reconstruction-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  margin: 10px 0;
+  background: #fff3cd;
+  color: #664d03;
+}
+#proc-upload-modification-notice .input-reconstruction-option input {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+/* Keep molecular viewers at a compact 2:1 ratio at every container width. */
+.viewer-box, .viewer-container, .mol-viewer {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 2 / 1;
+  box-sizing: border-box;
+}
